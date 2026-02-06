@@ -11,10 +11,11 @@ Route voicemode audio I/O from a MacBook to an iPhone over the local network, us
 | Toggle Script | Done | `relay start/stop/status` |
 | LiveKit Server Install | Done | `brew install livekit` (v1.9.11) |
 | Voicemode LiveKit Extras | Done | `uv tool install voice-mode[livekit]` (livekit-agents 1.3.12) |
-| voicemode.env Config | Done | `LIVEKIT_URL=ws://192.168.4.146:7880` |
+| voicemode.env Config | Done | `LIVEKIT_URL=ws://localhost:7880` (localhost due to CrowdStrike) |
 | Smoke Test (infra) | Done | LiveKit + token server start, health checks, JWT generation all verified |
-| End-to-End Test | Not Started | iPhone Safari -> Mac -> Claude Code (requires Claude Code restart) |
-| Internet Access (Tailscale) | Future | Out of scope for POC |
+| End-to-End Test | Done | Working via ngrok tunnel (CrowdStrike blocks LAN) |
+| Bug Fixes | Not Started | See Known Bugs section below |
+| Internet Access | Future | See Future Features section below |
 
 ## Architecture
 
@@ -172,12 +173,94 @@ VOICEMODE_FRONTEND_PORT=3000
 6. Stop relay: `./relay stop`
 7. Verify: voicemode falls back to local Mac mic seamlessly
 
-### Phase 5 (Future): Internet Access
+### Phase 5: Bug Fixes
 
-- Install Tailscale on Mac and iPhone
-- Replace LAN IP with Tailscale IP in LIVEKIT_URL
-- Everything else stays the same
-- Alternative: LiveKit Cloud free tier (10k min/month) for zero-config internet access
+- [ ] Fix audio visualizer bars (not animating)
+- [ ] Fix "agent disconnected" flicker between turns
+- [ ] Add turn-taking chimes to phone client
+- [ ] Handle long speech input / 120s timeout gracefully
+- [ ] Investigate audio dropout on long TTS responses
+
+### Phase 6 (Future): Enhancements
+
+- [ ] Text I/O display on phone client
+- [ ] Self-hosted cloud relay (personal web server)
+- [ ] Explore alternative tunnel methods (Tailscale, Cloudflare, LiveKit Cloud)
+- [ ] Multi-agent session switching (see below)
+
+## Future Features
+
+## Known Bugs
+
+### 1. Audio visualizer bars don't move
+The frequency visualizer in the web client never animates — bars stay flat during both mic input and agent audio playback. Likely the `setupAudioAnalyser()` isn't receiving the audio stream correctly, or the analyser isn't connected to the right source nodes.
+
+### 2. "Agent disconnected" flicker between turns
+When voicemode finishes a converse call, it leaves the LiveKit room. The phone client shows "Agent disconnected" briefly before the next converse call joins again. Need either: (a) persistent agent presence in the room, or (b) client-side UX that masks the gap (e.g. "Thinking..." state instead of "Agent disconnected").
+
+### 3. No audio chimes on the phone to indicate turn-taking
+The user has no way to know when the system is listening vs processing. Voicemode has built-in chimes for local mode, but they don't route through LiveKit to the phone. Need to either: (a) route voicemode's chime audio through LiveKit, or (b) play chimes client-side triggered by LiveKit events (agent join = listening, agent publish audio = responding).
+
+### 4. Long speech input causes timeout / audio loss
+The voicemode `converse()` call has a `listen_duration_max` of 120s. If the user speaks for a long time, the listen window expires and the audio may not be fully captured. Need to: (a) ensure a stop chime plays when listen time runs out, (b) ensure all captured audio still gets routed to Whisper/Claude even on timeout, (c) consider whether the limit should be extended or made configurable for relay mode.
+
+### 5. Voicemode missing `TTS_BASE_URLS` import (fixed)
+`converse.py` was missing `TTS_BASE_URLS` in its import from `voice_mode.config`, causing LiveKit transport to fail. Fixed by adding the import — but this is a patch on the installed package that will be lost on voicemode updates.
+
+## Known Limitations
+
+### CrowdStrike Falcon blocks LAN connections
+CrowdStrike endpoint security on the Mac blocks all inbound TCP connections on non-loopback interfaces. This prevents direct LAN access (phone → Mac IP). Current workaround: ngrok tunnel. See debugging notes in git history.
+
+### ngrok free tier constraints
+- URLs change every session (no stable address)
+- Added latency routing through ngrok relay servers
+- Free tier has connection/bandwidth limits
+- Requires ngrok account + authtoken
+
+## Future Features
+
+### Text I/O display on phone client
+Add a live transcript/status feed to the web client showing:
+- What the user said (STT result)
+- Processing state ("Thinking...", "Generating response...")
+- Claude's response text
+- Possibly a scrollable conversation history
+
+### Self-hosted cloud relay
+Host the relay application on a personal web server for stable internet access without ngrok limitations. Architecture would be:
+- Web server hosts the token server + web client (publicly accessible)
+- LiveKit server runs on the web server (or use LiveKit Cloud)
+- Voicemode on Mac connects to the remote LiveKit server
+- Phone connects to the web-hosted client
+- Eliminates need for ngrok, Tailscale, or LAN access
+
+### Multi-agent session switching
+Support multiple concurrent Claude Code sessions, each registered as a separate agent. The phone web UI would show a list of active sessions and let the user:
+- See which Claude sessions are running and available for voice
+- Switch between sessions (connect voice to a different agent)
+- Connect/disconnect voicemode per session independently
+- Potentially talk to one session while others continue working in the background
+
+This would require:
+- A session registry (token server or separate service tracks which Claude sessions have registered as agents)
+- Each Claude Code instance registers itself with a name/label when relay is active
+- Web client UI for listing sessions and switching between them
+- LiveKit room-per-session or room switching logic
+- Graceful handoff (disconnect voice from session A, connect to session B)
+
+**Key architectural challenge:** Voicemode is pull-based — Claude must actively call `converse()` which blocks waiting for audio. There's no persistent listener. For multi-agent switching, the target session needs to be actively listening when the user wants to speak to it.
+
+Potential approaches:
+1. **Push model (daemon)**: A lightweight service on the Mac that persistently listens on LiveKit rooms and dispatches audio to the correct Claude session via IPC (pipe, socket, or webhook). Claude sessions register with the daemon and receive transcribed text or raw audio on demand.
+2. **Agent-initiated polling**: Each Claude session periodically calls `converse()` with a short timeout, checking if there's audio waiting in its assigned room. The web UI signals which room is "active" so only one session picks up audio at a time.
+3. **LiveKit Agents SDK as standalone bridge**: Skip voicemode's converse wrapper entirely. Run a persistent livekit-agents service that handles STT/TTS and communicates with Claude sessions through a separate channel (e.g. Claude API directly, or stdin/stdout pipes to Claude Code processes).
+
+### Alternative tunnel/access methods
+- **Tailscale**: Stable IPs, low latency, requires install on both devices
+- **Cloudflare Tunnel**: Free, no account needed for quick tunnels
+- **LiveKit Cloud**: Free tier (10k min/month), removes need to self-host LiveKit server
+- **Self-hosted relay**: See above
 
 ## Configuration Changes Reference
 
@@ -235,8 +318,10 @@ cd ~/claude-voice-relay
 
 - [x] `brew install livekit` — Installed v1.9.11
 - [x] `uv tool install voice-mode[livekit]` — Installed livekit-agents 1.3.12 + 27 deps
-- [x] Update `~/.voicemode/voicemode.env` — Set `LIVEKIT_URL=ws://192.168.4.146:7880`
+- [x] Update `~/.voicemode/voicemode.env` — Set `LIVEKIT_URL=ws://localhost:7880`
 - [x] `./relay start` — Both servers start, health checks pass, JWT generation verified
-- [ ] Restart Claude Code — So voicemode picks up new livekit packages
-- [ ] Open URL on iPhone — Test web client loads and connects
-- [ ] Test end-to-end — Voicemode `converse()` should auto-detect LiveKit transport
+- [x] Restart Claude Code — So voicemode picks up new livekit packages
+- [x] Fix `TTS_BASE_URLS` missing import in voicemode `converse.py`
+- [x] Discover CrowdStrike blocks LAN — set up ngrok dual tunnel as workaround
+- [x] Open URL on iPhone — Web client loads and connects via ngrok
+- [x] Test end-to-end — Voice relay working: phone mic → LiveKit → Whisper → Claude → Kokoro → LiveKit → phone speaker
