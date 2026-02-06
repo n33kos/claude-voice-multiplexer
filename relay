@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+#
+# relay - Start/stop Claude Voice Relay (LiveKit + token server)
+#
+# Usage:
+#   relay start   - Start LiveKit server and token server
+#   relay stop    - Stop both, voicemode falls back to local mic
+#   relay status  - Show what's running
+#   relay url     - Print the iPhone URL
+#
+
+set -euo pipefail
+
+RELAY_DIR="$(cd "$(dirname "$0")" && pwd)"
+PID_DIR="$HOME/.voicemode"
+LIVEKIT_PID_FILE="$PID_DIR/livekit-relay.pid"
+TOKEN_PID_FILE="$PID_DIR/token-server.pid"
+LOG_DIR="$PID_DIR/logs/relay"
+
+LIVEKIT_PORT="${VOICEMODE_LIVEKIT_PORT:-7880}"
+TOKEN_PORT="${RELAY_PORT:-3100}"
+LIVEKIT_API_KEY="${LIVEKIT_API_KEY:-devkey}"
+LIVEKIT_API_SECRET="${LIVEKIT_API_SECRET:-secret}"
+ACCESS_PASSWORD="${LIVEKIT_ACCESS_PASSWORD:-voicemode123}"
+
+get_lan_ip() {
+  # macOS: get the IP of the active network interface
+  ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "localhost"
+}
+
+is_running() {
+  local pid_file="$1"
+  if [[ -f "$pid_file" ]]; then
+    local pid
+    pid=$(cat "$pid_file")
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "$pid"
+      return 0
+    fi
+    rm -f "$pid_file"
+  fi
+  return 1
+}
+
+cmd_start() {
+  mkdir -p "$PID_DIR" "$LOG_DIR"
+
+  local lan_ip
+  lan_ip=$(get_lan_ip)
+
+  # Check if already running
+  if is_running "$LIVEKIT_PID_FILE" >/dev/null && is_running "$TOKEN_PID_FILE" >/dev/null; then
+    echo "Relay is already running."
+    cmd_status
+    return 0
+  fi
+
+  # Find livekit-server binary
+  local livekit_bin
+  livekit_bin=$(which livekit-server 2>/dev/null || echo "$HOME/.voicemode/services/livekit/livekit-server")
+  if [[ ! -x "$livekit_bin" ]]; then
+    echo "Error: livekit-server not found. Install with: brew install livekit"
+    exit 1
+  fi
+
+  # Start LiveKit server
+  if ! is_running "$LIVEKIT_PID_FILE" >/dev/null; then
+    echo "Starting LiveKit server on port $LIVEKIT_PORT..."
+    "$livekit_bin" --dev --bind 0.0.0.0 --port "$LIVEKIT_PORT" \
+      > "$LOG_DIR/livekit.log" 2>&1 &
+    echo $! > "$LIVEKIT_PID_FILE"
+    sleep 1
+
+    if ! is_running "$LIVEKIT_PID_FILE" >/dev/null; then
+      echo "Error: LiveKit server failed to start. Check $LOG_DIR/livekit.log"
+      exit 1
+    fi
+    echo "  LiveKit server started (PID $(cat "$LIVEKIT_PID_FILE"))"
+  fi
+
+  # Start token server
+  if ! is_running "$TOKEN_PID_FILE" >/dev/null; then
+    echo "Starting token server on port $TOKEN_PORT..."
+    LIVEKIT_URL="ws://${lan_ip}:${LIVEKIT_PORT}" \
+    LIVEKIT_API_KEY="$LIVEKIT_API_KEY" \
+    LIVEKIT_API_SECRET="$LIVEKIT_API_SECRET" \
+    LIVEKIT_ACCESS_PASSWORD="$ACCESS_PASSWORD" \
+    RELAY_PORT="$TOKEN_PORT" \
+      python3 "$RELAY_DIR/token-server.py" \
+      > "$LOG_DIR/token-server.log" 2>&1 &
+    echo $! > "$TOKEN_PID_FILE"
+    sleep 1
+
+    if ! is_running "$TOKEN_PID_FILE" >/dev/null; then
+      echo "Error: Token server failed to start. Check $LOG_DIR/token-server.log"
+      exit 1
+    fi
+    echo "  Token server started (PID $(cat "$TOKEN_PID_FILE"))"
+  fi
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  Claude Voice Relay is running"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  LiveKit:  ws://${lan_ip}:${LIVEKIT_PORT}"
+  echo "  Client:   http://${lan_ip}:${TOKEN_PORT}"
+  echo "  Password: ${ACCESS_PASSWORD}"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  echo "  Open on iPhone:  http://${lan_ip}:${TOKEN_PORT}"
+  echo ""
+  echo "  Voicemode will auto-detect the remote"
+  echo "  connection when you open the client."
+  echo "  To go back to local mic, run: relay stop"
+  echo ""
+}
+
+cmd_stop() {
+  local stopped=false
+
+  if pid=$(is_running "$TOKEN_PID_FILE"); then
+    echo "Stopping token server (PID $pid)..."
+    kill "$pid" 2>/dev/null || true
+    rm -f "$TOKEN_PID_FILE"
+    stopped=true
+  fi
+
+  if pid=$(is_running "$LIVEKIT_PID_FILE"); then
+    echo "Stopping LiveKit server (PID $pid)..."
+    kill "$pid" 2>/dev/null || true
+    rm -f "$LIVEKIT_PID_FILE"
+    stopped=true
+  fi
+
+  if $stopped; then
+    echo "Relay stopped. Voicemode will use local mic."
+  else
+    echo "Relay is not running."
+  fi
+}
+
+cmd_status() {
+  local lan_ip
+  lan_ip=$(get_lan_ip)
+
+  echo "Claude Voice Relay Status"
+  echo "─────────────────────────"
+
+  if pid=$(is_running "$LIVEKIT_PID_FILE"); then
+    echo "  LiveKit:      running (PID $pid) on :$LIVEKIT_PORT"
+  else
+    echo "  LiveKit:      stopped"
+  fi
+
+  if pid=$(is_running "$TOKEN_PID_FILE"); then
+    echo "  Token Server: running (PID $pid) on :$TOKEN_PORT"
+  else
+    echo "  Token Server: stopped"
+  fi
+
+  if is_running "$LIVEKIT_PID_FILE" >/dev/null && is_running "$TOKEN_PID_FILE" >/dev/null; then
+    echo ""
+    echo "  iPhone URL: http://${lan_ip}:${TOKEN_PORT}"
+    echo "  Password:   ${ACCESS_PASSWORD}"
+  fi
+}
+
+cmd_url() {
+  local lan_ip
+  lan_ip=$(get_lan_ip)
+  echo "http://${lan_ip}:${TOKEN_PORT}"
+}
+
+cmd_logs() {
+  local service="${1:-all}"
+  case "$service" in
+    livekit)
+      tail -50 "$LOG_DIR/livekit.log" 2>/dev/null || echo "No LiveKit logs found"
+      ;;
+    token)
+      tail -50 "$LOG_DIR/token-server.log" 2>/dev/null || echo "No token server logs found"
+      ;;
+    *)
+      echo "=== LiveKit Server ==="
+      tail -20 "$LOG_DIR/livekit.log" 2>/dev/null || echo "No logs"
+      echo ""
+      echo "=== Token Server ==="
+      tail -20 "$LOG_DIR/token-server.log" 2>/dev/null || echo "No logs"
+      ;;
+  esac
+}
+
+# Main
+case "${1:-help}" in
+  start)  cmd_start ;;
+  stop)   cmd_stop ;;
+  status) cmd_status ;;
+  url)    cmd_url ;;
+  logs)   cmd_logs "${2:-all}" ;;
+  *)
+    echo "Usage: relay {start|stop|status|url|logs [livekit|token]}"
+    echo ""
+    echo "  start   - Start LiveKit + token server for iPhone access"
+    echo "  stop    - Stop relay, voicemode falls back to local mic"
+    echo "  status  - Show running services and iPhone URL"
+    echo "  url     - Print the iPhone URL"
+    echo "  logs    - Show recent logs"
+    ;;
+esac

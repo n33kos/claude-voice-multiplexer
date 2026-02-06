@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Claude Voice Relay</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', system-ui, sans-serif;
+      background: #0a0a0a;
+      color: #e5e5e5;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    .container {
+      width: 90vw;
+      max-width: 400px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 24px;
+    }
+
+    h1 {
+      font-size: 18px;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+      color: #a0a0a0;
+    }
+
+    .status {
+      font-size: 14px;
+      color: #666;
+      text-align: center;
+      min-height: 20px;
+    }
+
+    .status.connected { color: #4ade80; }
+    .status.error { color: #f87171; }
+    .status.connecting { color: #fbbf24; }
+
+    input[type="password"] {
+      width: 100%;
+      padding: 14px 16px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 12px;
+      color: #e5e5e5;
+      font-size: 16px;
+      outline: none;
+      -webkit-appearance: none;
+    }
+
+    input[type="password"]:focus {
+      border-color: #555;
+    }
+
+    button {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    button:active { opacity: 0.7; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-connect {
+      background: #fff;
+      color: #000;
+    }
+
+    .btn-disconnect {
+      background: #dc2626;
+      color: #fff;
+    }
+
+    .visualizer {
+      width: 100%;
+      height: 120px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .bar {
+      width: 8px;
+      background: #4ade80;
+      border-radius: 4px;
+      transition: height 0.08s ease;
+      min-height: 8px;
+    }
+
+    .mic-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #666;
+    }
+
+    .mic-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #666;
+    }
+
+    .mic-dot.active {
+      background: #4ade80;
+      box-shadow: 0 0 8px #4ade8066;
+      animation: pulse 1.5s ease infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Claude Voice Relay</h1>
+
+    <!-- Login view -->
+    <div id="login-view">
+      <div style="display:flex;flex-direction:column;gap:16px;width:100%;">
+        <input
+          type="password"
+          id="password"
+          placeholder="Enter password"
+          autocomplete="off"
+        >
+        <button class="btn-connect" id="connect-btn" onclick="connect()">
+          Start Conversation
+        </button>
+      </div>
+    </div>
+
+    <!-- Connected view -->
+    <div id="connected-view" class="hidden">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:20px;width:100%;">
+        <div class="visualizer" id="visualizer"></div>
+        <div class="mic-indicator">
+          <div class="mic-dot" id="mic-dot"></div>
+          <span id="mic-label">Microphone off</span>
+        </div>
+        <button class="btn-disconnect" onclick="disconnect()">
+          End Session
+        </button>
+      </div>
+    </div>
+
+    <div class="status" id="status">Ready</div>
+  </div>
+
+  <!-- LiveKit Client SDK from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.js"></script>
+
+  <script>
+    const BAR_COUNT = 7;
+    let room = null;
+    let audioContext = null;
+    let analyser = null;
+    let animFrameId = null;
+
+    // Initialize visualizer bars
+    const vizEl = document.getElementById('visualizer');
+    for (let i = 0; i < BAR_COUNT; i++) {
+      const bar = document.createElement('div');
+      bar.className = 'bar';
+      bar.style.height = '8px';
+      vizEl.appendChild(bar);
+    }
+    const bars = vizEl.querySelectorAll('.bar');
+
+    function setStatus(text, type = '') {
+      const el = document.getElementById('status');
+      el.textContent = text;
+      el.className = 'status ' + type;
+    }
+
+    function showView(view) {
+      document.getElementById('login-view').classList.toggle('hidden', view !== 'login');
+      document.getElementById('connected-view').classList.toggle('hidden', view !== 'connected');
+    }
+
+    async function connect() {
+      const password = document.getElementById('password').value;
+      if (!password) {
+        setStatus('Enter a password', 'error');
+        return;
+      }
+
+      const btn = document.getElementById('connect-btn');
+      btn.disabled = true;
+      setStatus('Connecting...', 'connecting');
+
+      try {
+        // Get token from our server
+        const roomName = 'relay_room_' + Math.floor(Math.random() * 10000);
+        const identity = 'phone_user_' + Math.floor(Math.random() * 10000);
+        const tokenUrl = `/token?password=${encodeURIComponent(password)}&room=${roomName}&identity=${identity}`;
+
+        const resp = await fetch(tokenUrl);
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ error: 'Connection failed' }));
+          throw new Error(err.error || `HTTP ${resp.status}`);
+        }
+
+        const { token, serverUrl } = await resp.json();
+
+        // Create and connect to LiveKit room
+        room = new LivekitClient.Room({
+          adaptiveStream: true,
+          dynacast: true,
+          audioCaptureDefaults: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+
+        // Handle remote audio tracks (TTS from voicemode)
+        room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+          if (track.kind === LivekitClient.Track.Kind.Audio) {
+            const el = track.attach();
+            document.body.appendChild(el);
+            setupAudioAnalyser(el);
+            setStatus('Agent connected', 'connected');
+          }
+        });
+
+        room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
+          track.detach().forEach(el => el.remove());
+          stopVisualizer();
+        });
+
+        room.on(LivekitClient.RoomEvent.ParticipantConnected, (participant) => {
+          setStatus('Agent joined', 'connected');
+        });
+
+        room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
+          setStatus('Agent left - waiting...', 'connecting');
+          stopVisualizer();
+        });
+
+        room.on(LivekitClient.RoomEvent.Disconnected, () => {
+          handleDisconnect();
+        });
+
+        // Connect to the room
+        await room.connect(serverUrl, token);
+
+        // Enable microphone
+        await room.localParticipant.setMicrophoneEnabled(true);
+
+        document.getElementById('mic-dot').classList.add('active');
+        document.getElementById('mic-label').textContent = 'Microphone on';
+
+        showView('connected');
+        setStatus('Connected - waiting for agent...', 'connecting');
+
+      } catch (err) {
+        console.error('Connection error:', err);
+        setStatus(err.message, 'error');
+        btn.disabled = false;
+      }
+    }
+
+    function setupAudioAnalyser(audioEl) {
+      try {
+        if (!audioContext) {
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        const source = audioContext.createMediaElementSource(audioEl);
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 64;
+        source.connect(analyser);
+        analyser.connect(audioContext.destination);
+        startVisualizer();
+      } catch (e) {
+        console.warn('Audio analyser setup failed:', e);
+      }
+    }
+
+    function startVisualizer() {
+      if (animFrameId) return;
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      function animate() {
+        analyser.getByteFrequencyData(dataArray);
+
+        // Map frequency bins to bars
+        const binSize = Math.floor(dataArray.length / BAR_COUNT);
+        for (let i = 0; i < BAR_COUNT; i++) {
+          let sum = 0;
+          for (let j = 0; j < binSize; j++) {
+            sum += dataArray[i * binSize + j];
+          }
+          const avg = sum / binSize;
+          const height = Math.max(8, (avg / 255) * 100);
+          bars[i].style.height = height + 'px';
+        }
+
+        animFrameId = requestAnimationFrame(animate);
+      }
+
+      animate();
+    }
+
+    function stopVisualizer() {
+      if (animFrameId) {
+        cancelAnimationFrame(animFrameId);
+        animFrameId = null;
+      }
+      bars.forEach(bar => bar.style.height = '8px');
+    }
+
+    async function disconnect() {
+      if (room) {
+        await room.disconnect();
+      }
+      handleDisconnect();
+    }
+
+    function handleDisconnect() {
+      stopVisualizer();
+      if (audioContext) {
+        audioContext.close().catch(() => {});
+        audioContext = null;
+        analyser = null;
+      }
+      room = null;
+
+      document.getElementById('mic-dot').classList.remove('active');
+      document.getElementById('mic-label').textContent = 'Microphone off';
+      document.getElementById('connect-btn').disabled = false;
+
+      // Remove any attached audio elements
+      document.querySelectorAll('audio').forEach(el => el.remove());
+
+      showView('login');
+      setStatus('Disconnected', '');
+    }
+
+    // Handle password enter key
+    document.getElementById('password').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') connect();
+    });
+  </script>
+</body>
+</html>
