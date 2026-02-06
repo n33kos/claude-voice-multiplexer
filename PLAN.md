@@ -9,10 +9,11 @@ Route voicemode audio I/O from a MacBook to an iPhone over the local network, us
 | Research & Architecture | Done | All findings documented below |
 | Token Server + Web Client | Done | `token-server.py` + `client/index.html` |
 | Toggle Script | Done | `relay start/stop/status` |
-| LiveKit Server Install | Not Started | `brew install livekit` |
-| Voicemode LiveKit Extras | Not Started | `uv tool install voice-mode[livekit]` |
-| voicemode.env Config | Not Started | Uncomment LiveKit env vars |
-| End-to-End Test | Not Started | iPhone Safari -> Mac -> Claude Code |
+| LiveKit Server Install | Done | `brew install livekit` (v1.9.11) |
+| Voicemode LiveKit Extras | Done | `uv tool install voice-mode[livekit]` (livekit-agents 1.3.12) |
+| voicemode.env Config | Done | `LIVEKIT_URL=ws://192.168.4.146:7880` |
+| Smoke Test (infra) | Done | LiveKit + token server start, health checks, JWT generation all verified |
+| End-to-End Test | Not Started | iPhone Safari -> Mac -> Claude Code (requires Claude Code restart) |
 | Internet Access (Tailscale) | Future | Out of scope for POC |
 
 ## Architecture
@@ -129,13 +130,13 @@ VOICEMODE_FRONTEND_PORT=3000
 
 ### Phase 1: Infrastructure Setup
 
-- [ ] Install LiveKit server: `brew install livekit`
-- [ ] Install voicemode LiveKit extras: `uv tool install voice-mode[livekit]`
-- [ ] Verify LiveKit server starts: `livekit-server --dev --bind 0.0.0.0`
-- [ ] Update `~/.voicemode/voicemode.env`:
-  - Uncomment and set `LIVEKIT_URL=ws://<LAN_IP>:7880`
-  - Uncomment `LIVEKIT_API_KEY=devkey`
-  - Uncomment `LIVEKIT_API_SECRET=secret`
+- [x] Install LiveKit server: `brew install livekit` (v1.9.11)
+- [x] Install voicemode LiveKit extras: `uv tool install voice-mode[livekit]`
+- [x] Verify LiveKit server starts: `livekit-server --dev --bind 0.0.0.0`
+- [x] Update `~/.voicemode/voicemode.env`:
+  - Set `LIVEKIT_URL=ws://192.168.4.146:7880`
+  - Set `LIVEKIT_API_KEY=devkey`
+  - Set `LIVEKIT_API_SECRET=secret`
 
 ### Phase 2: Token Server + Web Client (this repo)
 
@@ -232,10 +233,10 @@ cd ~/claude-voice-relay
 
 ## Setup Checklist (first time only)
 
-- [ ] `brew install livekit` — Install LiveKit server
-- [ ] `uv tool install voice-mode[livekit]` — Add LiveKit extras to voicemode
-- [ ] Update `~/.voicemode/voicemode.env` — Uncomment LiveKit env vars (see config section above)
-- [ ] Restart Claude Code — So voicemode picks up new packages
-- [ ] `./relay start` — Verify both servers start cleanly
-- [ ] Open URL on iPhone — Test the web client loads
+- [x] `brew install livekit` — Installed v1.9.11
+- [x] `uv tool install voice-mode[livekit]` — Installed livekit-agents 1.3.12 + 27 deps
+- [x] Update `~/.voicemode/voicemode.env` — Set `LIVEKIT_URL=ws://192.168.4.146:7880`
+- [x] `./relay start` — Both servers start, health checks pass, JWT generation verified
+- [ ] Restart Claude Code — So voicemode picks up new livekit packages
+- [ ] Open URL on iPhone — Test web client loads and connects
 - [ ] Test end-to-end — Voicemode `converse()` should auto-detect LiveKit transport
