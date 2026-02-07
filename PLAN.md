@@ -227,17 +227,20 @@ The following files are leftovers from the initial proof-of-concept and are no l
 - [x] Integrate agent into relay server (startup/shutdown lifecycle, response routing)
 - [ ] Test: end-to-end voice loop with a single session
 
-### Phase 4: React Web App
+### Phase 4: React Web App — Done
 
-- [ ] Scaffold React app with Vite + TailwindCSS
-- [ ] Integrate LiveKit React SDK for audio
-- [ ] Build session list component (fetches from /api/sessions)
-- [ ] Build session switching UI
-- [ ] Build voice controls (mute, push-to-talk toggle)
-- [ ] Build live transcript view
-- [ ] Build connection status indicator
-- [ ] Static build, configure relay server to serve it
-- [ ] Test: full UI on phone via ngrok
+- [x] Scaffold React app with Vite + TailwindCSS v4 (web/)
+- [x] Integrate LiveKit React SDK for WebRTC audio
+- [x] Build SessionList component (real-time session list from relay WebSocket)
+- [x] Build session switching UI (tap to connect/disconnect)
+- [x] Build VoiceControls with mic toggle (LiveKitRoom, RoomAudioRenderer)
+- [x] Build Transcript view (chat-bubble style, auto-scroll)
+- [x] Build StatusBar (relay status, audio status, session status)
+- [x] useRelay hook — WebSocket connection to /ws/client with auto-reconnect
+- [x] useLiveKit hook — token fetch from /api/token
+- [x] Vite proxy config for dev server → relay server
+- [x] Production build → web/dist/ (served by relay server's StaticFiles mount)
+- [ ] Test: full UI on phone
 
 ### Phase 5: Polish & Multi-Session
 
