@@ -215,14 +215,16 @@ The following files are leftovers from the initial proof-of-concept and are no l
 - [x] Implement session list broadcast to all connected clients on changes
 - [x] Test: 13/13 integration tests passing — registration, session list, client switching, text relay, disconnect notification, multi-session
 
-### Phase 3: Audio Pipeline
+### Phase 3: Audio Pipeline — In Progress
 
 - [x] Integrate Whisper client for STT (relay-server/audio.py)
-- [x] Integrate Kokoro client for TTS (relay-server/audio.py)
-- [ ] Implement LiveKit audio receive → Whisper transcription pipeline
-- [ ] Implement Kokoro TTS → LiveKit audio publish pipeline
-- [ ] Implement VAD / silence detection for turn-taking (cannibalize from Voice Mode)
-- [ ] Wire up: phone audio → transcription → Claude session → TTS → phone audio
+- [x] Integrate Kokoro client for TTS (relay-server/audio.py, added synthesize_pcm for raw PCM output)
+- [x] Implement LiveKit agent (relay-server/livekit_agent.py) — joins room, subscribes to audio tracks
+- [x] Implement LiveKit audio receive → buffer → Whisper transcription pipeline
+- [x] Implement Kokoro TTS → LiveKit audio publish pipeline (PCM → 48kHz resampled frames)
+- [x] Implement VAD silence detection (WebRTC VAD with 16kHz resampling, energy fallback)
+- [x] Wire up: phone audio → LiveKit → agent → Whisper → Claude session WS → response → Kokoro → LiveKit → phone
+- [x] Integrate agent into relay server (startup/shutdown lifecycle, response routing)
 - [ ] Test: end-to-end voice loop with a single session
 
 ### Phase 4: React Web App

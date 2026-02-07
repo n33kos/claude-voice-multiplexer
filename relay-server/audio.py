@@ -36,15 +36,16 @@ async def transcribe(audio_data: bytes, audio_format: str = "webm") -> str | Non
             return None
 
 
-async def synthesize(text: str, voice: str | None = None) -> bytes | None:
+async def synthesize(text: str, voice: str | None = None, response_format: str = "opus") -> bytes | None:
     """Synthesize speech using Kokoro via OpenAI-compatible API.
 
     Args:
         text: Text to synthesize
         voice: Voice to use (defaults to configured voice)
+        response_format: Audio format (opus, pcm, wav, mp3)
 
     Returns:
-        Audio bytes (opus format) or None on failure
+        Audio bytes or None on failure
     """
     url = f"{KOKORO_URL}/audio/speech"
 
@@ -53,7 +54,7 @@ async def synthesize(text: str, voice: str | None = None) -> bytes | None:
             "model": KOKORO_MODEL,
             "input": text,
             "voice": voice or KOKORO_VOICE,
-            "response_format": "opus",
+            "response_format": response_format,
         }
 
         try:
@@ -63,3 +64,8 @@ async def synthesize(text: str, voice: str | None = None) -> bytes | None:
         except Exception as e:
             print(f"TTS error: {e}")
             return None
+
+
+async def synthesize_pcm(text: str, voice: str | None = None) -> bytes | None:
+    """Synthesize speech as raw PCM (16-bit mono, 24kHz) for LiveKit publishing."""
+    return await synthesize(text, voice, response_format="pcm")

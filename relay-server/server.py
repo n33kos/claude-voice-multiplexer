@@ -12,6 +12,7 @@ import asyncio
 import json
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -20,13 +21,34 @@ from fastapi.staticfiles import StaticFiles
 
 from config import RELAY_HOST, RELAY_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
 from registry import SessionRegistry
+from livekit_agent import RelayAgent
 import audio
 
-app = FastAPI(title="Claude Voice Multiplexer")
 registry = SessionRegistry()
 
 # Track connected web clients
 _clients: dict[str, WebSocket] = {}
+
+# LiveKit agent (initialized on startup)
+_agent: RelayAgent | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _agent
+    _agent = RelayAgent(registry, _broadcast_sessions)
+    try:
+        await _agent.start()
+    except Exception as e:
+        print(f"[server] LiveKit agent failed to start: {e}")
+        print("[server] Continuing without LiveKit audio pipeline")
+        _agent = None
+    yield
+    if _agent:
+        await _agent.stop()
+
+
+app = FastAPI(title="Claude Voice Multiplexer", lifespan=lifespan)
 
 
 # --- REST API ---
@@ -115,27 +137,21 @@ async def session_ws(ws: WebSocket):
                 sid = data.get("session_id", session_id)
 
                 if text and sid:
+                    # Route through LiveKit agent if available (publishes audio to room)
+                    if _agent:
+                        asyncio.create_task(_agent.handle_claude_response(sid, text))
+
+                    # Also send transcript to any connected WebSocket clients
                     session = await registry.get(sid)
                     if session and session.connected_client:
                         client_ws = _clients.get(session.connected_client)
                         if client_ws:
-                            # Send text to client immediately
                             await client_ws.send_text(json.dumps({
                                 "type": "transcript",
                                 "speaker": "claude",
                                 "text": text,
                                 "session_id": sid,
                             }))
-
-                            # Synthesize TTS and send audio reference
-                            audio_data = await audio.synthesize(text)
-                            if audio_data:
-                                await client_ws.send_text(json.dumps({
-                                    "type": "tts_ready",
-                                    "session_id": sid,
-                                    "audio_size": len(audio_data),
-                                }))
-                                await client_ws.send_bytes(audio_data)
 
             elif msg_type == "pong":
                 pass

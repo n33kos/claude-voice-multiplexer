@@ -3,3 +3,7 @@ uvicorn>=0.27
 websockets>=12.0
 httpx>=0.27
 livekit-api>=0.7
+livekit>=1.0
+numpy>=1.24
+scipy>=1.10
+webrtcvad>=2.0.10
