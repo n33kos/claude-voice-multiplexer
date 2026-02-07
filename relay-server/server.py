@@ -52,15 +52,15 @@ async def get_token(room: str = "multiplexer", identity: str = ""):
     if not identity:
         identity = f"client-{uuid.uuid4().hex[:6]}"
 
-    token = AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
-    token.identity = identity
-    token.add_grant(VideoGrants(
-        room_join=True,
-        room=room,
-    ))
+    jwt = (
+        AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+        .with_identity(identity)
+        .with_grants(VideoGrants(room_join=True, room=room))
+        .to_jwt()
+    )
 
     return JSONResponse({
-        "token": token.to_jwt(),
+        "token": jwt,
         "url": LIVEKIT_URL,
         "room": room,
         "identity": identity,

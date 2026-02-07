@@ -180,29 +180,45 @@ Phone → Relay Server (web server) → Whisper/Kokoro (web server)
   MCP Plugins (Mac, Claude Code)
 ```
 
+## Cleanup: Remove POC Files
+
+The following files are leftovers from the initial proof-of-concept and are no longer used by the new architecture. Delete them:
+
+- `client/` — Old vanilla JS web client (replaced by upcoming React web app in `web/`)
+  - `client/app.js`
+  - `client/index.html`
+  - `client/styles.css`
+- `token-server.py` — Old standalone HTTP token server (replaced by `relay-server/server.py`)
+- `mcp-server/.venv/` — Temporary venv from testing (deps now handled by `uv run`)
+
 ## Implementation Plan
 
-### Phase 1: MCP Plugin Skeleton
+### Phase 1: MCP Plugin Skeleton — Done
 
-- [ ] Create MCP server using FastMCP (Python)
-- [ ] Implement `relay_standby` tool — connects to relay via WebSocket, sends heartbeat
-- [ ] Implement `relay_disconnect` tool — clean shutdown
-- [ ] Implement `relay_status` tool — show connection state
-- [ ] Test: install MCP in Claude Code, invoke standby, verify registration
+- [x] Create MCP server using FastMCP (Python)
+- [x] Implement `relay_standby` tool — connects to relay via WebSocket, sends heartbeat
+- [x] Implement `relay_respond` tool — sends text response back for TTS synthesis
+- [x] Implement `relay_disconnect` tool — clean shutdown
+- [x] Implement `relay_status` tool — show connection state
+- [x] Test: WebSocket registration, ack, heartbeat, disconnect cleanup — all verified
 
-### Phase 2: Relay Server Core
+### Phase 2: Relay Server Core — Done
 
-- [ ] Set up Python server (FastAPI or similar)
-- [ ] Implement session registry (in-memory, WebSocket-based)
-- [ ] Implement WebSocket hub for MCP plugin connections
-- [ ] Implement token endpoint for LiveKit JWTs
-- [ ] Implement sessions API endpoint
-- [ ] Test: MCP plugin registers, relay tracks sessions, API returns list
+- [x] Set up Python server (FastAPI + uvicorn)
+- [x] Implement session registry (in-memory, with heartbeat timeout and stale pruning)
+- [x] Implement WebSocket hub for MCP plugin connections (`/ws/session`)
+- [x] Implement WebSocket hub for web clients (`/ws/client`)
+- [x] Implement token endpoint for LiveKit JWTs (`/api/token`, uses livekit-api builder pattern)
+- [x] Implement sessions API endpoint (`/api/sessions`)
+- [x] Implement session-to-client text relay (response → transcript + TTS)
+- [x] Implement client-to-session voice relay (voice_input → transcribe → forward)
+- [x] Implement session list broadcast to all connected clients on changes
+- [x] Test: 13/13 integration tests passing — registration, session list, client switching, text relay, disconnect notification, multi-session
 
 ### Phase 3: Audio Pipeline
 
-- [ ] Integrate Whisper client for STT (cannibalize from Voice Mode)
-- [ ] Integrate Kokoro client for TTS (cannibalize from Voice Mode)
+- [x] Integrate Whisper client for STT (relay-server/audio.py)
+- [x] Integrate Kokoro client for TTS (relay-server/audio.py)
 - [ ] Implement LiveKit audio receive → Whisper transcription pipeline
 - [ ] Implement Kokoro TTS → LiveKit audio publish pipeline
 - [ ] Implement VAD / silence detection for turn-taking (cannibalize from Voice Mode)

@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "voice-multiplexer": {
-      "command": "python3",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-server/server.py"],
+      "command": "/Users/nicholassuski/.local/bin/uv",
+      "args": ["run", "--with", "fastmcp>=2.0", "--with", "websockets>=12.0", "/Users/nicholassuski/claude-voice-multiplexer/mcp-server/server.py"],
       "env": {
         "RELAY_URL": "ws://localhost:3100"
       }
