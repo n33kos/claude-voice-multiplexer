@@ -7,3 +7,7 @@ __pycache__/
 .DS_Store
 *.pid
 .claude/
+web/dist/
+web/node_modules/
+.venv/
+venv/

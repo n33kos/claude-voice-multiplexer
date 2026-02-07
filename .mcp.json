@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "voice-multiplexer": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-server/server.py"],
+      "env": {
+        "RELAY_URL": "ws://localhost:3100"
+      }
+    }
+  }
+}

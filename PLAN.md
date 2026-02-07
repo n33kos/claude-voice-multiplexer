@@ -1,327 +1,345 @@
-# Claude Voice Relay
+# Claude Voice Multiplexer
 
-Route voicemode audio I/O from a MacBook to an iPhone over the local network, using LiveKit as a real-time audio transport layer.
-
-## Status
-
-| Phase | Status | Notes |
-|-------|--------|-------|
-| Research & Architecture | Done | All findings documented below |
-| Token Server + Web Client | Done | `token-server.py` + `client/index.html` |
-| Toggle Script | Done | `relay start/stop/status` |
-| LiveKit Server Install | Done | `brew install livekit` (v1.9.11) |
-| Voicemode LiveKit Extras | Done | `uv tool install voice-mode[livekit]` (livekit-agents 1.3.12) |
-| voicemode.env Config | Done | `LIVEKIT_URL=ws://localhost:7880` (localhost due to CrowdStrike) |
-| Smoke Test (infra) | Done | LiveKit + token server start, health checks, JWT generation all verified |
-| End-to-End Test | Done | Working via ngrok tunnel (CrowdStrike blocks LAN) |
-| Bug Fixes | Not Started | See Known Bugs section below |
-| Internet Access | Future | See Future Features section below |
+A Claude Code MCP plugin and relay server for remote voice interaction with multiple Claude Code sessions. Talk to your running Claude sessions from anywhere — switch between them, see their output, and control them by voice from your phone or any browser.
 
 ## Architecture
 
 ```
-iPhone (Safari)                Mac (all processing stays here)
-┌─────────────────┐           ┌──────────────────────────────────────┐
-│                 │           │                                      │
-│  Web Client     │◄─WebRTC──►  LiveKit Server (:7880)              │
-│  (mic/speaker)  │           │       │                              │
-│                 │           │       ▼                              │
-│  served from    │◄─HTTP────►  Token Server (:3100)                │
-│  :3100          │           │                                      │
-│                 │           │  Voicemode (LiveKit transport)       │
-└─────────────────┘           │       │              │               │
-                              │  Whisper (:2022)  Kokoro (:8880)    │
-                              │  (STT)            (TTS)              │
-                              │                                      │
-                              │  Claude Code (session)               │
-                              └──────────────────────────────────────┘
+Phone / Browser                    Mac
+┌──────────────────────┐          ┌──────────────────────────────────────────┐
+│                      │          │                                          │
+│  React Web App       │◄─LiveKit─►  Relay Server                           │
+│  (mic/speaker/UI)    │  WebRTC  │  ├── LiveKit Server (:7880)             │
+│                      │          │  ├── Token Server (:3100)               │
+│  Features:           │          │  ├── Session Registry                   │
+│  - Voice I/O         │          │  │   (tracks active Claude sessions)    │
+│  - Session list      │          │  ├── Whisper Client (:2022)             │
+│  - Session switching │          │  └── Kokoro Client (:8880)              │
+│  - Text transcript   │          │                                          │
+│                      │          │  Claude Code Sessions (iTerm2)           │
+└──────────────────────┘          │  ├── Session A ← MCP plugin (standby)   │
+                                  │  ├── Session B ← MCP plugin (standby)   │
+                                  │  └── Session C ← MCP plugin (standby)   │
+                                  └──────────────────────────────────────────┘
 ```
 
-**Audio flow:**
-1. iPhone mic -> WebRTC -> LiveKit room -> voicemode subscribes to audio track
-2. Voicemode sends audio to Whisper (local STT) -> transcription text
-3. Claude Code processes the text, generates response
-4. Response text -> Kokoro (local TTS) -> audio
-5. Voicemode publishes audio track to LiveKit room -> WebRTC -> iPhone speaker
+## How It Works
 
-**Key insight:** LiveKit is ONLY the audio transport. All STT, LLM, and TTS processing stays on the Mac. No cloud services involved.
+### Session Registration (MCP Plugin)
 
-## Toggle Mechanism
+Each Claude Code session has the MCP plugin installed. When the user invokes a standby skill or command, the plugin:
 
-Voicemode's `transport` parameter has three modes: `auto`, `local`, `livekit`.
+1. Registers with the relay server via HTTP (session name, working directory, metadata)
+2. Sends periodic heartbeats to maintain presence in the session registry
+3. Opens a WebSocket to the relay server to receive incoming voice messages
+4. When a voice message arrives: receives the transcribed text, lets Claude process it, and sends Claude's conversational text response back to the relay
+5. The relay synthesizes the response with Kokoro and streams audio back to the client
 
-With `transport="auto"` (the default), voicemode calls `check_livekit_available()` on each `converse()` call, which:
-1. Checks if the `livekit` Python package is installed
-2. Connects to the LiveKit server API
-3. Lists rooms and checks for rooms with `num_participants > 0`
-4. Returns `True` only if there's an active room with a participant
+### Audio Flow
 
-**This means the toggle is automatic:**
-- **No one has the web client open** -> auto selects `local` (direct Mac mic)
-- **iPhone has the web client connected** -> auto selects `livekit` (remote audio)
-
-The only infrastructure toggle is starting/stopping the LiveKit server and token server. The `relay` script handles this:
-- `relay start` -> starts LiveKit + token server, prints iPhone URL
-- `relay stop` -> stops both, voicemode seamlessly falls back to local mic
-- `relay status` -> shows what's running
-
-**Performance note:** When LiveKit server is NOT running, `check_livekit_available()` may add ~1-2s of connection timeout on each `converse()` call. For best local-mode performance, stop the LiveKit server when not using remote mode.
-
-## Research Findings
-
-### Voicemode's Existing LiveKit Support
-
-Voicemode (v7.4.2) already has full LiveKit support:
-
-- **Transport code:** `voice_mode/tools/converse.py` lines 966-1143
-- **LiveKit Agents SDK:** Uses `livekit.agents` with a `VoiceAgent` subclass
-- **Auto-detection:** `check_livekit_available()` checks for rooms with participants
-- **STT/TTS routing:** Uses `livekit.plugins.openai` to create TTS/STT clients pointed at local Whisper/Kokoro endpoints
-- **Bundled frontend:** Complete Next.js app at `voice_mode/frontend/` with production build
-
-### Bugs Found in Bundled Frontend
-
-Two issues prevent us from using the bundled frontend directly:
-
-1. **Hardcoded LIVEKIT_URL** (`frontend/app/api/connection-details/route.ts` line 8):
-   ```typescript
-   const LIVEKIT_URL = "wss://x1:8443"; // process.env.LIVEKIT_URL || "ws://localhost:7880";
-   ```
-   The env var read is commented out and replaced with a hardcoded URL (`wss://x1:8443`). This is baked into the production build.
-
-2. **Dummy token in production Python server** (`tools/livekit/production_server.py` line 177):
-   ```python
-   "participantToken": "dummy-token",  # Would generate real token
-   ```
-   The Python fallback server doesn't generate real LiveKit JWT tokens.
-
-**POC approach:** Build a custom lightweight token server + web client to bypass both issues. This also gives us full control over LAN binding and configuration.
-
-### Environment & Configuration
-
-Current state:
-- Whisper: running on port 2022 (Core ML, Metal GPU)
-- Kokoro: running on port 8880
-- LiveKit server: NOT installed
-- LiveKit Python extras: NOT installed (need `voice-mode[livekit]`)
-- Mac LAN IP: `192.168.4.146` (may change with DHCP)
-- Config file: `~/.voicemode/voicemode.env`
-
-Default LiveKit config (already in voicemode.env, just commented out):
 ```
-LIVEKIT_URL=ws://127.0.0.1:7880
-LIVEKIT_API_KEY=devkey
-LIVEKIT_API_SECRET=secret
-VOICEMODE_FRONTEND_HOST=127.0.0.1
-VOICEMODE_FRONTEND_PORT=3000
+Phone mic → LiveKit (WebRTC) → Relay Server
+  → Whisper (local STT, :2022) → transcribed text
+  → WebSocket → MCP plugin in Claude session
+  → Claude processes, generates response text
+  → WebSocket → Relay Server
+  → Kokoro (local TTS, :8880) → audio
+  → LiveKit (WebRTC) → Phone speaker
 ```
 
-### Key Source Files
+### Session Switching
 
-| File | Purpose |
-|------|---------|
-| `~/.local/share/uv/tools/voice-mode/.../tools/converse.py` | Main converse tool, LiveKit transport at lines 966-1143 |
-| `~/.local/share/uv/tools/voice-mode/.../config.py` | All config including LiveKit env vars (lines 556-591) |
-| `~/.local/share/uv/tools/voice-mode/.../tools/livekit/install.py` | LiveKit server install logic (brew on macOS) |
-| `~/.local/share/uv/tools/voice-mode/.../tools/livekit/frontend.py` | Frontend management (start/stop/status) |
-| `~/.local/share/uv/tools/voice-mode/.../tools/livekit/production_server.py` | Python HTTP server (has dummy token bug) |
-| `~/.voicemode/voicemode.env` | User's voicemode configuration |
+The web UI shows all registered Claude sessions. The user taps to switch. The relay:
+
+1. Disconnects voice from current session
+2. Connects voice to the selected session
+3. Audio now routes to/from the new session
+
+Sessions not actively connected still maintain heartbeat and can receive voice at any time.
+
+## Components
+
+### 1. MCP Plugin (`claude-voice-multiplex` MCP server)
+
+A lightweight MCP server that adds voice relay capabilities to any Claude Code session.
+
+**Tools provided:**
+- `relay_standby` — Register this session with the relay server and enter standby mode. Session becomes available for remote voice. Maintains heartbeat. Receives transcribed voice input, returns Claude's conversational response.
+- `relay_disconnect` — Unregister from the relay and exit standby mode.
+- `relay_status` — Show current relay connection status.
+
+**Behavior in standby:**
+- The plugin opens a persistent WebSocket connection to the relay server
+- Sends heartbeat every ~15 seconds with session metadata
+- When voice input arrives (as transcribed text), it's injected into Claude's context
+- Claude's response is captured and sent back through the WebSocket
+- The user can Ctrl+C or type to exit standby and resume normal use
+
+**Key design decision:** The MCP plugin does NOT handle audio. It only deals in text. Audio capture/playback happens entirely in the relay server using Whisper and Kokoro. This keeps the plugin simple and avoids any audio dependency in Claude Code sessions.
+
+**Code to cannibalize from Voice Mode:**
+- Config pattern: env file loading, cascading config (`voice_mode/config.py`)
+- Conch-style lock mechanism for coordinating which session has the "floor" (`voice_mode/conch.py`)
+- Session metadata patterns from agent system (`voice_mode/cli_commands/agent.py`)
+
+### 2. Relay Server
+
+A Python server that bridges the web client, Claude sessions, and local AI services.
+
+**Responsibilities:**
+- **Session registry**: Track which Claude sessions are in standby, their names, metadata
+- **Audio transport**: Manage LiveKit rooms for WebRTC audio with phone clients
+- **STT pipeline**: Receive audio from LiveKit → transcribe with Whisper → send text to Claude session
+- **TTS pipeline**: Receive text response from Claude session → synthesize with Kokoro → stream audio to LiveKit
+- **Token generation**: Issue LiveKit JWTs for client authentication
+- **WebSocket hub**: Manage connections to MCP plugins in Claude sessions
+
+**Endpoints:**
+- `GET /` — Serve the React web app
+- `GET /api/token` — Generate LiveKit JWT for client connection
+- `GET /api/sessions` — List all registered Claude sessions
+- `WS /ws/session` — WebSocket for MCP plugin registration + voice text relay
+- `WS /ws/client` — WebSocket for web client events (session switching, status)
+
+**Code to cannibalize from Voice Mode:**
+- Whisper client integration (`voice_mode/core.py` — STT HTTP calls)
+- Kokoro client integration (`voice_mode/core.py` — TTS HTTP calls with streaming)
+- Audio format handling and compression (`voice_mode/config.py` — format configs)
+- VAD / silence detection logic (`voice_mode/tools/converse.py` — WebRTC VAD, silence thresholds)
+- Streaming audio playback patterns (`voice_mode/streaming.py` — buffer management)
+- LiveKit token generation (`voice_mode/tools/livekit/` — JWT creation)
+
+### 3. React Web App
+
+A static-built React app served by the relay server. Mobile-first design for phone use.
+
+**Features:**
+- **Session list**: Shows all active Claude sessions with name, directory, status
+- **Session switching**: Tap to connect voice to a different session
+- **Voice controls**: Push-to-talk or voice-activated, mute/unmute
+- **Live transcript**: Shows the conversation (what you said, what Claude said)
+- **Audio visualizer**: Visual feedback during speech
+- **Connection status**: LiveKit connection state, relay heartbeat
+
+**Tech stack:**
+- React (Vite build)
+- LiveKit React SDK for WebRTC audio
+- TailwindCSS for styling
+- Built as static files, served by relay server
+
+### 4. Infrastructure
+
+**Services (already running, shared with Voice Mode):**
+- Whisper server on `:2022` — local STT
+- Kokoro server on `:8880` — local TTS
+- LiveKit server on `:7880` — WebRTC audio transport
+
+**New services:**
+- Relay server on `:3100` — orchestrates everything
+- Serves the web app, handles session registry, bridges audio and text
+
+**Network access:**
+- CrowdStrike blocks LAN on this Mac, so ngrok or Tailscale needed for phone access
+- Alternatively: run relay server on a cloud host (see Deployment Modes below)
+
+## Deployment Modes
+
+### Mode 1: Fully Local (starting point)
+
+Everything runs on the Mac. Phone accesses via ngrok tunnel.
+
+```
+Phone → ngrok → Relay Server (Mac :3100) → Whisper/Kokoro/LiveKit (Mac)
+                     ↕ WebSocket
+              MCP Plugins (Mac, Claude Code sessions)
+```
+
+### Mode 2: Hybrid Cloud (target)
+
+Relay server runs on a personal web server with a public URL. Whisper and Kokoro stay on the Mac for GPU inference. MCP plugins connect to the remote relay.
+
+```
+Phone → Relay Server (web server, public URL)
+              ↕ WebSocket (internet)          ↕ HTTP (internet)
+  MCP Plugins (Mac, Claude Code)     Whisper/Kokoro (Mac, local)
+```
+
+In this mode:
+- The relay server calls back to the Mac for STT/TTS (Whisper and Kokoro endpoints need to be reachable — via Tailscale, reverse tunnel, or similar)
+- The MCP plugin WebSocket connects outbound to the relay server (no inbound port needed on Mac)
+- Phone hits the public relay URL directly — no ngrok required
+- Audio quality benefits from Kokoro running on Mac GPU
+
+### Mode 3: Fully Cloud (future option)
+
+Everything runs on the web server, including Whisper and Kokoro. No dependency on the Mac being online except for the Claude Code sessions themselves.
+
+```
+Phone → Relay Server (web server) → Whisper/Kokoro (web server)
+              ↕ WebSocket
+  MCP Plugins (Mac, Claude Code)
+```
 
 ## Implementation Plan
 
-### Phase 1: Infrastructure Setup
+### Phase 1: MCP Plugin Skeleton
 
-- [x] Install LiveKit server: `brew install livekit` (v1.9.11)
-- [x] Install voicemode LiveKit extras: `uv tool install voice-mode[livekit]`
-- [x] Verify LiveKit server starts: `livekit-server --dev --bind 0.0.0.0`
-- [x] Update `~/.voicemode/voicemode.env`:
-  - Set `LIVEKIT_URL=ws://192.168.4.146:7880`
-  - Set `LIVEKIT_API_KEY=devkey`
-  - Set `LIVEKIT_API_SECRET=secret`
+- [ ] Create MCP server using FastMCP (Python)
+- [ ] Implement `relay_standby` tool — connects to relay via WebSocket, sends heartbeat
+- [ ] Implement `relay_disconnect` tool — clean shutdown
+- [ ] Implement `relay_status` tool — show connection state
+- [ ] Test: install MCP in Claude Code, invoke standby, verify registration
 
-### Phase 2: Token Server + Web Client (this repo)
+### Phase 2: Relay Server Core
 
-**Token server** (`token-server.py`):
-- Python HTTP server binding to `0.0.0.0:3100`
-- `GET /` -> serves the web client HTML
-- `GET /token?room=<name>&identity=<name>` -> returns LiveKit JWT
-- Uses `livekit-api` Python package for token generation
-- Reads `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` from env (defaults to devkey/secret)
+- [ ] Set up Python server (FastAPI or similar)
+- [ ] Implement session registry (in-memory, WebSocket-based)
+- [ ] Implement WebSocket hub for MCP plugin connections
+- [ ] Implement token endpoint for LiveKit JWTs
+- [ ] Implement sessions API endpoint
+- [ ] Test: MCP plugin registers, relay tracks sessions, API returns list
 
-**Web client** (`client/index.html`):
-- Single HTML file, LiveKit JS SDK loaded from CDN
-- Password prompt (matches `LIVEKIT_ACCESS_PASSWORD`)
-- Connects to LiveKit room, publishes mic, subscribes to audio
-- Mobile-responsive for iPhone Safari
-- Shows connection status and audio visualizer
+### Phase 3: Audio Pipeline
 
-### Phase 3: Toggle Script
+- [ ] Integrate Whisper client for STT (cannibalize from Voice Mode)
+- [ ] Integrate Kokoro client for TTS (cannibalize from Voice Mode)
+- [ ] Implement LiveKit audio receive → Whisper transcription pipeline
+- [ ] Implement Kokoro TTS → LiveKit audio publish pipeline
+- [ ] Implement VAD / silence detection for turn-taking (cannibalize from Voice Mode)
+- [ ] Wire up: phone audio → transcription → Claude session → TTS → phone audio
+- [ ] Test: end-to-end voice loop with a single session
 
-**`relay` script:**
-- `relay start` -> starts LiveKit server (background) + token server (background), detects LAN IP, prints iPhone URL
-- `relay stop` -> kills both processes, voicemode auto-falls back to local
-- `relay status` -> shows PID, ports, LAN URL
-- Stores PIDs in `~/.voicemode/relay.pid` for clean shutdown
+### Phase 4: React Web App
 
-### Phase 4: End-to-End Testing
+- [ ] Scaffold React app with Vite + TailwindCSS
+- [ ] Integrate LiveKit React SDK for audio
+- [ ] Build session list component (fetches from /api/sessions)
+- [ ] Build session switching UI
+- [ ] Build voice controls (mute, push-to-talk toggle)
+- [ ] Build live transcript view
+- [ ] Build connection status indicator
+- [ ] Static build, configure relay server to serve it
+- [ ] Test: full UI on phone via ngrok
 
-1. Start relay: `./relay start`
-2. Open printed URL on iPhone Safari
-3. Enter password, tap "Start Conversation"
-4. In Claude Code: test voicemode `converse()` — should auto-detect LiveKit
-5. Verify: speech from iPhone -> transcription -> Claude response -> TTS plays on iPhone
-6. Stop relay: `./relay stop`
-7. Verify: voicemode falls back to local Mac mic seamlessly
+### Phase 5: Polish & Multi-Session
 
-### Phase 5: Bug Fixes
+- [ ] Session naming and metadata display
+- [ ] Graceful session disconnect/reconnect handling
+- [ ] Audio chimes for turn-taking (client-side)
+- [ ] Error handling and recovery (WebSocket reconnect, service failures)
+- [ ] Multiple simultaneous standby sessions with clean switching
+- [ ] Test: switch between 2-3 active Claude sessions by voice
 
-- [ ] Fix audio visualizer bars (not animating)
-- [ ] Fix "agent disconnected" flicker between turns
-- [ ] Add turn-taking chimes to phone client
-- [ ] Handle long speech input / 120s timeout gracefully
-- [ ] Investigate audio dropout on long TTS responses
+### Phase 6: Future Enhancements
 
-### Phase 6 (Future): Enhancements
+- [ ] Cloud-hosted relay for true remote access (no ngrok)
+- [ ] Authentication for the web app (pin code, passkey, etc.)
+- [ ] iOS PWA support (home screen app, push notifications)
+- [ ] Voice commands for session switching ("switch to project X")
+- [ ] Persistent conversation history across sessions
+- [ ] Agent-to-agent messaging (tell one Claude about another's output)
 
-- [ ] Text I/O display on phone client
-- [ ] Self-hosted cloud relay (personal web server)
-- [ ] Explore alternative tunnel methods (Tailscale, Cloudflare, LiveKit Cloud)
-- [ ] Multi-agent session switching (see below)
+## Voice Mode Codebase Reference
 
-## Future Features
+Key files to cannibalize from the Voice Mode package at:
+`~/.local/share/uv/tools/voice-mode/lib/python3.14/site-packages/voice_mode/`
 
-## Known Bugs
+| File | What to take |
+|------|-------------|
+| `core.py` | Whisper STT client, Kokoro TTS client, streaming audio, OpenAI-compatible API patterns |
+| `streaming.py` | Audio stream buffering, TTFA tracking, progressive playback |
+| `config.py` | Env file loading, audio format config, service port defaults |
+| `conch.py` | File-based lock mechanism for multi-session coordination |
+| `tools/converse.py` | VAD silence detection, recording state machine, audio compression for STT |
+| `cli_commands/agent.py` | Session metadata patterns, heartbeat approach, multi-agent discovery |
+| `serve_middleware.py` | ASGI middleware patterns (IP allowlist, token auth) |
+| `simple_failover.py` | Provider failover/retry logic for TTS and STT |
 
-### 1. Audio visualizer bars don't move
-The frequency visualizer in the web client never animates — bars stay flat during both mic input and agent audio playback. Likely the `setupAudioAnalyser()` isn't receiving the audio stream correctly, or the analyser isn't connected to the right source nodes.
+## Project Structure
 
-### 2. "Agent disconnected" flicker between turns
-When voicemode finishes a converse call, it leaves the LiveKit room. The phone client shows "Agent disconnected" briefly before the next converse call joins again. Need either: (a) persistent agent presence in the room, or (b) client-side UX that masks the gap (e.g. "Thinking..." state instead of "Agent disconnected").
+This project is a **Claude Code plugin** that bundles an MCP server, skills, and a relay server in one package.
 
-### 3. No audio chimes on the phone to indicate turn-taking
-The user has no way to know when the system is listening vs processing. Voicemode has built-in chimes for local mode, but they don't route through LiveKit to the phone. Need to either: (a) route voicemode's chime audio through LiveKit, or (b) play chimes client-side triggered by LiveKit events (agent join = listening, agent publish audio = responding).
+```
+claude-voice-multiplexer/                # Claude Code plugin root
+├── .claude-plugin/
+│   └── plugin.json                      # Plugin manifest
+├── .mcp.json                            # Bundled MCP server definition
+├── skills/
+│   └── relay-standby/
+│       └── SKILL.md                     # /voice-multiplexer:relay-standby skill
+├── PLAN.md                              # This file
+├── mcp-server/                          # MCP server (bundled in plugin)
+│   ├── server.py                        # FastMCP server with relay tools
+│   ├── config.py                        # Plugin configuration
+│   └── requirements.txt
+├── relay-server/                        # Relay server (standalone process)
+│   ├── server.py                        # Main server (FastAPI)
+│   ├── registry.py                      # Session registry
+│   ├── audio.py                         # Whisper/Kokoro/LiveKit audio pipeline
+│   ├── config.py                        # Server configuration
+│   └── requirements.txt
+├── web/                                 # React web app
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── components/
+│   │   │   ├── SessionList.tsx
+│   │   │   ├── VoiceControls.tsx
+│   │   │   ├── Transcript.tsx
+│   │   │   └── StatusBar.tsx
+│   │   └── hooks/
+│   │       ├── useLiveKit.ts
+│   │       └── useRelay.ts
+│   ├── index.html
+│   ├── package.json
+│   ├── vite.config.ts
+│   └── tailwind.config.ts
+└── scripts/
+    └── start.sh                         # Start all services
+```
 
-### 4. Long speech input causes timeout / audio loss
-The voicemode `converse()` call has a `listen_duration_max` of 120s. If the user speaks for a long time, the listen window expires and the audio may not be fully captured. Need to: (a) ensure a stop chime plays when listen time runs out, (b) ensure all captured audio still gets routed to Whisper/Claude even on timeout, (c) consider whether the limit should be extended or made configurable for relay mode.
+## Configuration
 
-### 5. Voicemode missing `TTS_BASE_URLS` import (fixed)
-`converse.py` was missing `TTS_BASE_URLS` in its import from `voice_mode.config`, causing LiveKit transport to fail. Fixed by adding the import — but this is a patch on the installed package that will be lost on voicemode updates.
-
-## Known Limitations
-
-### CrowdStrike Falcon blocks LAN connections
-CrowdStrike endpoint security on the Mac blocks all inbound TCP connections on non-loopback interfaces. This prevents direct LAN access (phone → Mac IP). Current workaround: ngrok tunnel. See debugging notes in git history.
-
-### ngrok free tier constraints
-- URLs change every session (no stable address)
-- Added latency routing through ngrok relay servers
-- Free tier has connection/bandwidth limits
-- Requires ngrok account + authtoken
-
-## Future Features
-
-### Text I/O display on phone client
-Add a live transcript/status feed to the web client showing:
-- What the user said (STT result)
-- Processing state ("Thinking...", "Generating response...")
-- Claude's response text
-- Possibly a scrollable conversation history
-
-### Self-hosted cloud relay
-Host the relay application on a personal web server for stable internet access without ngrok limitations. Architecture would be:
-- Web server hosts the token server + web client (publicly accessible)
-- LiveKit server runs on the web server (or use LiveKit Cloud)
-- Voicemode on Mac connects to the remote LiveKit server
-- Phone connects to the web-hosted client
-- Eliminates need for ngrok, Tailscale, or LAN access
-
-### Multi-agent session switching
-Support multiple concurrent Claude Code sessions, each registered as a separate agent. The phone web UI would show a list of active sessions and let the user:
-- See which Claude sessions are running and available for voice
-- Switch between sessions (connect voice to a different agent)
-- Connect/disconnect voicemode per session independently
-- Potentially talk to one session while others continue working in the background
-
-This would require:
-- A session registry (token server or separate service tracks which Claude sessions have registered as agents)
-- Each Claude Code instance registers itself with a name/label when relay is active
-- Web client UI for listing sessions and switching between them
-- LiveKit room-per-session or room switching logic
-- Graceful handoff (disconnect voice from session A, connect to session B)
-
-**Key architectural challenge:** Voicemode is pull-based — Claude must actively call `converse()` which blocks waiting for audio. There's no persistent listener. For multi-agent switching, the target session needs to be actively listening when the user wants to speak to it.
-
-Potential approaches:
-1. **Push model (daemon)**: A lightweight service on the Mac that persistently listens on LiveKit rooms and dispatches audio to the correct Claude session via IPC (pipe, socket, or webhook). Claude sessions register with the daemon and receive transcribed text or raw audio on demand.
-2. **Agent-initiated polling**: Each Claude session periodically calls `converse()` with a short timeout, checking if there's audio waiting in its assigned room. The web UI signals which room is "active" so only one session picks up audio at a time.
-3. **LiveKit Agents SDK as standalone bridge**: Skip voicemode's converse wrapper entirely. Run a persistent livekit-agents service that handles STT/TTS and communicates with Claude sessions through a separate channel (e.g. Claude API directly, or stdin/stdout pipes to Claude Code processes).
-
-### Alternative tunnel/access methods
-- **Tailscale**: Stable IPs, low latency, requires install on both devices
-- **Cloudflare Tunnel**: Free, no account needed for quick tunnels
-- **LiveKit Cloud**: Free tier (10k min/month), removes need to self-host LiveKit server
-- **Self-hosted relay**: See above
-
-## Configuration Changes Reference
-
-### voicemode.env changes for remote mode
+### Relay Server Config
 
 ```bash
-# Uncomment and set these in ~/.voicemode/voicemode.env
-LIVEKIT_URL=ws://192.168.4.146:7880    # Use Mac's LAN IP
+# Environment variables (or in a .env file in relay/)
+RELAY_PORT=3100
+RELAY_HOST=0.0.0.0
+WHISPER_URL=http://127.0.0.1:2022/v1
+KOKORO_URL=http://127.0.0.1:8880/v1
+LIVEKIT_URL=ws://localhost:7880
 LIVEKIT_API_KEY=devkey
 LIVEKIT_API_SECRET=secret
 ```
 
-Note: The LIVEKIT_URL must use the LAN IP (not localhost) so the iPhone can reach it. For voicemode's local transport, this setting is ignored (it doesn't connect to LiveKit when using local mic).
+## Development Setup
 
-### Installing LiveKit extras
+### Loading the Plugin (no publishing required)
 
-```bash
-# This adds livekit, livekit-agents, livekit-plugins-openai, silero-vad
-uv tool install voice-mode[livekit]
-```
-
-After install, restart Claude Code so voicemode picks up the new packages.
-
-## Quick Start (after setup)
+A shell alias in `~/.zshrc` automatically loads the plugin on every `claude` invocation:
 
 ```bash
-# 1. Start the relay
-cd ~/claude-voice-relay
-./relay start
-
-# 2. Open the printed URL on your iPhone in Safari
-#    Enter the password (default: voicemode123)
-#    Tap "Start Conversation"
-
-# 3. Use Claude Code normally - voicemode auto-detects the remote connection
-
-# 4. When done, stop the relay
-./relay stop
-# Voicemode seamlessly falls back to local Mac mic
+alias claude='command claude --plugin-dir /Users/nicholassuski/claude-voice-multiplexer --plugin-dir /Users/nicholassuski/claude-plugins/plugins/learn'
 ```
 
-## Project Structure
+This gives every Claude session access to:
+- The MCP server (tools: `relay_standby`, `relay_disconnect`, `relay_status`)
+- The skill (`/voice-multiplexer:relay-standby`)
 
+No manual MCP configuration or publishing needed. Restart Claude to pick up plugin changes.
+
+### Running the Relay Server (development)
+
+```bash
+cd ~/claude-voice-multiplexer/relay-server
+python server.py
 ```
-~/claude-voice-relay/
-├── PLAN.md              # This file - architecture, findings, plan
-├── relay                # Toggle script: start/stop/status
-├── token-server.py      # Python HTTP server: serves client + generates LiveKit tokens
-├── client/
-│   └── index.html       # LiveKit web client for iPhone Safari
-└── .gitignore
+
+### Building the Web App (development)
+
+```bash
+cd ~/claude-voice-multiplexer/web
+npm install
+npm run dev     # Vite dev server with hot reload
+npm run build   # Production build → dist/ (served by relay server)
 ```
-
-## Setup Checklist (first time only)
-
-- [x] `brew install livekit` — Installed v1.9.11
-- [x] `uv tool install voice-mode[livekit]` — Installed livekit-agents 1.3.12 + 27 deps
-- [x] Update `~/.voicemode/voicemode.env` — Set `LIVEKIT_URL=ws://localhost:7880`
-- [x] `./relay start` — Both servers start, health checks pass, JWT generation verified
-- [x] Restart Claude Code — So voicemode picks up new livekit packages
-- [x] Fix `TTS_BASE_URLS` missing import in voicemode `converse.py`
-- [x] Discover CrowdStrike blocks LAN — set up ngrok dual tunnel as workaround
-- [x] Open URL on iPhone — Web client loads and connects via ngrok
-- [x] Test end-to-end — Voice relay working: phone mic → LiveKit → Whisper → Claude → Kokoro → LiveKit → phone speaker
