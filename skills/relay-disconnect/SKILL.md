@@ -1,5 +1,5 @@
 ---
-name: relay-disconnect
+name: voice-multiplexer:relay-disconnect
 description: Disconnect this Claude session from the voice relay server
 ---
 

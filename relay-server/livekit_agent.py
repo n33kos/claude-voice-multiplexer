@@ -24,35 +24,64 @@ from config import (
     LIVEKIT_URL,
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
+    LIVEKIT_ROOM,
     SAMPLE_RATE,
+    VAD_AGGRESSIVENESS,
+    SILENCE_THRESHOLD_MS,
+    MIN_SPEECH_DURATION_S,
+    ECHO_COOLDOWN_S,
+    ENERGY_THRESHOLD,
 )
 
-LIVEKIT_ROOM = "voice_relay"
 AGENT_IDENTITY = "relay-agent"
 LIVEKIT_SAMPLE_RATE = 48000  # LiveKit operates at 48kHz
 NUM_CHANNELS = 1
 
-# VAD settings
+# VAD internals (not user-configurable)
 VAD_FRAME_MS = 30  # WebRTC VAD frame size (10, 20, or 30ms)
 VAD_SAMPLE_RATE = 16000  # WebRTC VAD only supports 8k, 16k, 32k
-VAD_AGGRESSIVENESS = 2  # 0=permissive, 3=strict
-SILENCE_THRESHOLD_MS = 1200  # Stop after this much silence
-MIN_SPEECH_DURATION_S = 0.3  # Minimum speech before allowing silence cutoff
-INITIAL_GRACE_PERIOD_S = 1.0  # Grace period before VAD starts rejecting
+
+# Whisper blank audio artifacts to discard
+BLANK_PATTERNS = {
+    "[BLANK_AUDIO]",
+    "[blank_audio]",
+    "(blank audio)",
+    "",
+}
+
+
+# Max time to stay in "thinking" after TTS before auto-returning to idle.
+# The "listening" signal from Claude bypasses this, but this prevents getting
+# permanently stuck if Claude is interrupted or slow to call relay_standby.
+THINKING_TIMEOUT_S = 15.0
+
+# Error state auto-recovers to idle after this many seconds.
+ERROR_RECOVERY_S = 5.0
 
 
 class RelayAgent:
     """Server-side LiveKit agent that bridges audio to Claude sessions."""
 
-    def __init__(self, registry, broadcast_fn):
+    def __init__(self, registry, broadcast_fn, notify_status_fn=None, notify_transcript_fn=None):
         self.registry = registry
         self.broadcast_fn = broadcast_fn
+        self.notify_status_fn = notify_status_fn
+        self.notify_transcript_fn = notify_transcript_fn
         self.room: rtc.Room | None = None
         self.audio_source: rtc.AudioSource | None = None
         self._running = False
         self._audio_buffer: list[np.ndarray] = []
         self._vad = None
         self._pending_response: asyncio.Future | None = None
+        self._is_speaking = False
+        self._waiting_for_response = False
+        self._speaking_ended_at: float = 0.0
+        self._idle_timer: asyncio.Task | None = None
+        self._error_timer: asyncio.Task | None = None
+        self._current_activity: str | None = None
+        self._pending_listening: str | None = None
+        self._current_state: str = "idle"  # track last known state for new client connections
+        self._audio_stream_tasks: dict[str, asyncio.Task] = {}  # participant identity → task
 
     async def start(self):
         """Connect to LiveKit room and begin processing audio."""
@@ -114,6 +143,10 @@ class RelayAgent:
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant):
         print(f"[agent] Participant disconnected: {participant.identity}")
+        # Cancel and clean up the audio stream task for this participant
+        task = self._audio_stream_tasks.pop(participant.identity, None)
+        if task and not task.done():
+            task.cancel()
 
     def _on_track_subscribed(
         self,
@@ -122,9 +155,18 @@ class RelayAgent:
         participant: rtc.RemoteParticipant,
     ):
         if track.kind == rtc.TrackKind.KIND_AUDIO:
-            print(f"[agent] Subscribed to audio from {participant.identity}")
+            identity = participant.identity
+            # Cancel any existing audio stream task for this participant
+            # to prevent duplicate processing after reconnects
+            existing = self._audio_stream_tasks.get(identity)
+            if existing and not existing.done():
+                print(f"[agent] Cancelling stale audio stream for {identity}")
+                existing.cancel()
+
+            print(f"[agent] Subscribed to audio from {identity}")
             audio_stream = rtc.AudioStream(track)
-            asyncio.ensure_future(self._process_audio_stream(audio_stream, participant))
+            task = asyncio.ensure_future(self._process_audio_stream(audio_stream, participant))
+            self._audio_stream_tasks[identity] = task
 
     async def _process_audio_stream(
         self,
@@ -140,6 +182,12 @@ class RelayAgent:
         async for event in stream:
             if not self._running:
                 break
+
+            # Skip audio while waiting for Claude or TTS is playing
+            if self._waiting_for_response or self._is_speaking:
+                continue
+            if time.time() - self._speaking_ended_at < ECHO_COOLDOWN_S:
+                continue
 
             frame = event.frame
             # Convert AudioFrame to numpy array (16-bit PCM)
@@ -171,7 +219,10 @@ class RelayAgent:
                 if silence_ms >= SILENCE_THRESHOLD_MS and speech_duration >= MIN_SPEECH_DURATION_S:
                     # End of utterance — transcribe and process
                     print(f"[agent] End of speech ({speech_duration:.1f}s), transcribing...")
-                    await self._handle_utterance(participant)
+                    try:
+                        await self._handle_utterance(participant)
+                    except Exception as e:
+                        print(f"[agent] Error handling utterance: {e}")
 
                     # Reset for next utterance
                     self._audio_buffer = []
@@ -200,7 +251,7 @@ class RelayAgent:
 
         # Energy-based fallback
         energy = np.sqrt(np.mean(samples.astype(np.float64) ** 2))
-        return energy > 500  # Threshold for 16-bit audio
+        return energy > ENERGY_THRESHOLD
 
     async def _handle_utterance(self, participant: rtc.RemoteParticipant):
         """Transcribe buffered audio and forward to the connected Claude session."""
@@ -213,46 +264,151 @@ class RelayAgent:
         # Convert to WAV bytes for Whisper
         wav_bytes = self._to_wav(all_audio, SAMPLE_RATE)
 
+        # Find session first so we can send status updates
+        session = await self._find_session_for_participant(participant)
+
         # Transcribe
-        text = await audio_pipeline.transcribe(wav_bytes, "wav")
+        if session:
+            await self._notify_status(session.session_id, "thinking", "Transcribing speech...")
+        try:
+            text = await audio_pipeline.transcribe(wav_bytes, "wav")
+        except Exception as e:
+            print(f"[agent] Whisper STT error: {e}")
+            if session:
+                await self._notify_status(session.session_id, "error", "Speech-to-text failed. Is Whisper running?")
+                self._schedule_error_recovery(session.session_id)
+            return
         if not text:
             print("[agent] Transcription empty, skipping")
+            if session:
+                await self._notify_status(session.session_id, "idle")
+            return
+
+        # Filter out Whisper noise artifacts
+        stripped = text.strip()
+        if stripped in BLANK_PATTERNS or len(stripped) < 2:
+            print(f"[agent] Filtered noise transcription: {stripped!r}")
+            if session:
+                await self._notify_status(session.session_id, "idle")
             return
 
         print(f"[agent] Transcribed: {text}")
 
-        # Find the Claude session connected to this participant's client
-        session = await self._find_session_for_participant(participant)
         if not session:
             print("[agent] No Claude session connected for this participant")
             return
 
+        # Send user transcript to web client
+        if self.notify_transcript_fn:
+            try:
+                await self.notify_transcript_fn(session.session_id, "user", text)
+            except Exception:
+                pass
+
         # Forward transcription to Claude session
         if session.ws:
             import json
-            await session.ws.send_text(json.dumps({
-                "type": "voice_message",
-                "text": text,
-                "caller": participant.identity,
-                "timestamp": time.time(),
-            }))
-            print(f"[agent] Forwarded to session '{session.name}'")
+            try:
+                await session.ws.send_text(json.dumps({
+                    "type": "voice_message",
+                    "text": text,
+                    "caller": participant.identity,
+                    "timestamp": time.time(),
+                }))
+                print(f"[agent] Forwarded to session '{session.name}'")
+                # Disable input until Claude responds and TTS finishes
+                self._waiting_for_response = True
+                await self._notify_status(session.session_id, "thinking", "Waiting for Claude...")
+            except Exception as e:
+                print(f"[agent] Session '{session.name}' WebSocket disconnected, removing: {e}")
+                await self.registry.unregister(session.session_id)
 
     async def handle_claude_response(self, session_id: str, text: str):
         """Called when a Claude session sends a text response. Synthesize and play."""
         print(f"[agent] Synthesizing response: {text[:50]}...")
 
-        # Request PCM format from Kokoro for direct LiveKit publishing
-        audio_bytes = await audio_pipeline.synthesize_pcm(text)
-        if not audio_bytes:
-            print("[agent] TTS synthesis failed")
+        # Cancel any pending idle timer — another response came in
+        if self._idle_timer and not self._idle_timer.done():
+            self._idle_timer.cancel()
+            self._idle_timer = None
+
+        self._is_speaking = True
+        await self._notify_status(session_id, "speaking")
+        try:
+            # Request PCM format from Kokoro for direct LiveKit publishing
+            try:
+                audio_bytes = await audio_pipeline.synthesize_pcm(text)
+            except Exception as e:
+                print(f"[agent] Kokoro TTS error: {e}")
+                await self._notify_status(session_id, "error", "Text-to-speech failed. Is Kokoro running?")
+                self._schedule_error_recovery(session_id)
+                return
+            if not audio_bytes:
+                print("[agent] TTS synthesis returned empty")
+                await self._notify_status(session_id, "error", "Text-to-speech returned no audio.")
+                self._schedule_error_recovery(session_id)
+                return
+
+            # Publish PCM audio to LiveKit room
+            await self._publish_audio(audio_bytes)
+        finally:
+            self._is_speaking = False
+            self._speaking_ended_at = time.time()
+            self._audio_buffer = []
+
+            # If Claude already called relay_standby while we were speaking,
+            # transition directly to idle instead of thinking.
+            if self._pending_listening:
+                sid = self._pending_listening
+                self._pending_listening = None
+                self._waiting_for_response = False
+                self._current_activity = None
+                await self._notify_status(sid, "idle")
+            else:
+                # Stay in thinking state — mic stays disabled. Start a fallback
+                # timer that auto-transitions to idle if Claude doesn't call
+                # relay_standby (send "listening") within the timeout.
+                await self._notify_status(session_id, "thinking", "Waiting for Claude...")
+                self._idle_timer = asyncio.create_task(
+                    self._deferred_idle(session_id)
+                )
+
+    async def _deferred_idle(self, session_id: str):
+        """Fallback: transition to idle after timeout if no listening signal."""
+        try:
+            await asyncio.sleep(THINKING_TIMEOUT_S)
+            print(f"[agent] Thinking timeout — auto-transitioning to idle")
+            self._waiting_for_response = False
+            self._current_activity = None
+            await self._notify_status(session_id, "idle")
+        except asyncio.CancelledError:
+            pass
+
+    async def handle_claude_listening(self, session_id: str):
+        """Called when Claude enters relay_standby again — ready for next voice input."""
+        # Cancel the fallback timer — Claude signaled it's ready
+        if self._idle_timer and not self._idle_timer.done():
+            self._idle_timer.cancel()
+            self._idle_timer = None
+
+        # If still speaking (TTS playing), defer transition until speaking ends.
+        # The handle_claude_response finally block will see _pending_listening
+        # and transition to idle after TTS finishes.
+        if self._is_speaking:
+            self._pending_listening = session_id
             return
 
-        # Publish PCM audio to LiveKit room
-        await self._publish_audio(audio_bytes)
+        self._waiting_for_response = False
+        self._current_activity = None
+        await self._notify_status(session_id, "idle")
+
+    async def handle_status_update(self, session_id: str, activity: str):
+        """Called when Claude sends a status_update with current activity."""
+        self._current_activity = activity
+        await self._notify_status(session_id, "thinking", activity=activity)
 
     async def _publish_audio(self, pcm_bytes: bytes):
-        """Publish PCM audio bytes to the LiveKit room."""
+        """Publish PCM audio bytes to the LiveKit room and wait for playback."""
         if not self.audio_source:
             return
 
@@ -266,6 +422,10 @@ class RelayAgent:
                 int(len(samples) * LIVEKIT_SAMPLE_RATE / SAMPLE_RATE),
             ).astype(np.int16)
 
+        # Calculate playback duration so we can wait for remaining playback
+        playback_duration = len(samples) / LIVEKIT_SAMPLE_RATE
+        publish_start = time.time()
+
         # Publish in 10ms chunks (480 samples at 48kHz)
         chunk_size = LIVEKIT_SAMPLE_RATE // 100  # 10ms
         for i in range(0, len(samples), chunk_size):
@@ -278,6 +438,52 @@ class RelayAgent:
             audio_data = np.frombuffer(frame.data, dtype=np.int16)
             np.copyto(audio_data, chunk)
             await self.audio_source.capture_frame(frame)
+
+        # Wait for remaining playback time. capture_frame may pace at
+        # real-time, so subtract elapsed publish time from total duration.
+        elapsed = time.time() - publish_start
+        remaining = playback_duration - elapsed + 0.5  # +0.5s for network jitter
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+
+    async def _notify_status(self, session_id: str, state: str, activity: str | None = None):
+        """Notify connected client of agent status change."""
+        self._current_state = state
+        self._current_activity = activity
+        if self.notify_status_fn:
+            try:
+                await self.notify_status_fn(session_id, state, activity)
+            except Exception:
+                pass
+
+    def get_current_status(self) -> dict:
+        """Return the current agent status for new client connections."""
+        return {"state": self._current_state, "activity": self._current_activity}
+
+    async def _notify_system_message(self, session_id: str, text: str):
+        """Send a system-level transcript message to the connected web client."""
+        if self.notify_transcript_fn:
+            try:
+                await self.notify_transcript_fn(session_id, "system", text)
+            except Exception:
+                pass
+
+    def _schedule_error_recovery(self, session_id: str):
+        """Schedule auto-recovery from error state to idle."""
+        if self._error_timer and not self._error_timer.done():
+            self._error_timer.cancel()
+        self._error_timer = asyncio.create_task(self._recover_from_error(session_id))
+
+    async def _recover_from_error(self, session_id: str):
+        """Auto-recover from error state after a delay."""
+        try:
+            await asyncio.sleep(ERROR_RECOVERY_S)
+            print("[agent] Error recovery — transitioning to idle")
+            self._waiting_for_response = False
+            self._current_activity = None
+            await self._notify_status(session_id, "idle")
+        except asyncio.CancelledError:
+            pass
 
     async def _find_session_for_participant(self, participant: rtc.RemoteParticipant):
         """Find the Claude session connected to this participant."""

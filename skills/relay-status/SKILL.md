@@ -1,5 +1,5 @@
 ---
-name: relay-status
+name: voice-multiplexer:relay-status
 description: Show the current voice relay connection status
 ---
 

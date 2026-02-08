@@ -5,7 +5,7 @@ Bridges web clients (phone/browser) with Claude Code sessions via:
 - WebSocket for MCP plugin session registration and text relay
 - WebSocket for web client events and session switching
 - REST API for session listing and LiveKit token generation
-- Audio pipeline for Whisper STT and Kokoro TTS
+- LiveKit agent for audio I/O with Whisper STT and Kokoro TTS
 """
 
 import asyncio
@@ -16,13 +16,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import RELAY_HOST, RELAY_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
 from registry import SessionRegistry
 from livekit_agent import RelayAgent
-import audio
 
 registry = SessionRegistry()
 
@@ -33,10 +32,44 @@ _clients: dict[str, WebSocket] = {}
 _agent: RelayAgent | None = None
 
 
+async def _notify_client_status(session_id: str, state: str, activity: str | None = None):
+    """Send agent status update to the web client connected to a session."""
+    session = await registry.get(session_id)
+    if session and session.connected_client:
+        client_ws = _clients.get(session.connected_client)
+        if client_ws:
+            try:
+                await client_ws.send_text(json.dumps({
+                    "type": "agent_status",
+                    "state": state,
+                    "activity": activity,
+                    "timestamp": time.time(),
+                }))
+            except Exception:
+                pass
+
+
+async def _notify_client_transcript(session_id: str, speaker: str, text: str):
+    """Send a transcript entry to the web client connected to a session."""
+    session = await registry.get(session_id)
+    if session and session.connected_client:
+        client_ws = _clients.get(session.connected_client)
+        if client_ws:
+            try:
+                await client_ws.send_text(json.dumps({
+                    "type": "transcript",
+                    "speaker": speaker,
+                    "text": text,
+                    "session_id": session_id,
+                }))
+            except Exception:
+                pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _agent
-    _agent = RelayAgent(registry, _broadcast_sessions)
+    _agent = RelayAgent(registry, _broadcast_sessions, _notify_client_status, _notify_client_transcript)
     try:
         await _agent.start()
     except Exception as e:
@@ -153,6 +186,19 @@ async def session_ws(ws: WebSocket):
                                 "session_id": sid,
                             }))
 
+            elif msg_type == "listening":
+                # Claude called relay_standby again — ready for next message
+                sid = data.get("session_id", session_id)
+                if sid and _agent:
+                    asyncio.create_task(_agent.handle_claude_listening(sid))
+
+            elif msg_type == "status_update":
+                # Claude reporting current activity
+                sid = data.get("session_id", session_id)
+                activity = data.get("activity", "")
+                if sid and _agent and activity:
+                    asyncio.create_task(_agent.handle_status_update(sid, activity))
+
             elif msg_type == "pong":
                 pass
 
@@ -176,11 +222,9 @@ async def client_ws(ws: WebSocket):
     Protocol:
     - Client sends: {type: "connect_session", session_id}
     - Client sends: {type: "disconnect_session"}
-    - Client sends: {type: "voice_input", audio (base64), format}
     - Server sends: {type: "sessions", sessions: [...]}
     - Server sends: {type: "transcript", speaker, text, session_id}
-    - Server sends: {type: "tts_ready", session_id, audio_size}
-    - Server sends: <binary audio data>
+    - Server sends: {type: "agent_status", state, activity, timestamp}
     """
     await ws.accept()
     client_id = f"client-{uuid.uuid4().hex[:6]}"
@@ -206,58 +250,35 @@ async def client_ws(ws: WebSocket):
                 success = await registry.connect_client(session_id, client_id)
                 connected_session_id = session_id if success else None
 
-                await ws.send_text(json.dumps({
+                session_data = await registry.get(session_id) if success else None
+                msg = {
                     "type": "session_connected" if success else "session_not_found",
                     "session_id": session_id,
-                }))
+                }
+                if session_data:
+                    msg["session_name"] = session_data.name
+                await ws.send_text(json.dumps(msg))
+                # Send current agent status so client starts in the correct state
+                if success and _agent:
+                    status = _agent.get_current_status()
+                    await ws.send_text(json.dumps({
+                        "type": "agent_status",
+                        "state": status["state"],
+                        "activity": status["activity"],
+                        "timestamp": time.time(),
+                    }))
                 await _broadcast_sessions()
+
+            elif msg_type == "interrupt":
+                # User pressed interrupt — force agent to idle
+                if connected_session_id and _agent:
+                    asyncio.create_task(_agent.handle_claude_listening(connected_session_id))
 
             elif msg_type == "disconnect_session":
                 if connected_session_id:
                     await registry.disconnect_client(connected_session_id)
                     connected_session_id = None
                     await _broadcast_sessions()
-
-            elif msg_type == "voice_input":
-                # Client sent audio — transcribe and forward to connected session
-                if not connected_session_id:
-                    await ws.send_text(json.dumps({
-                        "type": "error",
-                        "message": "No session connected",
-                    }))
-                    continue
-
-                import base64
-                audio_b64 = data.get("audio", "")
-                audio_format = data.get("format", "webm")
-                audio_bytes = base64.b64decode(audio_b64)
-
-                # Transcribe with Whisper
-                text = await audio.transcribe(audio_bytes, audio_format)
-
-                if text:
-                    # Send transcript to client
-                    await ws.send_text(json.dumps({
-                        "type": "transcript",
-                        "speaker": "user",
-                        "text": text,
-                        "session_id": connected_session_id,
-                    }))
-
-                    # Forward to Claude session
-                    session = await registry.get(connected_session_id)
-                    if session and session.ws:
-                        await session.ws.send_text(json.dumps({
-                            "type": "voice_message",
-                            "text": text,
-                            "caller": client_id,
-                            "timestamp": time.time(),
-                        }))
-                else:
-                    await ws.send_text(json.dumps({
-                        "type": "error",
-                        "message": "Could not transcribe audio",
-                    }))
 
     except WebSocketDisconnect:
         pass

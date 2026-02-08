@@ -14,6 +14,7 @@ class Session:
     cwd: str
     dir_name: str
     ws: object  # WebSocket connection
+    created_at: float = field(default_factory=time.time)
     last_heartbeat: float = field(default_factory=time.time)
     connected_client: str | None = None  # client ID currently connected to this session
 
@@ -28,6 +29,7 @@ class Session:
             "cwd": self.cwd,
             "dir_name": self.dir_name,
             "connected_client": self.connected_client,
+            "created_at": self.created_at,
             "last_heartbeat": self.last_heartbeat,
         }
 
