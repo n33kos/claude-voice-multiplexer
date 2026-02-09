@@ -205,42 +205,52 @@ A static-built React app served by the relay server. Mobile-first design for pho
 | `hooks/useChime.ts`            | Audio feedback chimes on state transitions                                 |
 | `hooks/useSettings.ts`         | localStorage-backed settings (auto-listen, speaker mute)                   |
 | `hooks/useTranscriptDB.ts`     | IndexedDB persistence for transcripts and sessions                         |
-| `components/VoiceControls.tsx` | LiveKit room, mic/speaker/interrupt controls, audio analysers              |
-| `components/VoiceBar.tsx`      | Canvas audio visualizer with voice-optimized frequency mapping             |
-| `components/SessionList.tsx`   | Collapsible session drawer with dropdown menus                             |
-| `components/Transcript.tsx`    | Scrolling transcript with activity entries                                 |
-| `components/StatusBar.tsx`     | Connection status indicators (Relay Server / LiveKit / Claude)             |
-| `components/Settings.tsx`      | Settings panel (auto-listen, speaker mute)                                 |
+| `components/VoiceControls/`    | LiveKit room, mic/speaker/interrupt controls, audio analysers              |
+| `components/VoiceBar/`         | Canvas audio visualizer with voice-optimized frequency mapping             |
+| `components/SessionList/`      | Collapsible session drawer with dropdown menus                             |
+| `components/Transcript/`       | Scrolling transcript with activity entries                                 |
+| `components/StatusBar/`        | Connection status indicators (Relay Server / LiveKit / Claude)             |
+| `components/Settings/`         | Settings panel (auto-listen, speaker mute)                                 |
+| `components/Header/`           | Animated rainbow gradient header with settings button                      |
+| `components/ParticleNetwork/`  | Background particle animation canvas                                       |
 
-**Tech stack:** React 19, Vite 7, LiveKit React SDK, TailwindCSS v4, TypeScript
+Components use a folder-based architecture with co-located `.module.scss` stylesheets, `.types.d.ts` type definitions, and sub-components in nested `components/` directories.
+
+**Tech stack:** React 19, Vite 7, LiveKit React SDK, CSS Modules + SCSS, TypeScript
 
 ### 4. Skills (`skills/`)
 
-Claude Code skill definitions that invoke the MCP tools in a conversational loop.
+Claude Code skill definitions that invoke the MCP tools and service scripts.
 
 | Skill              | Description                                                      |
 | ------------------ | ---------------------------------------------------------------- |
 | `relay-standby`    | Enter standby mode with conversation loop and activity reporting |
 | `relay-disconnect` | Disconnect from voice relay                                      |
 | `relay-status`     | Show relay connection status                                     |
+| `start-services`   | Start the relay server and supporting services                   |
+| `stop-services`    | Stop all running Voice Multiplexer services                      |
+| `service-status`   | Check the status of all services                                 |
+
+The `relay-standby` skill automatically checks if services are running and starts them if needed before entering standby mode.
 
 ### 5. Infrastructure
 
-**Local services (managed separately via voice-mode CLI):**
+All services are self-contained and managed by `scripts/start.sh`:
 
-- **Whisper server** — Local STT (configurable via `WHISPER_URL`, default `:8100`)
-- **Kokoro server** — Local TTS (configurable via `KOKORO_URL`, default `:8101`)
-- **LiveKit server** — WebRTC audio transport (auto-started by `scripts/start.sh` on `:7880`)
+| Service            | Port   | Description                                                    |
+| ------------------ | ------ | -------------------------------------------------------------- |
+| **Whisper server** | `:8100` | Local STT (whisper.cpp, compiled from source with Metal GPU)   |
+| **Kokoro server**  | `:8101` | Local TTS (kokoro-fastapi, PyTorch with MPS acceleration)      |
+| **LiveKit server** | `:7880` | WebRTC media server for audio transport                        |
+| **Relay server**   | `:3100` | The core hub (FastAPI + WebSocket)                             |
+| **MCP server**     | —      | Started automatically by Claude Code via the plugin system     |
+| **Vite dev server**| `:5173` | Optional, started when `DEV_MODE=true`                         |
 
-**This project's services:**
-
-- **Relay server** on `:3100` — started via `scripts/start.sh`
-- **MCP server** — started automatically by Claude Code via the plugin system
-- **Vite dev server** on `:5173` — optional, started when `DEV_MODE=true`
+Whisper and Kokoro are installed to `~/.claude/voice-multiplexer/` by the install script and started/stopped alongside the other services.
 
 ## Configuration
 
-All settings are configured via environment variables. Use a `.env` file at the project root. See `.env.example` for the full list.
+All settings are configured via `~/.claude/voice-multiplexer/voice-multiplexer.env`, which is generated by the install script with all available options documented inline.
 
 **Key settings:**
 
@@ -262,45 +272,115 @@ All settings are configured via environment variables. Use a `.env` file at the 
 | `ENERGY_THRESHOLD`      | `500`                      | Energy threshold for fallback VAD                             |
 | `MAX_RECORDING_S`       | `180`                      | Max recording duration in seconds (3 minutes)                 |
 | `DEV_MODE`              | `false`                    | Start Vite dev server alongside relay server                  |
+| `VMUX_WHISPER_PORT`     | `8100`                     | Whisper server listen port                                    |
+| `VMUX_WHISPER_MODEL`    | `base`                     | Whisper model name (base, small, medium, large)               |
+| `VMUX_WHISPER_THREADS`  | `auto`                     | Whisper inference threads (auto = CPU count)                  |
+| `VMUX_KOKORO_PORT`      | `8101`                     | Kokoro server listen port                                     |
+| `VMUX_KOKORO_VOICE`     | `af_sky`                   | Default Kokoro TTS voice                                      |
+| `VMUX_KOKORO_DEVICE`    | `mps` (macOS)              | PyTorch device (mps, cuda, cpu)                               |
 
-## Getting Started
+## Installation
 
 ### Prerequisites
 
 - macOS with Homebrew
-- Python 3.11+ with `uv`
+- Xcode Command Line Tools (`xcode-select --install`)
+- Python 3.10+ with `uv` (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
 - Node.js 20+ with npm
-- Whisper and Kokoro running (via `voice-mode` CLI or manually)
 - LiveKit server (`brew install livekit`)
+- cmake (`brew install cmake` — installed automatically by install script if missing)
+
+### Install Script
+
+The install script sets up Whisper (STT) and Kokoro (TTS) under `~/.claude/voice-multiplexer/`:
+
+```bash
+# Install with defaults (base model, ~142 MB)
+./scripts/install.sh
+
+# Install with a larger, more accurate model (~466 MB)
+./scripts/install.sh --whisper-model small
+
+# Force reinstall
+./scripts/install.sh --force
+```
+
+This compiles whisper.cpp from source with Metal GPU acceleration, sets up a Python venv for Kokoro with PyTorch MPS support, and downloads the required models. Total disk: ~2-3 GB depending on the Whisper model.
+
+### Data Directory
+
+```
+~/.claude/voice-multiplexer/
+├── whisper/
+│   ├── whisper.cpp/              # Compiled binary + source
+│   └── models/
+│       └── ggml-{model}.bin      # STT model (~142-466 MB)
+├── kokoro/
+│   └── kokoro-fastapi/           # Python venv + TTS model (~2 GB)
+├── logs/
+│   ├── start.log                 # Start script output
+│   ├── whisper.log               # Whisper server logs
+│   └── kokoro.log                # Kokoro server logs
+└── voice-multiplexer.env         # Service config (ports, model, device)
+```
+
+Logs are rotated at 5 MB (one `.old` backup kept per log file).
+
+### Uninstall
+
+```bash
+# Remove everything
+./scripts/uninstall.sh
+
+# Keep downloaded models (faster reinstall)
+./scripts/uninstall.sh --keep-models
+```
+
+## Getting Started
 
 ### Loading the Plugin
 
-Add a shell alias to load the plugin on every `claude` invocation:
+**From a marketplace** (recommended):
+```
+/plugin install <marketplace-name>/voice-multiplexer
+```
 
+**From a local directory** (development):
 ```bash
 alias claude='command claude --plugin-dir /path/to/claude-voice-multiplexer'
 ```
 
-This gives every Claude session access to the MCP tools and the `/voice-multiplexer:relay-standby` skill.
+This gives every Claude session access to the MCP tools and the `/voice-multiplexer:relay-standby` skill. On first use, the standby skill will automatically run the install script if services haven't been set up yet.
 
-### Running the Relay Server
+### Running the Services
 
 ```bash
-# Production: serves built web app from web/dist
+# Start (production: serves built web app from web/dist)
 ./scripts/start.sh
 
-# Development: also starts Vite dev server with HMR
+# Start (development: also starts Vite dev server with HMR)
 ./scripts/start.sh --dev
-# Or set DEV_MODE=true in .env
+
+# Check status of all services
+./scripts/status.sh
+
+# Stop all services
+./scripts/stop.sh
 ```
 
 The start script will:
 
-1. Load `.env` configuration
-2. Check if Whisper and Kokoro are running
-3. Start LiveKit server if not already running
-4. Start the relay server
-5. Optionally start the Vite dev server
+1. Check for an existing running instance (prevents duplicates)
+2. Load configuration from `~/.claude/voice-multiplexer/voice-multiplexer.env`
+3. Rotate service logs exceeding 5 MB
+4. Start Whisper STT server on `:8100` (if not already running)
+5. Start Kokoro TTS server on `:8101` (if not already running)
+6. Start LiveKit server on `:7880` (if not already running)
+7. Start the relay server on `:3100`
+8. Optionally start the Vite dev server on `:5173`
+9. Write a PID file (`.vmux.pid`) for the stop script
+
+All child processes are cleaned up when the start script exits (Ctrl+C or `./scripts/stop.sh`).
 
 ### Building the Web App
 
@@ -324,19 +404,20 @@ claude-voice-multiplexer/
 ├── .claude-plugin/
 │   └── plugin.json                      # Plugin manifest
 ├── .mcp.json                            # Bundled MCP server definition
-├── .env                                 # Local configuration (gitignored)
-├── .env.example                         # Configuration reference
 ├── README.md                            # This file
 ├── skills/
-│   ├── relay-standby/SKILL.md           # Standby skill with conversation loop
+│   ├── relay-standby/SKILL.md           # Standby skill (auto-starts services)
 │   ├── relay-disconnect/SKILL.md        # Disconnect skill
-│   └── relay-status/SKILL.md            # Status skill
+│   ├── relay-status/SKILL.md            # Status skill
+│   ├── start-services/SKILL.md          # Start all services
+│   ├── stop-services/SKILL.md           # Stop all services
+│   └── service-status/SKILL.md          # Check service status
 ├── mcp-server/
 │   ├── server.py                        # FastMCP server with relay tools
 │   └── requirements.txt
 ├── relay-server/
 │   ├── server.py                        # Main server (FastAPI + WebSocket hub)
-│   ├── livekit_agent.py                 # LiveKit agent (VAD, audio I/O, status state machine)
+│   ├── livekit_agent.py                 # LiveKit agent (VAD, audio I/O, status)
 │   ├── audio.py                         # Whisper/Kokoro HTTP clients
 │   ├── registry.py                      # Session registry with heartbeat timeout
 │   ├── config.py                        # Configuration (env vars + .env)
@@ -344,15 +425,18 @@ claude-voice-multiplexer/
 ├── web/
 │   ├── src/
 │   │   ├── App.tsx                      # Root component
+│   │   ├── App.module.scss              # Root layout styles
 │   │   ├── main.tsx                     # Entry point
-│   │   ├── index.css                    # Tailwind imports
-│   │   ├── components/
-│   │   │   ├── SessionList.tsx          # Collapsible session drawer + dropdown menus
-│   │   │   ├── VoiceControls.tsx        # LiveKit room, mic/speaker/interrupt
-│   │   │   ├── VoiceBar.tsx             # Canvas audio visualizer
-│   │   │   ├── Transcript.tsx           # Scrolling transcript + activity entries
-│   │   │   ├── StatusBar.tsx            # Connection status indicators
-│   │   │   └── Settings.tsx             # Settings panel
+│   │   ├── index.scss                   # Global reset and base styles
+│   │   ├── components/                  # Folder-based component architecture
+│   │   │   ├── Header/                  # Header with settings button
+│   │   │   ├── ParticleNetwork/         # Background particle animation
+│   │   │   ├── SessionList/             # Session drawer + dropdown menus
+│   │   │   ├── VoiceControls/           # LiveKit room, mic/speaker/interrupt
+│   │   │   ├── VoiceBar/                # Canvas audio visualizer
+│   │   │   ├── Transcript/              # Scrolling transcript + activity
+│   │   │   ├── StatusBar/               # Connection status indicators
+│   │   │   └── Settings/                # Settings panel
 │   │   └── hooks/
 │   │       ├── useRelay.ts              # WebSocket state, persistent sessions
 │   │       ├── useLiveKit.ts            # LiveKit token + connection
@@ -364,8 +448,53 @@ claude-voice-multiplexer/
 │   ├── tsconfig.json
 │   └── vite.config.ts
 └── scripts/
-    └── start.sh                         # Start all services
+    ├── install.sh                       # Install Whisper + Kokoro to ~/.claude/voice-multiplexer/
+    ├── uninstall.sh                     # Remove installed services and data
+    ├── start.sh                         # Start all services
+    ├── stop.sh                          # Stop all services
+    └── status.sh                        # Check service status
 ```
+
+## Service Management
+
+### Philosophy
+
+This project uses a **process-group model** rather than persistent LaunchAgent plist files. The start script spawns all services as child processes and manages their lifecycle directly:
+
+- `start.sh` starts Whisper, Kokoro, LiveKit, relay server (and optionally Vite dev server) as child processes
+- All children are killed when the parent exits (Ctrl+C or SIGTERM)
+- Port-based cleanup ensures orphaned processes (e.g. Kokoro subshell) are also killed
+- A PID file (`.vmux.pid`) enables the stop script to find and terminate the process group
+- Duplicate-instance protection prevents accidentally starting two copies
+
+This gives you explicit control over when services are running, versus plist-based approaches that keep services running permanently in the background.
+
+### Scripts
+
+| Script            | Description                                                           |
+| ----------------- | --------------------------------------------------------------------- |
+| `scripts/start.sh`  | Start all services. Writes `.vmux.pid`. Blocks until Ctrl+C.      |
+| `scripts/stop.sh`   | Stop running services. Finds process via PID file or process name. |
+| `scripts/status.sh` | Check status of all services. `--quiet` for exit code only.        |
+
+### Skills
+
+From any Claude Code session with the plugin loaded:
+
+| Skill                                     | Description                                       |
+| ----------------------------------------- | ------------------------------------------------- |
+| `/voice-multiplexer:start-services`       | Start services (if not already running)            |
+| `/voice-multiplexer:stop-services`        | Stop all running services                          |
+| `/voice-multiplexer:service-status`       | Check status of all services                       |
+
+The `relay-standby` skill automatically checks if services are running and starts them if needed before entering standby mode.
+
+### Process Detection
+
+The stop script uses a two-pass strategy to find the running instance:
+
+1. **PID file** (`.vmux.pid`): Fast, reliable when the start script exited cleanly
+2. **Process name search**: Falls back to `pgrep -f "claude-voice-multiplexer:start"` if the PID file is stale or missing (e.g., after an unclean shutdown)
 
 ## Bugs
 
@@ -384,7 +513,7 @@ Known issues to investigate and fix:
 
 ### Medium Priority
 
-- [ ] **Service management via launchd**: Model after voicemode's approach — plist templates for Whisper, Kokoro, LiveKit, and relay server with `enable`/`disable`/`status` commands. Auto-start at login, auto-restart on crash, unified CLI.
+- [x] **Service management**: Start/stop/status scripts with PID file tracking, duplicate-instance protection, and Claude Code skills for service lifecycle
 - [ ] **Voice commands for session switching**: "Switch to project X" should work via voice
 - [x] **Persistent conversation history**: Store transcripts across sessions/reconnects (IndexedDB, keyed by session name)
 - [x] **Session metadata display**: Show working directory, session age, last activity in the session list (collapsible drawer with online/offline status)

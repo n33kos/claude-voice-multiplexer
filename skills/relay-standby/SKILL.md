@@ -7,6 +7,15 @@ description: Put this Claude session into voice relay standby mode for remote vo
 
 Put this session into standby mode so it can receive remote voice input through the Claude Voice Multiplexer relay server.
 
+## Pre-flight Check
+
+Before entering standby, verify services are installed and running:
+
+1. Check if `~/.claude/voice-multiplexer/` exists. If not, run `"${CLAUDE_PLUGIN_ROOT}/scripts/install.sh"` and wait for it to complete. This is a one-time setup that compiles Whisper and installs Kokoro (~2-5 minutes).
+2. Run `"${CLAUDE_PLUGIN_ROOT}/scripts/status.sh" --quiet`
+3. If exit code is non-zero (services not running), run `nohup "${CLAUDE_PLUGIN_ROOT}/scripts/start.sh" > /tmp/vmux-start.log 2>&1 &` and wait up to 90 seconds for Kokoro to finish loading.
+4. If the relay server still isn't responding after starting, inform the user and stop.
+
 ## Instructions
 
 When invoked, use the `relay_standby` MCP tool to register this session with the relay server. Then enter a continuous conversation loop:

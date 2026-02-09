@@ -12,8 +12,8 @@ import time
 import uuid
 from pathlib import Path
 
-# Load .env from project root
-_env_path = Path(__file__).resolve().parent.parent / ".env"
+# Load configuration from voice-multiplexer.env
+_env_path = Path.home() / ".claude" / "voice-multiplexer" / "voice-multiplexer.env"
 try:
     from dotenv import load_dotenv
     load_dotenv(_env_path)

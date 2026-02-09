@@ -1,14 +1,14 @@
 """Relay server configuration.
 
 All settings can be overridden via environment variables.
-Use a .env file in the project root for local development.
+Configuration is loaded from ~/.claude/voice-multiplexer/voice-multiplexer.env.
 """
 
 import os
 from pathlib import Path
 
-# Load .env from project root if python-dotenv is available
-_env_path = Path(__file__).resolve().parent.parent / ".env"
+# Load voice-multiplexer.env from the data directory
+_env_path = Path.home() / ".claude" / "voice-multiplexer" / "voice-multiplexer.env"
 try:
     from dotenv import load_dotenv
     load_dotenv(_env_path)
