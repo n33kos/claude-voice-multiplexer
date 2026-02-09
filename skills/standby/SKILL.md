@@ -1,6 +1,6 @@
 ---
-name: voice-multiplexer:relay-standby
-description: Put this Claude session into voice relay standby mode for remote voice access
+name: voice-multiplexer:standby
+description: Put this Claude session into voice standby mode for remote voice access
 ---
 
 # Voice Relay Standby

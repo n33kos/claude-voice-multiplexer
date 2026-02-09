@@ -224,14 +224,12 @@ Claude Code skill definitions that invoke the MCP tools and service scripts.
 
 | Skill              | Description                                                      |
 | ------------------ | ---------------------------------------------------------------- |
-| `relay-standby`    | Enter standby mode with conversation loop and activity reporting |
-| `relay-disconnect` | Disconnect from voice relay                                      |
-| `relay-status`     | Show relay connection status                                     |
-| `start-services`   | Start the relay server and supporting services                   |
+| `standby`          | Enter standby mode with conversation loop and activity reporting |
+| `start-services`   | Start all services (auto-installs on first use)                  |
 | `stop-services`    | Stop all running Voice Multiplexer services                      |
 | `service-status`   | Check the status of all services                                 |
 
-The `relay-standby` skill automatically checks if services are running and starts them if needed before entering standby mode.
+The `standby` skill automatically checks if services are installed and running, handling first-time setup and startup before entering standby mode.
 
 ### 5. Infrastructure
 
@@ -350,7 +348,7 @@ Logs are rotated at 5 MB (one `.old` backup kept per log file).
 alias claude='command claude --plugin-dir /path/to/claude-voice-multiplexer'
 ```
 
-This gives every Claude session access to the MCP tools and the `/voice-multiplexer:relay-standby` skill. On first use, the standby skill will automatically run the install script if services haven't been set up yet.
+This gives every Claude session access to the MCP tools and the `/voice-multiplexer:standby` skill. On first use, the standby skill will automatically run the install script if services haven't been set up yet.
 
 ### Running the Services
 
@@ -393,7 +391,7 @@ npm run build   # Production build → dist/ (served by relay server)
 ### Using Voice Mode
 
 1. Start the relay server: `./scripts/start.sh`
-2. In any Claude Code session, invoke: `/voice-multiplexer:relay-standby`
+2. In any Claude Code session, invoke: `/voice-multiplexer:standby`
 3. Open `http://localhost:3100` (or `:5173` in dev mode) on your phone
 4. Tap a session to connect, enable mic, and start talking
 
@@ -406,9 +404,7 @@ claude-voice-multiplexer/
 ├── .mcp.json                            # Bundled MCP server definition
 ├── README.md                            # This file
 ├── skills/
-│   ├── relay-standby/SKILL.md           # Standby skill (auto-starts services)
-│   ├── relay-disconnect/SKILL.md        # Disconnect skill
-│   ├── relay-status/SKILL.md            # Status skill
+│   ├── standby/SKILL.md                 # Standby skill (auto-installs and starts services)
 │   ├── start-services/SKILL.md          # Start all services
 │   ├── stop-services/SKILL.md           # Stop all services
 │   └── service-status/SKILL.md          # Check service status
@@ -487,7 +483,7 @@ From any Claude Code session with the plugin loaded:
 | `/voice-multiplexer:stop-services`        | Stop all running services                          |
 | `/voice-multiplexer:service-status`       | Check status of all services                       |
 
-The `relay-standby` skill automatically checks if services are running and starts them if needed before entering standby mode.
+The `standby` skill automatically checks if services are installed and running, and starts them if needed before entering standby mode.
 
 ### Process Detection
 
