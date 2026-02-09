@@ -9,12 +9,12 @@
   align-items: center;
   justify-content: center;
   border-radius: 9999px;
-  color: #737373;
+  color: var(--color-text-muted);
   transition: color 0.15s, background-color 0.15s;
 
   &:hover {
-    color: #d4d4d4;
-    background-color: rgba(64, 64, 64, 0.5);
+    color: var(--color-text-secondary);
+    background-color: var(--color-button-hover-bg);
   }
 }
 
@@ -29,10 +29,10 @@
   top: 100%;
   margin-top: 0.25rem;
   width: 11rem;
-  background-color: #262626;
-  border: 1px solid #404040;
+  background-color: var(--color-surface-secondary);
+  border: 1px solid var(--color-border-secondary);
   border-radius: 0.5rem;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 20px 25px -5px var(--color-dropdown-shadow);
   z-index: 20;
   overflow: hidden;
 }
@@ -42,15 +42,15 @@
   text-align: left;
   padding: 0.5rem 0.75rem;
   font-size: 0.75rem;
-  color: #d4d4d4;
+  color: var(--color-text-secondary);
   transition: background-color 0.15s;
 
   &:hover {
-    background-color: #404040;
+    background-color: var(--color-surface-tertiary);
   }
 }
 
 .DeleteItem {
   composes: MenuItem;
-  color: #f87171;
+  color: var(--color-delete);
 }

@@ -11,6 +11,12 @@ const CONNECTION_BOOST = 0.05;
 const LINE_OPACITY = 0.15;
 const HUE_DRIFT = 0.1;
 
+function getParticleLightness(): string {
+  return getComputedStyle(document.documentElement)
+    .getPropertyValue("--particle-lightness")
+    .trim() || "65%";
+}
+
 export function ParticleNetwork() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const particles = useRef<Particle[]>([]);
@@ -44,6 +50,7 @@ export function ParticleNetwork() {
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
 
+      const lightness = getParticleLightness();
       const pts = particles.current;
 
       for (const p of pts) {
@@ -80,8 +87,8 @@ export function ParticleNetwork() {
                 pts[j].x,
                 pts[j].y,
               );
-              grad.addColorStop(0, `hsla(${pts[i].hue}, 80%, 65%, ${opacity})`);
-              grad.addColorStop(1, `hsla(${pts[j].hue}, 80%, 65%, ${opacity})`);
+              grad.addColorStop(0, `hsla(${pts[i].hue}, 80%, ${lightness}, ${opacity})`);
+              grad.addColorStop(1, `hsla(${pts[j].hue}, 80%, ${lightness}, ${opacity})`);
 
               ctx.beginPath();
               ctx.moveTo(pts[i].x, pts[i].y);
@@ -103,7 +110,7 @@ export function ParticleNetwork() {
         );
         ctx.beginPath();
         ctx.arc(p.x, p.y, PARTICLE_RADIUS, 0, Math.PI * 2);
-        ctx.fillStyle = `hsla(${p.hue}, 80%, 65%, ${opacity})`;
+        ctx.fillStyle = `hsla(${p.hue}, 80%, ${lightness}, ${opacity})`;
         ctx.fill();
       }
 

@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 
+export type ThemeMode = 'system' | 'light' | 'dark'
+
 export interface Settings {
   autoListen: boolean
   speakerMuted: boolean
   showStatusPill: boolean
+  theme: ThemeMode
 }
 
 const STORAGE_KEY = 'voice-multiplexer-settings'
@@ -12,6 +15,7 @@ const DEFAULTS: Settings = {
   autoListen: true,
   speakerMuted: false,
   showStatusPill: true,
+  theme: 'system',
 }
 
 function loadSettings(): Settings {

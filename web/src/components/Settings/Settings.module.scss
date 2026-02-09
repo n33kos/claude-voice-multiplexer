@@ -14,7 +14,7 @@
 .Backdrop {
   position: absolute;
   inset: 0;
-  background-color: rgba(0, 0, 0, 0.6);
+  background-color: var(--color-backdrop);
   backdrop-filter: blur(4px);
 }
 
@@ -22,8 +22,8 @@
   position: relative;
   width: 100%;
   max-width: 28rem;
-  background-color: #171717;
-  border: 1px solid #262626;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: 1rem 1rem 0 0;
   padding: 1.25rem;
   padding-bottom: 2rem;
@@ -56,7 +56,7 @@
 .Title {
   font-size: 0.875rem;
   font-weight: 500;
-  color: #d4d4d4;
+  color: var(--color-text-secondary);
 }
 
 .CloseButton {
@@ -66,12 +66,12 @@
   align-items: center;
   justify-content: center;
   border-radius: 9999px;
-  color: #737373;
+  color: var(--color-text-muted);
   transition: color 0.15s, background-color 0.15s;
 
   &:hover {
-    color: #d4d4d4;
-    background-color: #262626;
+    color: var(--color-text-secondary);
+    background-color: var(--color-surface-secondary);
   }
 }
 
@@ -102,12 +102,12 @@
 
 .SettingTitle {
   font-size: 0.875rem;
-  color: #e5e5e5;
+  color: var(--color-text);
 }
 
 .SettingDescription {
   font-size: 0.75rem;
-  color: #737373;
+  color: var(--color-text-muted);
 }
 
 .Toggle {
@@ -117,11 +117,11 @@
   height: 1.5rem;
   border-radius: 9999px;
   transition: background-color 0.2s;
-  background-color: #404040;
+  background-color: var(--color-toggle-inactive);
 }
 
 .ToggleActive {
-  background-color: #3b82f6;
+  background-color: var(--color-toggle-active);
 }
 
 .ToggleThumb {
@@ -131,12 +131,40 @@
   width: 1.25rem;
   height: 1.25rem;
   border-radius: 9999px;
-  background-color: white;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  background-color: var(--color-toggle-thumb);
+  box-shadow: 0 1px 3px var(--color-toggle-shadow);
   transition: transform 0.2s;
   transform: translateX(0);
 }
 
 .ToggleThumbActive {
   transform: translateX(1rem);
+}
+
+// Theme selector
+.ThemeSelector {
+  display: flex;
+  gap: 0.375rem;
+  flex-shrink: 0;
+}
+
+.ThemeOption {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  transition: all 0.15s;
+  color: var(--color-text-muted);
+  background-color: transparent;
+  border: 1px solid var(--color-border);
+
+  &:hover {
+    color: var(--color-text-secondary);
+    border-color: var(--color-border-secondary);
+  }
+}
+
+.ThemeOptionActive {
+  color: var(--color-toggle-active);
+  background-color: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.3);
 }

@@ -5,13 +5,13 @@
 }
 
 .Green {
-  background-color: #22c55e;
+  background-color: var(--color-status-green);
 }
 
 .Yellow {
-  background-color: #eab308;
+  background-color: var(--color-status-yellow);
 }
 
 .Red {
-  background-color: #ef4444;
+  background-color: var(--color-status-red);
 }

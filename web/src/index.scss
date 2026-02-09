@@ -16,13 +16,135 @@ button {
   padding: 0;
 }
 
+// --- Theme tokens ---
+
 :root {
   color-scheme: dark;
+
+  // Surfaces
+  --color-bg: #0a0a0a;
+  --color-surface: #171717;
+  --color-surface-secondary: #262626;
+  --color-surface-tertiary: #404040;
+  --color-surface-hover: #525252;
+
+  // Text
+  --color-text: #e5e5e5;
+  --color-text-strong: white;
+  --color-text-secondary: #d4d4d4;
+  --color-text-tertiary: #a3a3a3;
+  --color-text-muted: #737373;
+  --color-text-faint: #525252;
+
+  // Borders
+  --color-border: #262626;
+  --color-border-secondary: #404040;
+
+  // Scrollbar
+  --color-scrollbar: #404040;
+  --color-scrollbar-hover: #525252;
+
+  // Interactive
+  --color-toggle-inactive: #404040;
+  --color-toggle-active: #3b82f6;
+  --color-toggle-thumb: white;
+  --color-toggle-shadow: rgba(0, 0, 0, 0.3);
+
+  // Buttons (inactive state)
+  --color-button-bg: #262626;
+  --color-button-border: #404040;
+  --color-button-hover-bg: rgba(64, 64, 64, 0.5);
+  --color-button-active-bg: #404040;
+
+  // Chat bubbles
+  --color-bubble-user: #d4d4d4;
+  --color-bubble-user-text: #262626;
+  --color-bubble-claude: #262626;
+  --color-bubble-claude-text: #e5e5e5;
+
+  // Overlay
+  --color-backdrop: rgba(0, 0, 0, 0.6);
+  --color-dropdown-shadow: rgba(0, 0, 0, 0.5);
+
+  // Status: these are accent/semantic colors that stay the same across themes
+  --color-status-green: #22c55e;
+  --color-status-yellow: #eab308;
+  --color-status-red: #ef4444;
+  --color-delete: #f87171;
+
+  // Disabled state
+  --color-surface-disabled: rgba(23, 23, 23, 0.5);
+  --color-border-disabled: rgba(38, 38, 38, 0.5);
+
+  // Offline badge
+  --color-badge-bg: #262626;
+
+  // Canvas
+  --particle-lightness: 65%;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  // Surfaces
+  --color-bg: #f5f5f5;
+  --color-surface: #ffffff;
+  --color-surface-secondary: #e5e5e5;
+  --color-surface-tertiary: #d4d4d4;
+  --color-surface-hover: #a3a3a3;
+
+  // Text
+  --color-text: #171717;
+  --color-text-strong: #0a0a0a;
+  --color-text-secondary: #262626;
+  --color-text-tertiary: #525252;
+  --color-text-muted: #737373;
+  --color-text-faint: #a3a3a3;
+
+  // Borders
+  --color-border: #d4d4d4;
+  --color-border-secondary: #a3a3a3;
+
+  // Scrollbar
+  --color-scrollbar: #d4d4d4;
+  --color-scrollbar-hover: #a3a3a3;
+
+  // Interactive
+  --color-toggle-inactive: #d4d4d4;
+  --color-toggle-active: #3b82f6;
+  --color-toggle-thumb: white;
+  --color-toggle-shadow: rgba(0, 0, 0, 0.15);
+
+  // Buttons (inactive state)
+  --color-button-bg: #e5e5e5;
+  --color-button-border: #d4d4d4;
+  --color-button-hover-bg: rgba(163, 163, 163, 0.3);
+  --color-button-active-bg: #d4d4d4;
+
+  // Chat bubbles
+  --color-bubble-user: #3b82f6;
+  --color-bubble-user-text: white;
+  --color-bubble-claude: #e5e5e5;
+  --color-bubble-claude-text: #171717;
+
+  // Overlay
+  --color-backdrop: rgba(0, 0, 0, 0.3);
+  --color-dropdown-shadow: rgba(0, 0, 0, 0.15);
+
+  // Disabled state
+  --color-surface-disabled: rgba(245, 245, 245, 0.5);
+  --color-border-disabled: rgba(212, 212, 212, 0.5);
+
+  // Offline badge
+  --color-badge-bg: #e5e5e5;
+
+  // Canvas
+  --particle-lightness: 45%;
 }
 
 body {
-  background: #0a0a0a;
-  color: #e5e5e5;
+  background: var(--color-bg);
+  color: var(--color-text);
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   height: 100dvh;

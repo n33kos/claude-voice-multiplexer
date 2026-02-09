@@ -1,6 +1,13 @@
 import classNames from "classnames";
+import type { ThemeMode } from "../../hooks/useSettings";
 import type { SettingsProps } from "./Settings.types";
 import styles from "./Settings.module.scss";
+
+const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
+  { value: "system", label: "System" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+];
 
 export function Settings({ open, onClose, settings, onUpdate }: SettingsProps) {
   if (!open) return null;
@@ -19,6 +26,28 @@ export function Settings({ open, onClose, settings, onUpdate }: SettingsProps) {
         </div>
 
         <div className={styles.SettingsList}>
+          <div className={styles.SettingRow}>
+            <div className={styles.SettingLabel}>
+              <span className={styles.SettingTitle}>Theme</span>
+              <span className={styles.SettingDescription}>
+                Choose light, dark, or follow system preference
+              </span>
+            </div>
+            <div className={styles.ThemeSelector}>
+              {THEME_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => onUpdate({ theme: opt.value })}
+                  className={classNames(styles.ThemeOption, {
+                    [styles.ThemeOptionActive]: settings.theme === opt.value,
+                  })}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <label className={styles.SettingRow}>
             <div className={styles.SettingLabel}>
               <span className={styles.SettingTitle}>Auto-listen</span>

@@ -44,8 +44,8 @@
 
 .StatusPillIdle {
   background-color: rgba(115, 115, 115, 0.1);
-  border-color: #404040;
-  color: #737373;
+  border-color: var(--color-border-secondary);
+  color: var(--color-text-muted);
 }
 
 .StatusDot {
@@ -102,11 +102,11 @@
 }
 
 .MicButtonInactive {
-  background-color: #262626;
-  border: 1px solid #404040;
+  background-color: var(--color-button-bg);
+  border: 1px solid var(--color-button-border);
 
   &:active {
-    background-color: #404040;
+    background-color: var(--color-button-active-bg);
   }
 }
 
@@ -120,11 +120,11 @@
 }
 
 .SpeakerButtonInactive {
-  background-color: #262626;
-  border: 1px solid #404040;
+  background-color: var(--color-button-bg);
+  border: 1px solid var(--color-button-border);
 
   &:active {
-    background-color: #404040;
+    background-color: var(--color-button-active-bg);
   }
 }
 
@@ -147,7 +147,7 @@
 }
 
 .MicIconInactive {
-  color: #a3a3a3;
+  color: var(--color-text-tertiary);
 }
 
 .SpeakerIconActive {
@@ -155,7 +155,7 @@
 }
 
 .SpeakerIconInactive {
-  color: #a3a3a3;
+  color: var(--color-text-tertiary);
 }
 
 .InterruptIcon {

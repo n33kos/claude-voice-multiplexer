@@ -3,6 +3,7 @@ import { useRelay } from "./hooks/useRelay";
 import { useLiveKit } from "./hooks/useLiveKit";
 import { useChime } from "./hooks/useChime";
 import { useSettings } from "./hooks/useSettings";
+import { useTheme } from "./hooks/useTheme";
 import { SessionList } from "./components/SessionList/SessionList";
 import { VoiceControls } from "./components/VoiceControls/VoiceControls";
 import { Transcript } from "./components/Transcript/Transcript";
@@ -21,6 +22,7 @@ export default function App() {
     !relay.connectedSessionId,
   );
   useChime(relay.agentStatus, settings.autoListen);
+  useTheme(settings.theme);
 
   // Auto-collapse session list when connected, expand when disconnected
   useEffect(() => {

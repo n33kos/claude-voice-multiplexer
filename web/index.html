@@ -9,6 +9,22 @@
 
   <title>Claude Voice Multiplexer</title>
 
+  <script>
+    // Apply saved theme before first paint to prevent flash
+    (function() {
+      try {
+        var s = JSON.parse(localStorage.getItem('voice-multiplexer-settings'));
+        var t = s && s.theme;
+        if (t === 'light' || t === 'dark') {
+          document.documentElement.setAttribute('data-theme', t);
+        } else {
+          var d = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          document.documentElement.setAttribute('data-theme', d);
+        }
+      } catch(e) {}
+    })();
+  </script>
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Audiowide&display=swap" rel="stylesheet">
