@@ -16,6 +16,20 @@ Before entering standby, verify services are installed and running:
 3. If exit code is non-zero (services not running), run `nohup "${CLAUDE_PLUGIN_ROOT}/scripts/start.sh" > /tmp/vmux-start.log 2>&1 &` and wait up to 90 seconds for Kokoro to finish loading.
 4. If the relay server still isn't responding after starting, inform the user and stop.
 
+## Show Connection URL
+
+After services are confirmed running, print the web app URL so the user knows where to connect.
+Get the local network IP by running: `ipconfig getifaddr en0 2>/dev/null || echo localhost`
+Then print a message like:
+
+```
+Voice Multiplexer ready — open on your phone:
+  http://<local-ip>:3100
+  (or http://localhost:3100 from this machine)
+```
+
+Use the `RELAY_PORT` from the config (default 3100). If `DEV_MODE=true`, show `:5173` for the Vite dev server instead.
+
 ## Instructions
 
 When invoked, use the `relay_standby` MCP tool to register this session with the relay server. Then enter a continuous conversation loop:
