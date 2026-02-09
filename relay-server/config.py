@@ -37,6 +37,11 @@ KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "af_default")
 KOKORO_MODEL = os.environ.get("KOKORO_MODEL", "tts-1")
 SAMPLE_RATE = int(os.environ.get("SAMPLE_RATE", "24000"))
 
+# --- Authentication ---
+AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
+AUTH_TOKEN_TTL_DAYS = int(os.environ.get("AUTH_TOKEN_TTL_DAYS", "90"))
+AUTH_ENABLED = bool(AUTH_SECRET)
+
 # --- VAD (Voice Activity Detection) ---
 VAD_AGGRESSIVENESS = int(os.environ.get("VAD_AGGRESSIVENESS", "1"))  # 0=permissive, 3=strict
 SILENCE_THRESHOLD_MS = int(os.environ.get("SILENCE_THRESHOLD_MS", "2000"))

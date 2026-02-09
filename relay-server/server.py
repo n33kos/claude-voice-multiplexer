@@ -15,11 +15,12 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, Cookie, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import RELAY_HOST, RELAY_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
+from config import RELAY_HOST, RELAY_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AUTH_ENABLED
+import auth
 from registry import SessionRegistry
 from livekit_agent import RelayAgent
 
@@ -30,6 +31,37 @@ _clients: dict[str, WebSocket] = {}
 
 # LiveKit agent (initialized on startup)
 _agent: RelayAgent | None = None
+
+
+# --- Auth helpers ---
+
+def _get_device(request: Request) -> dict | None:
+    """Extract and validate device from JWT cookie. Returns payload or None."""
+    if not AUTH_ENABLED:
+        return {"device_id": "anonymous", "device_name": "anonymous"}
+    token = request.cookies.get(auth.COOKIE_NAME)
+    if not token:
+        return None
+    return auth.validate_token(token)
+
+
+def _require_auth(request: Request) -> dict:
+    """FastAPI-style auth check. Raises 401 if not authenticated."""
+    device = _get_device(request)
+    if not device:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    auth.update_last_seen(device["device_id"])
+    return device
+
+
+def _get_ws_device(ws: WebSocket) -> dict | None:
+    """Extract device from WebSocket upgrade cookies."""
+    if not AUTH_ENABLED:
+        return {"device_id": "anonymous", "device_name": "anonymous"}
+    token = ws.cookies.get(auth.COOKIE_NAME)
+    if not token:
+        return None
+    return auth.validate_token(token)
 
 
 async def _notify_client_status(session_id: str, state: str, activity: str | None = None):
@@ -77,6 +109,10 @@ async def lifespan(app: FastAPI):
     global _agent
     _agent = RelayAgent(registry, _broadcast_sessions, _notify_client_status, _notify_client_transcript)
     print("[server] Agent manager initialized (rooms created per session)")
+    if AUTH_ENABLED:
+        print("[server] Authentication enabled")
+    else:
+        print("[server] Authentication disabled (no AUTH_SECRET set)")
     yield
     if _agent:
         await _agent.stop()
@@ -85,18 +121,93 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Claude Voice Multiplexer", lifespan=lifespan)
 
 
+# --- Auth API ---
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request):
+    """Check if the current client is authenticated."""
+    device = _get_device(request)
+    return JSONResponse({
+        "authenticated": device is not None,
+        "auth_enabled": AUTH_ENABLED,
+        "device": device,
+    })
+
+
+@app.post("/api/auth/pair")
+async def pair_device(request: Request):
+    """Pair a new device using a one-time code."""
+    if not AUTH_ENABLED:
+        return JSONResponse({"error": "Authentication is not enabled"}, status_code=400)
+
+    body = await request.json()
+    code = body.get("code", "").strip()
+    device_name = body.get("device_name", "Unknown Device").strip()
+
+    if not code:
+        return JSONResponse({"error": "Code is required"}, status_code=400)
+
+    if not auth.validate_pair_code(code):
+        return JSONResponse({"error": "Invalid or expired code"}, status_code=403)
+
+    device_id = uuid.uuid4().hex
+    auth.register_device(device_id, device_name)
+    token = auth.issue_token(device_id, device_name)
+
+    response = JSONResponse({
+        "success": True,
+        "device_id": device_id,
+        "device_name": device_name,
+    })
+    response.set_cookie(
+        key=auth.COOKIE_NAME,
+        value=token,
+        max_age=auth.AUTH_TOKEN_TTL_DAYS * 86400,
+        httponly=True,
+        samesite="lax",
+    )
+    return response
+
+
+@app.post("/api/auth/code")
+async def generate_code(request: Request):
+    """Generate a pairing code (requires existing auth)."""
+    _require_auth(request)
+    code = auth.generate_pair_code()
+    return JSONResponse({"code": code, "expires_in": auth.CODE_TTL_S})
+
+
+@app.get("/api/auth/devices")
+async def get_devices(request: Request):
+    """List all authorized devices."""
+    _require_auth(request)
+    return JSONResponse({"devices": auth.list_devices()})
+
+
+@app.delete("/api/auth/devices/{device_id}")
+async def delete_device(device_id: str, request: Request):
+    """Revoke a device's authorization."""
+    _require_auth(request)
+    if auth.revoke_device(device_id):
+        return JSONResponse({"success": True})
+    return JSONResponse({"error": "Device not found"}, status_code=404)
+
+
 # --- REST API ---
 
 @app.get("/api/sessions")
-async def list_sessions():
+async def list_sessions(request: Request):
     """List all registered Claude Code sessions."""
+    _require_auth(request)
     sessions = await registry.list_sessions()
     return JSONResponse({"sessions": sessions})
 
 
 @app.get("/api/token")
-async def get_token(room: str = "multiplexer", identity: str = ""):
+async def get_token(request: Request, room: str = "multiplexer", identity: str = ""):
     """Generate a LiveKit JWT for client connection."""
+    _require_auth(request)
+
     try:
         from livekit.api import AccessToken, VideoGrants
     except ImportError:
@@ -108,7 +219,7 @@ async def get_token(room: str = "multiplexer", identity: str = ""):
     if not identity:
         identity = f"client-{uuid.uuid4().hex[:6]}"
 
-    jwt = (
+    jwt_token = (
         AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
         .with_identity(identity)
         .with_grants(VideoGrants(room_join=True, room=room))
@@ -116,7 +227,7 @@ async def get_token(room: str = "multiplexer", identity: str = ""):
     )
 
     return JSONResponse({
-        "token": jwt,
+        "token": jwt_token,
         "url": LIVEKIT_URL,
         "room": room,
         "identity": identity,
@@ -198,6 +309,22 @@ async def session_ws(ws: WebSocket):
                 if sid and _agent and activity:
                     asyncio.create_task(_agent.handle_status_update(sid, activity))
 
+            elif msg_type == "generate_code":
+                # MCP plugin requesting a pairing code
+                if AUTH_ENABLED:
+                    code = auth.generate_pair_code()
+                    await ws.send_text(json.dumps({
+                        "type": "auth_code",
+                        "code": code,
+                        "expires_in": auth.CODE_TTL_S,
+                    }))
+                else:
+                    await ws.send_text(json.dumps({
+                        "type": "auth_code",
+                        "code": None,
+                        "message": "Authentication is not enabled",
+                    }))
+
             elif msg_type == "pong":
                 pass
 
@@ -231,6 +358,12 @@ async def client_ws(ws: WebSocket):
     - Server sends: {type: "transcript", speaker, text, session_id}
     - Server sends: {type: "agent_status", state, activity, timestamp}
     """
+    # Auth check on WebSocket handshake
+    device = _get_ws_device(ws)
+    if not device:
+        await ws.close(code=4001, reason="Authentication required")
+        return
+
     await ws.accept()
     client_id = f"client-{uuid.uuid4().hex[:6]}"
     _clients[client_id] = ws

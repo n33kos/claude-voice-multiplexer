@@ -296,10 +296,27 @@ VMUX_KOKORO_DEVICE=${DETECTED_DEVICE}
 
 # Max recording duration in seconds
 # MAX_RECORDING_S=180
+
+# --- Authentication ---
+# Secret key for JWT token signing (auto-generated during install).
+# If empty, authentication is disabled and all clients can connect freely.
+AUTH_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+
+# How long device authorization tokens last (in days)
+# AUTH_TOKEN_TTL_DAYS=90
 EOF
     log "Config written to $CONFIG_FILE"
 else
     log "Config already exists at $CONFIG_FILE (not overwriting)"
+    # Ensure AUTH_SECRET exists in existing config (added in later version)
+    if ! grep -q "^AUTH_SECRET=" "$CONFIG_FILE" 2>/dev/null; then
+        log "Adding AUTH_SECRET to existing config..."
+        AUTH_SECRET_VAL=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+        echo "" >> "$CONFIG_FILE"
+        echo "# --- Authentication ---" >> "$CONFIG_FILE"
+        echo "AUTH_SECRET=${AUTH_SECRET_VAL}" >> "$CONFIG_FILE"
+        log "AUTH_SECRET added."
+    fi
 fi
 
 # --- Summary ---
