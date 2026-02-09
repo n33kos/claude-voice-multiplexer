@@ -49,13 +49,16 @@ function playStoppedChime() {
   setTimeout(() => playTone(660, 0.15, 0.25), 100)
 }
 
-export function useChime(agentStatus: AgentStatus) {
+export function useChime(agentStatus: AgentStatus, autoListen: boolean) {
   const prevState = useRef<AgentState>(agentStatus.state)
 
   useEffect(() => {
     const prev = prevState.current
     prevState.current = agentStatus.state
     if (prev === agentStatus.state) return
+
+    // Only play chimes when auto-listen is on (mic is actually recording)
+    if (!autoListen) return
 
     // Speaking → idle: mic re-enabled, ready to record
     if (prev === 'speaking' && agentStatus.state === 'idle') {
@@ -66,5 +69,5 @@ export function useChime(agentStatus: AgentStatus) {
     if (prev === 'idle' && agentStatus.state === 'thinking') {
       playStoppedChime()
     }
-  }, [agentStatus.state])
+  }, [agentStatus.state, autoListen])
 }

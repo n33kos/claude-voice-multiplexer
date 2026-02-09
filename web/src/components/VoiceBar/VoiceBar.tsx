@@ -1,41 +1,21 @@
-import { useEffect, useRef, type MutableRefObject } from "react";
-import type { AgentStatus } from "../hooks/useRelay";
-
-interface Props {
-  agentStatus: AgentStatus;
-  isMicEnabled: boolean;
-  analyserRef: MutableRefObject<AnalyserNode | null>;
-}
+import { useEffect, useRef } from "react";
+import type { VoiceBarProps, RGB } from "./VoiceBar.types";
+import { lerp, lerpColor } from "./VoiceBar.utils";
 
 const BAR_COUNT = 20;
 const BAR_GAP = 3;
 const BAR_MIN_HEIGHT = 2;
+const BOOST_LEVEL = 1;
 
-const COLORS = {
-  recording: { r: 239, g: 68, b: 68 }, // red-500
-  thinking: { r: 168, g: 85, b: 247 }, // purple-500
-  speaking: { r: 59, g: 130, b: 246 }, // blue-500
-  error: { r: 245, g: 158, b: 11 }, // amber-500
-  idle: { r: 115, g: 115, b: 115 }, // neutral-500
+const COLORS: Record<string, RGB> = {
+  recording: { r: 239, g: 68, b: 68 },
+  thinking: { r: 168, g: 85, b: 247 },
+  speaking: { r: 59, g: 130, b: 246 },
+  error: { r: 245, g: 158, b: 11 },
+  idle: { r: 115, g: 115, b: 115 },
 };
 
-function lerp(a: number, b: number, t: number) {
-  return a + (b - a) * t;
-}
-
-function lerpColor(
-  from: { r: number; g: number; b: number },
-  to: { r: number; g: number; b: number },
-  t: number,
-) {
-  return {
-    r: Math.round(lerp(from.r, to.r, t)),
-    g: Math.round(lerp(from.g, to.g, t)),
-    b: Math.round(lerp(from.b, to.b, t)),
-  };
-}
-
-export function VoiceBar({ agentStatus, isMicEnabled, analyserRef }: Props) {
+export function VoiceBar({ agentStatus, isMicEnabled, analyserRef }: VoiceBarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const barsRef = useRef<number[]>(new Array(BAR_COUNT).fill(0));
@@ -83,7 +63,6 @@ export function VoiceBar({ agentStatus, isMicEnabled, analyserRef }: Props) {
 
       analyser.getByteFrequencyData(freqDataRef.current);
 
-      // Only use the lower ~40% of frequency bins (voice-relevant range)
       const binCount = freqDataRef.current.length;
       const usableBins = Math.floor(binCount * 0.4);
       const halfBars = Math.ceil(BAR_COUNT / 2);
@@ -100,7 +79,6 @@ export function VoiceBar({ agentStatus, isMicEnabled, analyserRef }: Props) {
         halfLevels.push(sum / (end - start) / 255);
       }
 
-      // Mirror: highest energy (low freq) in the center, tapering to edges
       const mirrored: number[] = [];
       for (let i = halfBars - 1; i >= 0; i--) {
         mirrored.push(halfLevels[i]);
@@ -113,27 +91,23 @@ export function VoiceBar({ agentStatus, isMicEnabled, analyserRef }: Props) {
     }
 
     function animate() {
-      timeRef.current += 0.016; // ~60fps
+      timeRef.current += 0.016;
       const t = timeRef.current;
 
-      // Smoothly interpolate color
       const targetColor = getTargetColor();
       colorRef.current = lerpColor(colorRef.current, targetColor, 0.08);
       const { r, g, b } = colorRef.current;
 
-      // Get real audio levels when recording or when agent is speaking
       const useRealAudio = isMicEnabled || agentState === "speaking";
       const audioLevels = useRealAudio ? getAudioLevels() : null;
 
-      // Generate target bar heights based on state
       const bars = barsRef.current;
       for (let i = 0; i < BAR_COUNT; i++) {
         let target: number;
 
         if (useRealAudio && audioLevels) {
-          // Real audio data — boost and apply a minimum so all bars show some activity
           const level = audioLevels[i];
-          const boosted = Math.min(1, level * 1.4);
+          const boosted = Math.min(1, level * BOOST_LEVEL);
           const curved = Math.pow(boosted, 0.6);
           target = Math.max(BAR_MIN_HEIGHT, curved * height * 0.85);
         } else if (agentState === "thinking") {
@@ -144,7 +118,6 @@ export function VoiceBar({ agentStatus, isMicEnabled, analyserRef }: Props) {
           const pulse = Math.sin(t * 1.5) * 0.3 + 0.4;
           target = pulse * height * 0.4 + BAR_MIN_HEIGHT;
         } else if (agentState === "speaking") {
-          // Fallback: canned animation if no remote analyser available
           const wave = Math.sin(t * 4 + i * 0.4) * 0.4 + 0.5;
           const burst = Math.sin(t * 7 + i * 0.8) * 0.3;
           const envelope = Math.sin(t * 1.5) * 0.3 + 0.7;
@@ -160,7 +133,6 @@ export function VoiceBar({ agentStatus, isMicEnabled, analyserRef }: Props) {
         bars[i] = lerp(bars[i], target, easeFactor);
       }
 
-      // Draw
       ctx!.clearRect(0, 0, width, height);
 
       for (let i = 0; i < BAR_COUNT; i++) {
@@ -188,6 +160,7 @@ export function VoiceBar({ agentStatus, isMicEnabled, analyserRef }: Props) {
 
   return (
     <canvas
+      data-component="VoiceBar"
       ref={canvasRef}
       className="mx-auto h-16"
       style={{ width: "65%", height: 64 }}

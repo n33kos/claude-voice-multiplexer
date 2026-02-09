@@ -1,17 +1,10 @@
-import type { Settings } from '../hooks/useSettings'
+import type { SettingsProps } from "./Settings.types";
 
-interface Props {
-  open: boolean
-  onClose: () => void
-  settings: Settings
-  onUpdate: (patch: Partial<Settings>) => void
-}
-
-export function Settings({ open, onClose, settings, onUpdate }: Props) {
-  if (!open) return null
+export function Settings({ open, onClose, settings, onUpdate }: SettingsProps) {
+  if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+    <div data-component="Settings" className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
@@ -84,8 +77,34 @@ export function Settings({ open, onClose, settings, onUpdate }: Props) {
               />
             </button>
           </label>
+
+          {/* Status pill toggle */}
+          <label className="flex items-center justify-between gap-3 cursor-pointer">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm text-neutral-200">Status pill</span>
+              <span className="text-xs text-neutral-500">
+                Show the agent status pill above the voice controls
+              </span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.showStatusPill}
+              onClick={() => onUpdate({ showStatusPill: !settings.showStatusPill })}
+              className={`
+                relative shrink-0 w-10 h-6 rounded-full transition-colors duration-200
+                ${settings.showStatusPill ? 'bg-blue-500' : 'bg-neutral-700'}
+              `}
+            >
+              <span
+                className={`
+                  absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200
+                  ${settings.showStatusPill ? 'translate-x-4' : 'translate-x-0'}
+                `}
+              />
+            </button>
+          </label>
         </div>
       </div>
     </div>
-  )
+  );
 }

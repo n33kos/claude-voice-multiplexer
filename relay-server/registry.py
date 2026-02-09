@@ -7,6 +7,13 @@ from dataclasses import dataclass, field
 from config import SESSION_TIMEOUT
 
 
+def make_room_name(session_name: str) -> str:
+    """Derive a LiveKit room name from a session name."""
+    import re
+    sanitized = re.sub(r'[^a-zA-Z0-9_\-]', '_', session_name)
+    return f"vmux_{sanitized}"
+
+
 @dataclass
 class Session:
     session_id: str
@@ -19,6 +26,10 @@ class Session:
     connected_client: str | None = None  # client ID currently connected to this session
 
     @property
+    def room_name(self) -> str:
+        return make_room_name(self.name)
+
+    @property
     def is_stale(self) -> bool:
         return time.time() - self.last_heartbeat > SESSION_TIMEOUT
 
@@ -28,6 +39,7 @@ class Session:
             "name": self.name,
             "cwd": self.cwd,
             "dir_name": self.dir_name,
+            "room_name": self.room_name,
             "connected_client": self.connected_client,
             "created_at": self.created_at,
             "last_heartbeat": self.last_heartbeat,

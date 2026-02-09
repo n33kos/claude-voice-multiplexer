@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react'
 interface LiveKitState {
   token: string | null
   url: string | null
+  room: string | null
   isConnected: boolean
 }
 
@@ -10,17 +11,19 @@ export function useLiveKit() {
   const [state, setState] = useState<LiveKitState>({
     token: null,
     url: null,
+    room: null,
     isConnected: false,
   })
 
-  const fetchToken = useCallback(async (room: string = 'voice_relay') => {
+  const fetchToken = useCallback(async (room: string) => {
     try {
-      const resp = await fetch(`/api/token?room=${room}`)
+      const resp = await fetch(`/api/token?room=${encodeURIComponent(room)}`)
       if (!resp.ok) throw new Error(`Token fetch failed: ${resp.status}`)
       const data = await resp.json()
       setState({
         token: data.token,
         url: data.url,
+        room: data.room,
         isConnected: false,
       })
       return data
@@ -30,6 +33,10 @@ export function useLiveKit() {
     }
   }, [])
 
+  const resetToken = useCallback(() => {
+    setState({ token: null, url: null, room: null, isConnected: false })
+  }, [])
+
   const setConnected = useCallback((connected: boolean) => {
     setState(s => ({ ...s, isConnected: connected }))
   }, [])
@@ -37,6 +44,7 @@ export function useLiveKit() {
   return {
     ...state,
     fetchToken,
+    resetToken,
     setConnected,
   }
 }

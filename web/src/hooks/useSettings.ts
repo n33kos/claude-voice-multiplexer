@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 export interface Settings {
   autoListen: boolean
   speakerMuted: boolean
+  showStatusPill: boolean
 }
 
 const STORAGE_KEY = 'voice-multiplexer-settings'
@@ -10,6 +11,7 @@ const STORAGE_KEY = 'voice-multiplexer-settings'
 const DEFAULTS: Settings = {
   autoListen: true,
   speakerMuted: false,
+  showStatusPill: true,
 }
 
 function loadSettings(): Settings {

@@ -50,32 +50,33 @@ async def _notify_client_status(session_id: str, state: str, activity: str | Non
 
 
 async def _notify_client_transcript(session_id: str, speaker: str, text: str):
-    """Send a transcript entry to the web client connected to a session."""
+    """Send a transcript entry to all connected web clients.
+
+    Transcripts are broadcast so clients can persist them even when
+    they're viewing a different session.
+    """
     session = await registry.get(session_id)
-    if session and session.connected_client:
-        client_ws = _clients.get(session.connected_client)
-        if client_ws:
-            try:
-                await client_ws.send_text(json.dumps({
-                    "type": "transcript",
-                    "speaker": speaker,
-                    "text": text,
-                    "session_id": session_id,
-                }))
-            except Exception:
-                pass
+    if not session:
+        return
+    msg = json.dumps({
+        "type": "transcript",
+        "speaker": speaker,
+        "text": text,
+        "session_id": session_id,
+        "session_name": session.name,
+    })
+    for client_ws in list(_clients.values()):
+        try:
+            await client_ws.send_text(msg)
+        except Exception:
+            pass
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _agent
     _agent = RelayAgent(registry, _broadcast_sessions, _notify_client_status, _notify_client_transcript)
-    try:
-        await _agent.start()
-    except Exception as e:
-        print(f"[server] LiveKit agent failed to start: {e}")
-        print("[server] Continuing without LiveKit audio pipeline")
-        _agent = None
+    print("[server] Agent manager initialized (rooms created per session)")
     yield
     if _agent:
         await _agent.stop()
@@ -154,7 +155,14 @@ async def session_ws(ws: WebSocket):
                     ws=ws,
                 )
                 await ws.send_text(json.dumps({"type": "registered", "session_id": session_id}))
-                print(f"Session registered: {session.name} ({session_id})")
+                print(f"Session registered: {session.name} ({session_id}) → room {session.room_name}")
+
+                # Create a LiveKit room for this session
+                if _agent:
+                    try:
+                        await _agent.add_session(session_id, session.room_name)
+                    except Exception as e:
+                        print(f"[server] Failed to create room for session: {e}")
 
                 # Notify all clients of session list change
                 await _broadcast_sessions()
@@ -174,17 +182,8 @@ async def session_ws(ws: WebSocket):
                     if _agent:
                         asyncio.create_task(_agent.handle_claude_response(sid, text))
 
-                    # Also send transcript to any connected WebSocket clients
-                    session = await registry.get(sid)
-                    if session and session.connected_client:
-                        client_ws = _clients.get(session.connected_client)
-                        if client_ws:
-                            await client_ws.send_text(json.dumps({
-                                "type": "transcript",
-                                "speaker": "claude",
-                                "text": text,
-                                "session_id": sid,
-                            }))
+                    # Broadcast transcript to all connected web clients
+                    await _notify_client_transcript(sid, "claude", text)
 
             elif msg_type == "listening":
                 # Claude called relay_standby again — ready for next message
@@ -208,6 +207,12 @@ async def session_ws(ws: WebSocket):
         print(f"Session WebSocket error: {e}")
     finally:
         if session_id:
+            # Remove the LiveKit room for this session
+            if _agent:
+                try:
+                    await _agent.remove_session(session_id)
+                except Exception as e:
+                    print(f"[server] Error removing room: {e}")
             await registry.unregister(session_id)
             print(f"Session unregistered: {session_id}")
             await _broadcast_sessions()
@@ -258,13 +263,13 @@ async def client_ws(ws: WebSocket):
                 if session_data:
                     msg["session_name"] = session_data.name
                 await ws.send_text(json.dumps(msg))
-                # Send current agent status so client starts in the correct state
-                if success and _agent:
-                    status = _agent.get_current_status()
+                # Reset agent status for the new session context — the old
+                # session's thinking/speaking state doesn't apply here.
+                if success:
                     await ws.send_text(json.dumps({
                         "type": "agent_status",
-                        "state": status["state"],
-                        "activity": status["activity"],
+                        "state": "idle",
+                        "activity": None,
                         "timestamp": time.time(),
                     }))
                 await _broadcast_sessions()

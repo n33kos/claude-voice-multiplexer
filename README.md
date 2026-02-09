@@ -100,7 +100,7 @@ To prevent overlapping messages, the microphone is disabled during Claude's turn
 3. After TTS finishes → agent stays in `thinking` with "Waiting for Claude..." until Claude calls `relay_standby`
 4. When Claude calls `relay_standby` → agent enters `idle` (mic respects user's toggle preference)
 
-The idle state does **not** auto-enable the microphone. If the user has manually muted, idle simply waits. The interrupt button (visible during thinking/error states) forces a transition to idle.
+The idle state respects the user's auto-listen preference. If auto-listen is enabled (mic button active), idle auto-enables the microphone. If disabled, idle simply waits. The interrupt button (visible during thinking/speaking/error states) forces a transition to idle.
 
 ### Session Switching
 
@@ -181,28 +181,36 @@ A static-built React app served by the relay server. Mobile-first design for pho
 
 **Features:**
 
-- Session list with connect/disconnect
-- Voice bar visualizer with real audio data (from mic and remote TTS track)
-- Mic toggle that respects agent state (disabled during thinking/speaking/error)
-- Activity label display (shows what Claude is doing)
-- Interrupt button (visible during thinking/error states)
+- Collapsible session drawer with session cards, dropdown menus, and online/offline status
+- Persistent sessions in IndexedDB (survive disconnects and page reloads)
+- Voice bar visualizer with real audio data (voice-optimized frequency mapping)
+- Mic toggle with auto-listen mode (mic auto-enables when agent goes idle)
+- Speaker mute button for silencing TTS playback
+- Activity label display (shows what Claude is doing in real time)
+- Activity entries persisted inline in the transcript
+- Interrupt button (visible during thinking/speaking/error states)
 - Audio chimes on state transitions (ascending for ready, descending for captured)
-- Live transcript (user + Claude + system messages)
-- Connection status bar
+- Live transcript with IndexedDB persistence (keyed by session name)
+- Settings panel (auto-listen toggle, speaker mute)
+- Connection status bar (Relay Server / LiveKit Audio / Claude indicators)
+- Animated rainbow gradient header
 
 **Key files:**
 
-| File                           | Description                                                          |
-| ------------------------------ | -------------------------------------------------------------------- |
-| `App.tsx`                      | Root component, wires hooks to components                            |
-| `hooks/useRelay.ts`            | WebSocket state management, `AgentStatus` interface, reconnect logic |
-| `hooks/useLiveKit.ts`          | LiveKit token fetching and connection state                          |
-| `hooks/useChime.ts`            | Audio feedback chimes on state transitions                           |
-| `components/VoiceControls.tsx` | LiveKit room, mic controls, audio analysers, interrupt button        |
-| `components/VoiceBar.tsx`      | Canvas-based audio visualizer with per-state colors and animations   |
-| `components/SessionList.tsx`   | Session list with connect/disconnect buttons                         |
-| `components/Transcript.tsx`    | Scrolling transcript display                                         |
-| `components/StatusBar.tsx`     | Connection status indicators                                         |
+| File                           | Description                                                                |
+| ------------------------------ | -------------------------------------------------------------------------- |
+| `App.tsx`                      | Root component, wires hooks to components                                  |
+| `hooks/useRelay.ts`            | WebSocket state, `AgentStatus`, persistent sessions, transcript management |
+| `hooks/useLiveKit.ts`          | LiveKit token fetching and connection state                                |
+| `hooks/useChime.ts`            | Audio feedback chimes on state transitions                                 |
+| `hooks/useSettings.ts`         | localStorage-backed settings (auto-listen, speaker mute)                   |
+| `hooks/useTranscriptDB.ts`     | IndexedDB persistence for transcripts and sessions                         |
+| `components/VoiceControls.tsx` | LiveKit room, mic/speaker/interrupt controls, audio analysers              |
+| `components/VoiceBar.tsx`      | Canvas audio visualizer with voice-optimized frequency mapping             |
+| `components/SessionList.tsx`   | Collapsible session drawer with dropdown menus                             |
+| `components/Transcript.tsx`    | Scrolling transcript with activity entries                                 |
+| `components/StatusBar.tsx`     | Connection status indicators (Relay Server / LiveKit / Claude)             |
+| `components/Settings.tsx`      | Settings panel (auto-listen, speaker mute)                                 |
 
 **Tech stack:** React 19, Vite 7, LiveKit React SDK, TailwindCSS v4, TypeScript
 
@@ -246,13 +254,13 @@ All settings are configured via environment variables. Use a `.env` file at the 
 | `LIVEKIT_URL`           | `ws://localhost:7880`      | LiveKit server URL                                            |
 | `LIVEKIT_API_KEY`       |                            | LiveKit API key                                               |
 | `LIVEKIT_API_SECRET`    |                            | LiveKit API secret                                            |
-| `LIVEKIT_ROOM`          | `voice_relay`              | LiveKit room name                                             |
 | `SESSION_TIMEOUT`       | `60`                       | Session heartbeat timeout (seconds)                           |
 | `VAD_AGGRESSIVENESS`    | `1`                        | VAD sensitivity (0=permissive, 3=strict)                      |
 | `SILENCE_THRESHOLD_MS`  | `2000`                     | Silence duration before utterance ends                        |
 | `MIN_SPEECH_DURATION_S` | `0.5`                      | Minimum speech before silence can end utterance               |
 | `ECHO_COOLDOWN_S`       | `0.8`                      | Seconds to ignore mic after TTS (echo suppression)            |
 | `ENERGY_THRESHOLD`      | `500`                      | Energy threshold for fallback VAD                             |
+| `MAX_RECORDING_S`       | `180`                      | Max recording duration in seconds (3 minutes)                 |
 | `DEV_MODE`              | `false`                    | Start Vite dev server alongside relay server                  |
 
 ## Getting Started
@@ -339,15 +347,18 @@ claude-voice-multiplexer/
 │   │   ├── main.tsx                     # Entry point
 │   │   ├── index.css                    # Tailwind imports
 │   │   ├── components/
-│   │   │   ├── SessionList.tsx          # Session list with connect/disconnect
-│   │   │   ├── VoiceControls.tsx        # LiveKit room, mic, audio analysers
+│   │   │   ├── SessionList.tsx          # Collapsible session drawer + dropdown menus
+│   │   │   ├── VoiceControls.tsx        # LiveKit room, mic/speaker/interrupt
 │   │   │   ├── VoiceBar.tsx             # Canvas audio visualizer
-│   │   │   ├── Transcript.tsx           # Scrolling transcript
-│   │   │   └── StatusBar.tsx            # Connection status
+│   │   │   ├── Transcript.tsx           # Scrolling transcript + activity entries
+│   │   │   ├── StatusBar.tsx            # Connection status indicators
+│   │   │   └── Settings.tsx             # Settings panel
 │   │   └── hooks/
-│   │       ├── useRelay.ts              # WebSocket state, AgentStatus
+│   │       ├── useRelay.ts              # WebSocket state, persistent sessions
 │   │       ├── useLiveKit.ts            # LiveKit token + connection
-│   │       └── useChime.ts              # Audio feedback chimes
+│   │       ├── useChime.ts              # Audio feedback chimes
+│   │       ├── useSettings.ts           # localStorage settings
+│   │       └── useTranscriptDB.ts       # IndexedDB persistence
 │   ├── index.html
 │   ├── package.json
 │   ├── tsconfig.json
@@ -360,12 +371,7 @@ claude-voice-multiplexer/
 
 Known issues to investigate and fix:
 
-- **Chimes arent woring**: Audio chimes for state transitions (ready/captured) don't play.
-- **Voice bar remote track**: The VoiceBar should show real audio visualization for the speaking state using the remote agent's audio track, but `useTracks` may not always return the remote track depending on LiveKit subscription timing.
-- **Session participant mapping**: The agent currently finds sessions by looking for the first session with a connected client (`_find_session_for_participant`). This is a naive heuristic that breaks with multiple simultaneous clients.
-- **No WAV header validation**: The `_to_wav` helper builds WAV manually but there's no validation that the resulting bytes are well-formed. Edge cases (empty buffer, very short utterances) may produce malformed audio.
-- **Whisper blank filtering**: The `BLANK_PATTERNS` set catches common Whisper noise artifacts but may miss others (language-specific blanks, model-dependent artifacts).
-- **TTS playback timing jitter**: The `+0.5s` jitter buffer in `_publish_audio` is a rough heuristic. LiveKit's `capture_frame` pacing varies, so remaining playback calculation may over- or under-sleep.
+- [x] ~~recording chime still plays when microphone auto record is disabled~~ — Fixed: chimes now only play when auto-listen is enabled
 
 ## To Do
 
@@ -378,17 +384,17 @@ Known issues to investigate and fix:
 
 ### Medium Priority
 
+- [ ] **Service management via launchd**: Model after voicemode's approach — plist templates for Whisper, Kokoro, LiveKit, and relay server with `enable`/`disable`/`status` commands. Auto-start at login, auto-restart on crash, unified CLI.
 - [ ] **Voice commands for session switching**: "Switch to project X" should work via voice
-- [ ] **Persistent conversation history**: Store transcripts across sessions/reconnects
-- [ ] **Session metadata display**: Show working directory, session age, last activity in the session list
-- [ ] **Push-to-talk mode**: Alternative to open mic — hold button to speak, release to send
-- [ ] **Audio level indicator**: Show input volume meter so user knows mic is picking up audio before VAD triggers
+- [x] **Persistent conversation history**: Store transcripts across sessions/reconnects (IndexedDB, keyed by session name)
+- [x] **Session metadata display**: Show working directory, session age, last activity in the session list (collapsible drawer with online/offline status)
+- [x] **Audio level indicator**: Voice bar visualizer shows real-time mic audio with voice-optimized frequency mapping
 
 ### Low Priority / Future
 
 - [ ] **Streaming TTS**: Stream Kokoro output chunks to LiveKit as they're generated instead of waiting for full synthesis
 - [ ] **Streaming STT**: Use streaming Whisper for real-time partial transcriptions
-- [ ] **Multi-room LiveKit**: Separate LiveKit rooms per session for true multi-client support
+- [x] **Multi-room LiveKit**: Separate LiveKit rooms per session (`vmux_{session_name}`), audio isolated between sessions
 - [ ] **Theme customization**: Light/dark mode toggle, custom accent colors
 - [ ] **Keyboard shortcuts**: Desktop web client keyboard shortcuts for mic toggle, interrupt, session switching
 - [ ] **Tunnel integration**: Built-in Cloudflare/ngrok tunnel setup for remote access

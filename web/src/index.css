@@ -25,7 +25,7 @@ body {
 }
 
 .header-gradient {
-  background: linear-gradient(90deg, #ee0979, #ff6a00, yellow, green, cyan, blue, violet, #ee0979, #ff6a00, yellow);
+  background: linear-gradient(90deg, #ee0979, #ff6a00, yellow, green, cyan, blue, violet, yellow, #ff6a00, #ee0979);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;

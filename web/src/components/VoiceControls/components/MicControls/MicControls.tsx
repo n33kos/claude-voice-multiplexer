@@ -1,93 +1,29 @@
 import { useEffect, useRef } from "react";
 import {
-  LiveKitRoom,
   useRoomContext,
   useLocalParticipant,
   useTracks,
-  RoomAudioRenderer,
 } from "@livekit/components-react";
 import { Track } from "livekit-client";
-import type { AgentStatus } from "../hooks/useRelay";
-import { initAudio } from "../hooks/useChime";
-import { VoiceBar } from "./VoiceBar";
+import { initAudio } from "../../../../hooks/useChime";
+import { VoiceBar } from "../../../VoiceBar/VoiceBar";
+import { useTrackAnalyser } from "../../hooks/useTrackAnalyser";
+import type { MicControlsProps } from "../../VoiceControls.types";
 
-interface Props {
-  token: string;
-  serverUrl: string;
-  agentStatus: AgentStatus;
-  autoListen: boolean;
-  speakerMuted: boolean;
-  onAutoListenChange: (value: boolean) => void;
-  onSpeakerMutedChange: (value: boolean) => void;
-  onConnected: () => void;
-  onDisconnected: () => void;
-  onInterrupt: () => void;
-}
-
-/**
- * Creates a Web Audio AnalyserNode connected to a MediaStreamTrack.
- * Returns refs to the analyser and cleanup state.
- */
-function useTrackAnalyser(mediaStreamTrack: MediaStreamTrack | undefined) {
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const ctxRef = useRef<AudioContext | null>(null);
-
-  useEffect(() => {
-    if (!mediaStreamTrack) {
-      if (sourceRef.current) {
-        sourceRef.current.disconnect();
-        sourceRef.current = null;
-      }
-      analyserRef.current = null;
-      return;
-    }
-
-    const ctx = ctxRef.current ?? new AudioContext();
-    ctxRef.current = ctx;
-    if (ctx.state === "suspended") ctx.resume();
-
-    const stream = new MediaStream([mediaStreamTrack]);
-    const source = ctx.createMediaStreamSource(stream);
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 128;
-    analyser.smoothingTimeConstant = 0.7;
-    source.connect(analyser);
-
-    analyserRef.current = analyser;
-    sourceRef.current = source;
-
-    return () => {
-      source.disconnect();
-      analyserRef.current = null;
-      sourceRef.current = null;
-    };
-  }, [mediaStreamTrack]);
-
-  return analyserRef;
-}
-
-function MicControls({
+export function MicControls({
   agentStatus,
   autoListen,
   speakerMuted,
+  showStatusPill,
   onAutoListenChange,
   onSpeakerMutedChange,
   onInterrupt,
-}: {
-  agentStatus: AgentStatus;
-  autoListen: boolean;
-  speakerMuted: boolean;
-  onAutoListenChange: (value: boolean) => void;
-  onSpeakerMutedChange: (value: boolean) => void;
-  onInterrupt: () => void;
-}) {
+}: MicControlsProps) {
   const room = useRoomContext();
   const { isMicrophoneEnabled } = useLocalParticipant();
 
   const agentState = agentStatus.state;
 
-  // Get all microphone tracks in the room (local + remote agent)
   const allTracks = useTracks([Track.Source.Microphone]);
   const localTrackRef = allTracks.find((t) => t.participant.isLocal);
   const remoteTrackRef = allTracks.find((t) => !t.participant.isLocal);
@@ -98,12 +34,10 @@ function MicControls({
   const localAnalyser = useTrackAnalyser(localMediaTrack);
   const remoteAnalyser = useTrackAnalyser(remoteMediaTrack);
 
-  // Pick the active analyser based on state
   const isMicActive = !!isMicrophoneEnabled && agentState === "idle";
   const activeAnalyser =
     agentState === "speaking" ? remoteAnalyser : localAnalyser;
 
-  // Auto-enable/disable mic based on agent state + autoListen preference
   const prevAgentState = useRef(agentState);
   useEffect(() => {
     const prev = prevAgentState.current;
@@ -111,10 +45,8 @@ function MicControls({
     if (prev === agentState) return;
 
     if (agentState === "idle") {
-      // Agent just went idle — enable mic only if autoListen
       room.localParticipant.setMicrophoneEnabled(autoListen);
     } else if (agentState === "thinking" || agentState === "speaking") {
-      // Disable mic during thinking/speaking
       room.localParticipant.setMicrophoneEnabled(false);
     }
   }, [agentState, autoListen, room.localParticipant]);
@@ -126,9 +58,13 @@ function MicControls({
 
   const toggleMic = async () => {
     initAudio();
-    const next = !isMicrophoneEnabled;
-    await room.localParticipant.setMicrophoneEnabled(next);
-    onAutoListenChange(next);
+    if (agentState === "idle") {
+      const next = !isMicrophoneEnabled;
+      await room.localParticipant.setMicrophoneEnabled(next);
+      onAutoListenChange(next);
+    } else {
+      onAutoListenChange(!autoListen);
+    }
   };
 
   const toggleSpeaker = () => {
@@ -136,7 +72,6 @@ function MicControls({
     onSpeakerMutedChange(!speakerMuted);
   };
 
-  // Status pill styling based on state
   const statusPill = (() => {
     switch (agentState) {
       case "thinking":
@@ -164,27 +99,36 @@ function MicControls({
           label: agentStatus.activity || "Error",
         };
       default:
-        return {
-          bg: "bg-neutral-500/10",
-          border: "border-neutral-700",
-          text: "text-neutral-500",
-          dot: "bg-neutral-500",
-          label: autoListen ? "Listening" : "Idle",
-        };
+        return autoListen
+          ? {
+              bg: "bg-red-500/10",
+              border: "border-red-500/30",
+              text: "text-red-400",
+              dot: "bg-red-400",
+              label: "Listening",
+            }
+          : {
+              bg: "bg-neutral-500/10",
+              border: "border-neutral-700",
+              text: "text-neutral-500",
+              dot: "bg-neutral-500",
+              label: "Idle",
+            };
     }
   })();
 
   return (
-    <div className="flex flex-col items-center gap-3 w-full">
-      {/* Agent status pill — always visible */}
-      <div
-        className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs ${statusPill.bg} border ${statusPill.border} ${statusPill.text} transition-all duration-300`}
-      >
-        <span
-          className={`w-1.5 h-1.5 rounded-full ${statusPill.dot} ${agentState === "thinking" ? "animate-pulse" : ""}`}
-        />
-        <span className="truncate max-w-48">{statusPill.label}</span>
-      </div>
+    <div data-component="VoiceControls" className="flex flex-col items-center gap-3 w-full">
+      {showStatusPill && (
+        <div
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs ${statusPill.bg} border ${statusPill.border} ${statusPill.text} transition-all duration-300`}
+        >
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${statusPill.dot} ${agentState === "thinking" ? "animate-pulse" : ""}`}
+          />
+          <span className="truncate max-w-48">{statusPill.label}</span>
+        </div>
+      )}
 
       <VoiceBar
         agentStatus={agentStatus}
@@ -192,7 +136,7 @@ function MicControls({
         analyserRef={activeAnalyser}
       />
       <div className="flex items-center gap-3">
-        {/* Mic button — shows autoListen preference, not real-time mic state */}
+        {/* Mic button */}
         <button
           onClick={toggleMic}
           className={`
@@ -267,7 +211,7 @@ function MicControls({
             )}
           </svg>
         </button>
-        {/* Interrupt button — shown when agent is busy */}
+        {/* Interrupt button */}
         {showInterrupt && (
           <button
             onClick={() => {
@@ -298,40 +242,5 @@ function MicControls({
         )}
       </div>
     </div>
-  );
-}
-
-export function VoiceControls({
-  token,
-  serverUrl,
-  agentStatus,
-  autoListen,
-  speakerMuted,
-  onAutoListenChange,
-  onSpeakerMutedChange,
-  onConnected,
-  onDisconnected,
-  onInterrupt,
-}: Props) {
-  return (
-    <LiveKitRoom
-      token={token}
-      serverUrl={serverUrl}
-      connect={true}
-      audio={autoListen}
-      video={false}
-      onConnected={onConnected}
-      onDisconnected={onDisconnected}
-    >
-      <RoomAudioRenderer muted={speakerMuted} />
-      <MicControls
-        agentStatus={agentStatus}
-        autoListen={autoListen}
-        speakerMuted={speakerMuted}
-        onAutoListenChange={onAutoListenChange}
-        onSpeakerMutedChange={onSpeakerMutedChange}
-        onInterrupt={onInterrupt}
-      />
-    </LiveKitRoom>
   );
 }

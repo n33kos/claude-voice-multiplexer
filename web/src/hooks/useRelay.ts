@@ -14,6 +14,7 @@ export interface Session {
   name: string
   cwd: string
   dir_name: string
+  room_name: string
   connected_client: string | null
   created_at: number
   last_heartbeat: number
@@ -22,13 +23,14 @@ export interface Session {
 export interface DisplaySession {
   session_name: string
   dir_name: string
+  room_name: string
   online: boolean
   session_id: string | null   // null for offline-only sessions
   last_seen: number
 }
 
 export interface TranscriptEntry {
-  speaker: 'user' | 'claude' | 'system'
+  speaker: 'user' | 'claude' | 'system' | 'activity'
   text: string
   session_id: string
   timestamp: number
@@ -54,6 +56,10 @@ interface RelayState {
 const MAX_RECONNECT_DELAY = 10_000
 const BASE_RECONNECT_DELAY = 1_000
 
+function makeRoomName(sessionName: string): string {
+  return `vmux_${sessionName.replace(/[^a-zA-Z0-9_\-]/g, '_')}`
+}
+
 function mergeDisplaySessions(
   live: Session[],
   persisted: PersistedSession[],
@@ -65,17 +71,19 @@ function mergeDisplaySessions(
     byName.set(p.session_name, {
       session_name: p.session_name,
       dir_name: p.dir_name,
+      room_name: makeRoomName(p.session_name),
       online: false,
       session_id: null,
       last_seen: p.last_seen,
     })
   }
 
-  // Override with live sessions
+  // Override with live sessions (use server-provided room_name)
   for (const s of live) {
     byName.set(s.name, {
       session_name: s.name,
       dir_name: s.dir_name,
+      room_name: s.room_name,
       online: true,
       session_id: s.session_id,
       last_seen: s.last_heartbeat,
@@ -175,7 +183,7 @@ export function useRelay() {
           break
         case 'session_connected': {
           const sessionName = data.session_name || data.session_id
-          setState(s => ({ ...s, connectedSessionId: data.session_id, connectedSessionName: sessionName }))
+          setState(s => ({ ...s, connectedSessionId: data.session_id, connectedSessionName: sessionName, agentStatus: { state: 'idle', activity: null } }))
           // Load persisted transcripts from IndexedDB
           loadTranscripts(sessionName).then(entries => {
             if (entries.length > 0) {
@@ -190,32 +198,53 @@ export function useRelay() {
         case 'session_not_found':
           setState(s => ({ ...s, connectedSessionId: null, connectedSessionName: null }))
           break
-        case 'transcript':
+        case 'transcript': {
+          // Use session_name from server (works even when viewing a different session)
+          const transcriptSessionName = data.session_name || data.session_id
           setState(s => {
-            // Use session name for transcript keying
-            const sessionName = s.connectedSessionName || data.session_id
             const entry: TranscriptEntry = {
               speaker: data.speaker,
               text: data.text,
               session_id: data.session_id,
               timestamp: Date.now(),
             }
-            const updated = {
+            return {
               ...s,
               transcripts: {
                 ...s.transcripts,
-                [sessionName]: [...(s.transcripts[sessionName] || []), entry],
+                [transcriptSessionName]: [...(s.transcripts[transcriptSessionName] || []), entry],
               },
+            }
+          })
+          scheduleSave(transcriptSessionName)
+          break
+        }
+        case 'agent_status': {
+          const newActivity = data.activity ?? null
+          setState(s => {
+            const prevActivity = s.agentStatus.activity
+            const updated = { ...s, agentStatus: { state: data.state as AgentState, activity: newActivity } }
+            // Add activity to transcript if it changed and is non-empty
+            if (newActivity && newActivity !== prevActivity && s.connectedSessionName) {
+              const sessionName = s.connectedSessionName
+              const entry: TranscriptEntry = {
+                speaker: 'activity',
+                text: newActivity,
+                session_id: s.connectedSessionId || '',
+                timestamp: Date.now(),
+              }
+              updated.transcripts = {
+                ...s.transcripts,
+                [sessionName]: [...(s.transcripts[sessionName] || []), entry],
+              }
             }
             return updated
           })
-          // Schedule persistence
-          const currentName = stateRef.current.connectedSessionName
-          if (currentName) scheduleSave(currentName)
+          // Schedule save if we added a transcript entry
+          const name = stateRef.current.connectedSessionName
+          if (name && data.activity) scheduleSave(name)
           break
-        case 'agent_status':
-          setState(s => ({ ...s, agentStatus: { state: data.state, activity: data.activity ?? null } }))
-          break
+        }
         case 'agent_state':
           // Backward compat: flat state without activity
           setState(s => ({ ...s, agentStatus: { state: data.state, activity: null } }))

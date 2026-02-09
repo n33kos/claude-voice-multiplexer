@@ -27,7 +27,6 @@ KOKORO_URL = os.environ.get("KOKORO_URL", "http://127.0.0.1:8101/v1")
 LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "ws://localhost:7880")
 LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
-LIVEKIT_ROOM = os.environ.get("LIVEKIT_ROOM", "voice_relay")
 
 # --- Session registry ---
 SESSION_TIMEOUT = int(os.environ.get("SESSION_TIMEOUT", "60"))
@@ -44,3 +43,4 @@ SILENCE_THRESHOLD_MS = int(os.environ.get("SILENCE_THRESHOLD_MS", "2000"))
 MIN_SPEECH_DURATION_S = float(os.environ.get("MIN_SPEECH_DURATION_S", "0.5"))
 ECHO_COOLDOWN_S = float(os.environ.get("ECHO_COOLDOWN_S", "0.8"))
 ENERGY_THRESHOLD = int(os.environ.get("ENERGY_THRESHOLD", "500"))
+MAX_RECORDING_S = float(os.environ.get("MAX_RECORDING_S", "180"))  # 3 minutes
