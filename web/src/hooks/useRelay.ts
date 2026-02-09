@@ -97,7 +97,7 @@ function mergeDisplaySessions(
   })
 }
 
-export function useRelay() {
+export function useRelay(authenticated: boolean = true) {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectAttempt = useRef(0)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
@@ -255,8 +255,10 @@ export function useRelay() {
       }
     }
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       setState(s => ({ ...s, status: 'disconnected', liveSessions: [], connectedSessionId: null, connectedSessionName: null, agentStatus: { state: 'idle', activity: null } }))
+      // Don't reconnect on auth failure (4001)
+      if (event.code === 4001) return
       // Exponential backoff reconnect
       const delay = Math.min(BASE_RECONNECT_DELAY * 2 ** reconnectAttempt.current, MAX_RECONNECT_DELAY)
       reconnectAttempt.current++
@@ -269,13 +271,14 @@ export function useRelay() {
   }, [scheduleSave, persistLiveSessions])
 
   useEffect(() => {
+    if (!authenticated) return
     connect()
     return () => {
       clearTimeout(reconnectTimer.current)
       clearTimeout(saveTimer.current)
       wsRef.current?.close()
     }
-  }, [connect])
+  }, [connect, authenticated])
 
   const connectSession = useCallback((sessionId: string) => {
     wsRef.current?.send(JSON.stringify({

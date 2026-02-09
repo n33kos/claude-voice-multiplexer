@@ -4,6 +4,7 @@ import { useLiveKit } from "./hooks/useLiveKit";
 import { useChime } from "./hooks/useChime";
 import { useSettings } from "./hooks/useSettings";
 import { useTheme } from "./hooks/useTheme";
+import { useAuth } from "./hooks/useAuth";
 import { SessionList } from "./components/SessionList/SessionList";
 import { VoiceControls } from "./components/VoiceControls/VoiceControls";
 import { Transcript } from "./components/Transcript/Transcript";
@@ -11,10 +12,12 @@ import { StatusBar } from "./components/StatusBar/StatusBar";
 import { Settings } from "./components/Settings/Settings";
 import { ParticleNetwork } from "./components/ParticleNetwork/ParticleNetwork";
 import { Header } from "./components/Header/Header";
+import { PairScreen } from "./components/PairScreen/PairScreen";
 import styles from "./App.module.scss";
 
 export default function App() {
-  const relay = useRelay();
+  const auth = useAuth();
+  const relay = useRelay(auth.authenticated);
   const livekit = useLiveKit();
   const { settings, updateSettings } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -70,6 +73,19 @@ export default function App() {
     livekit.resetToken,
   ]);
 
+  // Show nothing while checking auth status
+  if (!auth.checked) return null;
+
+  // Auth gate: show pairing screen if auth is enabled and not authenticated
+  if (auth.authEnabled && !auth.authenticated) {
+    return (
+      <>
+        <ParticleNetwork />
+        <PairScreen onPair={auth.pairDevice} />
+      </>
+    );
+  }
+
   return (
     <>
       <ParticleNetwork />
@@ -119,6 +135,10 @@ export default function App() {
           onClose={() => setSettingsOpen(false)}
           settings={settings}
           onUpdate={updateSettings}
+          authEnabled={auth.authEnabled}
+          devices={auth.devices}
+          onGenerateCode={auth.generateCode}
+          onRevokeDevice={auth.revokeDevice}
         />
       </div>
     </>

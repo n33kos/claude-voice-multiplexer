@@ -168,3 +168,128 @@
   background-color: rgba(59, 130, 246, 0.1);
   border-color: rgba(59, 130, 246, 0.3);
 }
+
+// Device management
+.Divider {
+  height: 1px;
+  background-color: var(--color-border);
+  margin: 0.25rem 0;
+}
+
+.SectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.SectionTitle {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.CodeButton {
+  font-size: 0.6875rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  color: var(--color-toggle-active);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  background-color: rgba(59, 130, 246, 0.1);
+  transition: all 0.15s;
+
+  &:hover:not(:disabled) {
+    background-color: rgba(59, 130, 246, 0.2);
+    border-color: rgba(59, 130, 246, 0.5);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.CodeDisplay {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.5rem;
+  background-color: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.CodeLabel {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.CodeValue {
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: 0.25em;
+  color: var(--color-toggle-active);
+  font-family: 'SF Mono', 'Menlo', monospace;
+}
+
+.CodeHint {
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+  margin-left: auto;
+}
+
+.DeviceRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.375rem 0;
+}
+
+.DeviceInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.DeviceName {
+  font-size: 0.8125rem;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.DeviceMeta {
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+}
+
+.RevokeButton {
+  flex-shrink: 0;
+  font-size: 0.6875rem;
+  padding: 0.1875rem 0.5rem;
+  border-radius: 9999px;
+  color: var(--color-delete);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  background-color: transparent;
+  transition: all 0.15s;
+
+  &:hover:not(:disabled) {
+    background-color: rgba(248, 113, 113, 0.1);
+    border-color: rgba(248, 113, 113, 0.5);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.NoDevices {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  font-style: italic;
+}

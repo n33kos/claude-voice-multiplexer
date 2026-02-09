@@ -330,6 +330,56 @@ async def relay_status() -> str:
     return f"Not connected. Relay server is running at {RELAY_URL}. Use relay_standby to connect."
 
 
+@mcp.tool()
+async def generate_auth_code() -> str:
+    """Generate a one-time pairing code for authorizing a new device.
+
+    The code is valid for 60 seconds. Enter it on the web app's pairing
+    screen to authorize the device for voice interaction.
+
+    Requires an active connection to the relay server (call relay_standby first).
+    """
+    if not _relay_state["connected"] or not _relay_state["ws"]:
+        return "Not connected to relay. Use relay_standby first."
+
+    try:
+        ws = _relay_state["ws"]
+        await ws.send(json.dumps({"type": "generate_code"}))
+
+        # Wait for the auth_code response (up to 5 seconds)
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                data = json.loads(raw)
+                if data.get("type") == "auth_code":
+                    code = data.get("code")
+                    if code:
+                        expires_in = data.get("expires_in", 60)
+                        return (
+                            f"Pairing code: {code}\n"
+                            f"Enter this code on the web app to authorize the device.\n"
+                            f"Code expires in {expires_in} seconds."
+                        )
+                    else:
+                        msg = data.get("message", "Authentication is not enabled on the server.")
+                        return msg
+                # Not an auth_code message — put it in the regular queue if applicable
+                if data.get("type") == "voice_message" and _relay_state["message_queue"]:
+                    text = data.get("text", "")
+                    caller = data.get("caller", "remote user")
+                    if text:
+                        await _relay_state["message_queue"].put(f"[Voice from {caller}]: {text}")
+                elif data.get("type") == "ping":
+                    await ws.send(json.dumps({"type": "pong"}))
+            except asyncio.TimeoutError:
+                continue
+
+        return "Timed out waiting for auth code from server."
+    except Exception as e:
+        return f"Failed to generate auth code: {e}"
+
+
 async def _cleanup():
     """Clean up relay connection state."""
     _relay_state["connected"] = False

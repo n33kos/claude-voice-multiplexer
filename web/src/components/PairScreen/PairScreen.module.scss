@@ -1,0 +1,150 @@
+.Container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100dvh;
+  padding: 1rem;
+  background: var(--color-bg);
+}
+
+.Card {
+  width: 100%;
+  max-width: 22rem;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 1rem;
+  padding: 2rem 1.5rem;
+}
+
+.Header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.Title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--color-text-strong);
+  margin-bottom: 0.375rem;
+}
+
+.Subtitle {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+
+.Form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.Field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.Label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.CodeInput {
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: 0.5em;
+  text-align: center;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background-color: var(--color-bg);
+  color: var(--color-text-strong);
+  outline: none;
+  transition: border-color 0.15s;
+
+  &::placeholder {
+    color: var(--color-text-faint);
+    letter-spacing: 0.5em;
+  }
+
+  &:focus {
+    border-color: #3b82f6;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
+.TextInput {
+  font-size: 0.875rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  outline: none;
+  transition: border-color 0.15s;
+
+  &::placeholder {
+    color: var(--color-text-faint);
+  }
+
+  &:focus {
+    border-color: #3b82f6;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
+.Hint {
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+
+  code {
+    font-size: 0.625rem;
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+    background-color: var(--color-surface-secondary);
+    color: var(--color-text-tertiary);
+    font-family: 'SF Mono', 'Menlo', monospace;
+  }
+}
+
+.Error {
+  font-size: 0.8125rem;
+  color: var(--color-status-red);
+  text-align: center;
+  padding: 0.5rem;
+  border-radius: 0.5rem;
+  background-color: rgba(239, 68, 68, 0.1);
+}
+
+.SubmitButton {
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: white;
+  background-color: #3b82f6;
+  transition: background-color 0.15s, opacity 0.15s;
+
+  &:hover:not(:disabled) {
+    background-color: #2563eb;
+  }
+
+  &:active:not(:disabled) {
+    background-color: #1d4ed8;
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}

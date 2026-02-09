@@ -1,3 +1,4 @@
+import { useState } from "react";
 import classNames from "classnames";
 import type { ThemeMode } from "../../hooks/useSettings";
 import type { SettingsProps } from "./Settings.types";
@@ -9,8 +10,48 @@ const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: "dark", label: "Dark" },
 ];
 
-export function Settings({ open, onClose, settings, onUpdate }: SettingsProps) {
+function formatDate(ts: number): string {
+  return new Date(ts * 1000).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+export function Settings({
+  open,
+  onClose,
+  settings,
+  onUpdate,
+  authEnabled,
+  devices,
+  onGenerateCode,
+  onRevokeDevice,
+}: SettingsProps) {
+  const [pairCode, setPairCode] = useState<string | null>(null);
+  const [codeLoading, setCodeLoading] = useState(false);
+  const [revoking, setRevoking] = useState<string | null>(null);
+
   if (!open) return null;
+
+  const handleGenerateCode = async () => {
+    if (!onGenerateCode) return;
+    setCodeLoading(true);
+    const result = await onGenerateCode();
+    setCodeLoading(false);
+    if (result) {
+      setPairCode(result.code);
+      // Auto-clear after expiry
+      setTimeout(() => setPairCode(null), result.expires_in * 1000);
+    }
+  };
+
+  const handleRevoke = async (deviceId: string) => {
+    if (!onRevokeDevice) return;
+    setRevoking(deviceId);
+    await onRevokeDevice(deviceId);
+    setRevoking(null);
+  };
 
   return (
     <div data-component="Settings" className={styles.Overlay}>
@@ -98,6 +139,53 @@ export function Settings({ open, onClose, settings, onUpdate }: SettingsProps) {
               <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.showStatusPill })} />
             </button>
           </label>
+
+          {authEnabled && devices && (
+            <>
+              <div className={styles.Divider} />
+
+              <div className={styles.SectionHeader}>
+                <span className={styles.SectionTitle}>Authorized Devices</span>
+                <button
+                  onClick={handleGenerateCode}
+                  disabled={codeLoading}
+                  className={styles.CodeButton}
+                >
+                  {codeLoading ? "Generating..." : "Pair New Device"}
+                </button>
+              </div>
+
+              {pairCode && (
+                <div className={styles.CodeDisplay}>
+                  <span className={styles.CodeLabel}>Pairing code:</span>
+                  <span className={styles.CodeValue}>{pairCode}</span>
+                  <span className={styles.CodeHint}>Expires in 60s</span>
+                </div>
+              )}
+
+              {devices.map((device) => (
+                <div key={device.device_id} className={styles.DeviceRow}>
+                  <div className={styles.DeviceInfo}>
+                    <span className={styles.DeviceName}>{device.device_name}</span>
+                    <span className={styles.DeviceMeta}>
+                      Paired {formatDate(device.paired_at)}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => handleRevoke(device.device_id)}
+                    disabled={revoking === device.device_id}
+                    className={styles.RevokeButton}
+                  >
+                    {revoking === device.device_id ? "..." : "Revoke"}
+                  </button>
+                </div>
+              ))}
+
+              {devices.length === 0 && (
+                <span className={styles.NoDevices}>No devices paired yet</span>
+              )}
+            </>
+          )}
         </div>
       </div>
     </div>
