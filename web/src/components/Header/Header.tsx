@@ -1,20 +1,13 @@
 import type { HeaderProps } from "./Header.types";
+import styles from "./Header.module.scss";
 
 export function Header({ onSettingsOpen }: HeaderProps) {
   return (
-    <div
-      data-component="Header"
-      className="shrink-0 relative flex items-center justify-center mb-8"
-    >
-      <h1 className="text-lg font-medium text-white tracking-tight font-audiowide-regular">
-        Claude Voice Multiplexer
-      </h1>
-      <button
-        onClick={onSettingsOpen}
-        className="absolute right-0 w-8 h-8 flex items-center justify-center rounded-full text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800 transition-colors"
-      >
+    <div data-component="Header" className={styles.Root}>
+      <h1 className={styles.Title}>Claude Voice Multiplexer</h1>
+      <button onClick={onSettingsOpen} className={styles.SettingsButton}>
         <svg
-          className="w-6 h-6"
+          className={styles.SettingsIcon}
           fill="none"
           viewBox="0 0 24 24"
           strokeWidth={1.5}

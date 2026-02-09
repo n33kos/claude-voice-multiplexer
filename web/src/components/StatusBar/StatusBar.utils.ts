@@ -1,4 +1,4 @@
-export function statusColor(connected: boolean | string): string {
-  if (connected === "connecting") return "bg-yellow-500";
-  return connected && connected !== "disconnected" ? "bg-green-500" : "bg-red-500";
+export function statusColor(connected: boolean | string): "green" | "yellow" | "red" {
+  if (connected === "connecting") return "yellow";
+  return connected && connected !== "disconnected" ? "green" : "red";
 }

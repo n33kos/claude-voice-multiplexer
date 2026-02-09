@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { VoiceBarProps, RGB } from "./VoiceBar.types";
 import { lerp, lerpColor } from "./VoiceBar.utils";
+import styles from "./VoiceBar.module.scss";
 
 const BAR_COUNT = 20;
 const BAR_GAP = 3;
@@ -162,8 +163,7 @@ export function VoiceBar({ agentStatus, isMicEnabled, analyserRef }: VoiceBarPro
     <canvas
       data-component="VoiceBar"
       ref={canvasRef}
-      className="mx-auto h-16"
-      style={{ width: "65%", height: 64 }}
+      className={styles.Canvas}
     />
   );
 }

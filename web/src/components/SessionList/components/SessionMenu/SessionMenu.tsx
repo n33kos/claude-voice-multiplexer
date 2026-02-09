@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { DisplaySession } from "../../../../hooks/useRelay";
+import styles from "./SessionMenu.module.scss";
 
 interface SessionMenuProps {
   session: DisplaySession;
@@ -27,28 +28,28 @@ export function SessionMenu({
   }, [open]);
 
   return (
-    <div ref={menuRef} className="relative">
+    <div ref={menuRef} className={styles.Root}>
       <button
         onClick={(e) => {
           e.stopPropagation();
           setOpen(!open);
         }}
-        className="w-7 h-7 flex items-center justify-center rounded-full text-neutral-500 hover:text-neutral-300 hover:bg-neutral-700/50 transition-colors"
+        className={styles.MenuButton}
       >
-        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+        <svg className={styles.MenuIcon} fill="currentColor" viewBox="0 0 20 20">
           <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
         </svg>
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1 w-44 bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl z-20 overflow-hidden">
+        <div className={styles.Dropdown}>
           <button
             onClick={(e) => {
               e.stopPropagation();
               onClearTranscript(session.session_name);
               setOpen(false);
             }}
-            className="w-full text-left px-3 py-2 text-xs text-neutral-300 hover:bg-neutral-700 transition-colors"
+            className={styles.MenuItem}
           >
             Clear transcripts
           </button>
@@ -59,7 +60,7 @@ export function SessionMenu({
                 onRemoveSession(session.session_name);
                 setOpen(false);
               }}
-              className="w-full text-left px-3 py-2 text-xs text-red-400 hover:bg-neutral-700 transition-colors"
+              className={styles.DeleteItem}
             >
               Delete session
             </button>

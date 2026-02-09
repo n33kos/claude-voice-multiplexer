@@ -1,0 +1,10 @@
+.Icon {
+  width: 1rem;
+  height: 1rem;
+  color: #737373;
+  transition: transform 0.2s;
+}
+
+.Expanded {
+  transform: rotate(180deg);
+}

@@ -1,0 +1,20 @@
+.Root {
+  flex-shrink: 0;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #262626;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: #737373;
+  padding-left: 0.25rem;
+  padding-right: 0.25rem;
+  width: 100%;
+}
+
+.StatusItem {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}

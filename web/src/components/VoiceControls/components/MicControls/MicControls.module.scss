@@ -1,0 +1,163 @@
+.Root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+// Status pill base
+.StatusPill {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  border: 1px solid;
+  transition: all 0.3s;
+}
+
+.StatusPillThinking {
+  background-color: rgba(168, 85, 247, 0.15);
+  border-color: rgba(168, 85, 247, 0.3);
+  color: #c084fc;
+}
+
+.StatusPillSpeaking {
+  background-color: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.3);
+  color: #60a5fa;
+}
+
+.StatusPillError {
+  background-color: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: #fbbf24;
+}
+
+.StatusPillListening {
+  background-color: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #f87171;
+}
+
+.StatusPillIdle {
+  background-color: rgba(115, 115, 115, 0.1);
+  border-color: #404040;
+  color: #737373;
+}
+
+.StatusDot {
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 9999px;
+  background-color: currentColor;
+}
+
+.StatusDotPulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.StatusLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 12rem;
+}
+
+// Button row
+.ButtonRow {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.CircleButton {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.MicButtonActive {
+  background-color: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+
+  &:active {
+    background-color: rgba(239, 68, 68, 0.3);
+  }
+}
+
+.MicButtonInactive {
+  background-color: #262626;
+  border: 1px solid #404040;
+
+  &:active {
+    background-color: #404040;
+  }
+}
+
+.SpeakerButtonActive {
+  background-color: rgba(59, 130, 246, 0.2);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+
+  &:active {
+    background-color: rgba(59, 130, 246, 0.3);
+  }
+}
+
+.SpeakerButtonInactive {
+  background-color: #262626;
+  border: 1px solid #404040;
+
+  &:active {
+    background-color: #404040;
+  }
+}
+
+.InterruptButton {
+  background-color: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+
+  &:active {
+    background-color: rgba(245, 158, 11, 0.3);
+  }
+}
+
+.ButtonIcon {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.MicIconActive {
+  color: #f87171;
+}
+
+.MicIconInactive {
+  color: #a3a3a3;
+}
+
+.SpeakerIconActive {
+  color: #60a5fa;
+}
+
+.SpeakerIconInactive {
+  color: #a3a3a3;
+}
+
+.InterruptIcon {
+  color: #fbbf24;
+}

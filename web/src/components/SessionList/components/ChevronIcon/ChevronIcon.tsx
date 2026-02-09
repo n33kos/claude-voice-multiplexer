@@ -1,7 +1,10 @@
+import classNames from "classnames";
+import styles from "./ChevronIcon.module.scss";
+
 export function ChevronIcon({ expanded }: { expanded: boolean }) {
   return (
     <svg
-      className={`w-4 h-4 text-neutral-500 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
+      className={classNames(styles.Icon, { [styles.Expanded]: expanded })}
       fill="none"
       viewBox="0 0 24 24"
       strokeWidth={2}

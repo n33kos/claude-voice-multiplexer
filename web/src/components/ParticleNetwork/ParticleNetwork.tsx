@@ -1,13 +1,14 @@
 import { useEffect, useRef } from "react";
-import type { Particle } from "./ParticleNetwork.types";
+import type { Connection, Particle } from "./ParticleNetwork.types";
+import styles from "./ParticleNetwork.module.scss";
 
 const PARTICLE_COUNT = Math.floor(window.innerWidth / 10);
-const CONNECTION_DISTANCE = 120;
+const CONNECTION_DISTANCE = 200;
 const PARTICLE_SPEED = 0.3;
 const PARTICLE_RADIUS = 1.5;
-const BASE_DOT_OPACITY = 0.25;
-const CONNECTION_BOOST = 0.08;
-const LINE_OPACITY = 0.18;
+const BASE_DOT_OPACITY = 0.05;
+const CONNECTION_BOOST = 0.05;
+const LINE_OPACITY = 0.15;
 const HUE_DRIFT = 0.1;
 
 export function ParticleNetwork() {
@@ -57,6 +58,7 @@ export function ParticleNetwork() {
         if (p.y > h) p.y = 0;
       }
 
+      const connections: Map<string, Connection> = new Map();
       for (let i = 0; i < pts.length; i++) {
         for (let j = i + 1; j < pts.length; j++) {
           const dx = pts[i].x - pts[j].x;
@@ -70,21 +72,26 @@ export function ParticleNetwork() {
             pts[i].connections++;
             pts[j].connections++;
 
-            const grad = ctx.createLinearGradient(
-              pts[i].x,
-              pts[i].y,
-              pts[j].x,
-              pts[j].y,
-            );
-            grad.addColorStop(0, `hsla(${pts[i].hue}, 80%, 65%, ${opacity})`);
-            grad.addColorStop(1, `hsla(${pts[j].hue}, 80%, 65%, ${opacity})`);
+            const connectionName = `${Math.min(i, j)}-${Math.max(i, j)}`;
+            if (!connections.has(connectionName)) {
+              const grad = ctx.createLinearGradient(
+                pts[i].x,
+                pts[i].y,
+                pts[j].x,
+                pts[j].y,
+              );
+              grad.addColorStop(0, `hsla(${pts[i].hue}, 80%, 65%, ${opacity})`);
+              grad.addColorStop(1, `hsla(${pts[j].hue}, 80%, 65%, ${opacity})`);
 
-            ctx.beginPath();
-            ctx.moveTo(pts[i].x, pts[i].y);
-            ctx.lineTo(pts[j].x, pts[j].y);
-            ctx.strokeStyle = grad;
-            ctx.lineWidth = 1 * proximity;
-            ctx.stroke();
+              ctx.beginPath();
+              ctx.moveTo(pts[i].x, pts[i].y);
+              ctx.lineTo(pts[j].x, pts[j].y);
+              ctx.strokeStyle = grad;
+              ctx.lineWidth = PARTICLE_RADIUS * proximity;
+              ctx.stroke();
+
+              connections.set(connectionName, { i, j, distance: dist });
+            }
           }
         }
       }
@@ -115,8 +122,7 @@ export function ParticleNetwork() {
     <canvas
       data-component="ParticleNetwork"
       ref={canvasRef}
-      className="fixed inset-0 pointer-events-none"
-      style={{ zIndex: 0 }}
+      className={styles.Canvas}
     />
   );
 }

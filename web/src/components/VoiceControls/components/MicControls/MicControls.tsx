@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import classNames from "classnames";
 import {
   useRoomContext,
   useLocalParticipant,
@@ -9,6 +10,7 @@ import { initAudio } from "../../../../hooks/useChime";
 import { VoiceBar } from "../../../VoiceBar/VoiceBar";
 import { useTrackAnalyser } from "../../hooks/useTrackAnalyser";
 import type { MicControlsProps } from "../../VoiceControls.types";
+import styles from "./MicControls.module.scss";
 
 export function MicControls({
   agentStatus,
@@ -72,61 +74,31 @@ export function MicControls({
     onSpeakerMutedChange(!speakerMuted);
   };
 
-  const statusPill = (() => {
+  const pillStyle = (() => {
     switch (agentState) {
       case "thinking":
-        return {
-          bg: "bg-purple-500/15",
-          border: "border-purple-500/30",
-          text: "text-purple-400",
-          dot: "bg-purple-400",
-          label: agentStatus.activity || "Processing...",
-        };
+        return { className: styles.StatusPillThinking, label: agentStatus.activity || "Processing..." };
       case "speaking":
-        return {
-          bg: "bg-blue-500/15",
-          border: "border-blue-500/30",
-          text: "text-blue-400",
-          dot: "bg-blue-400",
-          label: "Speaking",
-        };
+        return { className: styles.StatusPillSpeaking, label: "Speaking" };
       case "error":
-        return {
-          bg: "bg-amber-500/15",
-          border: "border-amber-500/30",
-          text: "text-amber-400",
-          dot: "bg-amber-400",
-          label: agentStatus.activity || "Error",
-        };
+        return { className: styles.StatusPillError, label: agentStatus.activity || "Error" };
       default:
         return autoListen
-          ? {
-              bg: "bg-red-500/10",
-              border: "border-red-500/30",
-              text: "text-red-400",
-              dot: "bg-red-400",
-              label: "Listening",
-            }
-          : {
-              bg: "bg-neutral-500/10",
-              border: "border-neutral-700",
-              text: "text-neutral-500",
-              dot: "bg-neutral-500",
-              label: "Idle",
-            };
+          ? { className: styles.StatusPillListening, label: "Listening" }
+          : { className: styles.StatusPillIdle, label: "Idle" };
     }
   })();
 
   return (
-    <div data-component="VoiceControls" className="flex flex-col items-center gap-3 w-full">
+    <div data-component="VoiceControls" className={styles.Root}>
       {showStatusPill && (
-        <div
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs ${statusPill.bg} border ${statusPill.border} ${statusPill.text} transition-all duration-300`}
-        >
+        <div className={classNames(styles.StatusPill, pillStyle.className)}>
           <span
-            className={`w-1.5 h-1.5 rounded-full ${statusPill.dot} ${agentState === "thinking" ? "animate-pulse" : ""}`}
+            className={classNames(styles.StatusDot, {
+              [styles.StatusDotPulse]: agentState === "thinking",
+            })}
           />
-          <span className="truncate max-w-48">{statusPill.label}</span>
+          <span className={styles.StatusLabel}>{pillStyle.label}</span>
         </div>
       )}
 
@@ -135,21 +107,16 @@ export function MicControls({
         isMicEnabled={isMicActive}
         analyserRef={activeAnalyser}
       />
-      <div className="flex items-center gap-3">
-        {/* Mic button */}
+      <div className={styles.ButtonRow}>
         <button
           onClick={toggleMic}
-          className={`
-            w-12 h-12 rounded-full flex items-center justify-center transition-all
-            ${
-              autoListen
-                ? "bg-red-500/20 border border-red-500/40 active:bg-red-500/30"
-                : "bg-neutral-800 border border-neutral-700 active:bg-neutral-700"
-            }
-          `}
+          className={classNames(
+            styles.CircleButton,
+            autoListen ? styles.MicButtonActive : styles.MicButtonInactive,
+          )}
         >
           <svg
-            className={`w-5 h-5 ${autoListen ? "text-red-400" : "text-neutral-400"}`}
+            className={classNames(styles.ButtonIcon, autoListen ? styles.MicIconActive : styles.MicIconInactive)}
             fill="none"
             viewBox="0 0 24 24"
             strokeWidth={2}
@@ -177,20 +144,15 @@ export function MicControls({
             )}
           </svg>
         </button>
-        {/* Speaker button */}
         <button
           onClick={toggleSpeaker}
-          className={`
-            w-12 h-12 rounded-full flex items-center justify-center transition-all
-            ${
-              speakerMuted
-                ? "bg-neutral-800 border border-neutral-700 active:bg-neutral-700"
-                : "bg-blue-500/20 border border-blue-500/40 active:bg-blue-500/30"
-            }
-          `}
+          className={classNames(
+            styles.CircleButton,
+            speakerMuted ? styles.SpeakerButtonInactive : styles.SpeakerButtonActive,
+          )}
         >
           <svg
-            className={`w-5 h-5 ${speakerMuted ? "text-neutral-400" : "text-blue-400"}`}
+            className={classNames(styles.ButtonIcon, speakerMuted ? styles.SpeakerIconInactive : styles.SpeakerIconActive)}
             fill="none"
             viewBox="0 0 24 24"
             strokeWidth={2}
@@ -211,17 +173,16 @@ export function MicControls({
             )}
           </svg>
         </button>
-        {/* Interrupt button */}
         {showInterrupt && (
           <button
             onClick={() => {
               initAudio();
               onInterrupt();
             }}
-            className="w-12 h-12 rounded-full flex items-center justify-center transition-all bg-amber-500/20 border border-amber-500/40 active:bg-amber-500/30"
+            className={classNames(styles.CircleButton, styles.InterruptButton)}
           >
             <svg
-              className="w-5 h-5 text-amber-400"
+              className={classNames(styles.ButtonIcon, styles.InterruptIcon)}
               fill="none"
               viewBox="0 0 24 24"
               strokeWidth={2}

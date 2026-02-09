@@ -1,3 +1,14 @@
-export function StatusDot({ color }: { color: string }) {
-  return <div className={`w-1.5 h-1.5 rounded-full ${color}`} />;
+import classNames from "classnames";
+import styles from "./StatusDot.module.scss";
+
+export function StatusDot({ color }: { color: "green" | "yellow" | "red" }) {
+  return (
+    <div
+      className={classNames(styles.Dot, {
+        [styles.Green]: color === "green",
+        [styles.Yellow]: color === "yellow",
+        [styles.Red]: color === "red",
+      })}
+    />
+  );
 }

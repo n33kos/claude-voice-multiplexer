@@ -1,0 +1,142 @@
+.Overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+
+  @media (min-width: 640px) {
+    align-items: center;
+  }
+}
+
+.Backdrop {
+  position: absolute;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+.Panel {
+  position: relative;
+  width: 100%;
+  max-width: 28rem;
+  background-color: #171717;
+  border: 1px solid #262626;
+  border-radius: 1rem 1rem 0 0;
+  padding: 1.25rem;
+  padding-bottom: 2rem;
+  animation: slideInFromBottom 0.2s ease-out;
+
+  @media (min-width: 640px) {
+    border-radius: 1rem;
+    padding-bottom: 1.25rem;
+  }
+}
+
+@keyframes slideInFromBottom {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.PanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+}
+
+.Title {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #d4d4d4;
+}
+
+.CloseButton {
+  width: 1.75rem;
+  height: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  color: #737373;
+  transition: color 0.15s, background-color 0.15s;
+
+  &:hover {
+    color: #d4d4d4;
+    background-color: #262626;
+  }
+}
+
+.CloseIcon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.SettingsList {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.SettingRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  cursor: pointer;
+}
+
+.SettingLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.SettingTitle {
+  font-size: 0.875rem;
+  color: #e5e5e5;
+}
+
+.SettingDescription {
+  font-size: 0.75rem;
+  color: #737373;
+}
+
+.Toggle {
+  position: relative;
+  flex-shrink: 0;
+  width: 2.5rem;
+  height: 1.5rem;
+  border-radius: 9999px;
+  transition: background-color 0.2s;
+  background-color: #404040;
+}
+
+.ToggleActive {
+  background-color: #3b82f6;
+}
+
+.ToggleThumb {
+  position: absolute;
+  top: 0.125rem;
+  left: 0.125rem;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 9999px;
+  background-color: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.2s;
+  transform: translateX(0);
+}
+
+.ToggleThumbActive {
+  transform: translateX(1rem);
+}

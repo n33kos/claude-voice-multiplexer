@@ -1,36 +1,28 @@
+import classNames from "classnames";
 import type { SettingsProps } from "./Settings.types";
+import styles from "./Settings.module.scss";
 
 export function Settings({ open, onClose, settings, onUpdate }: SettingsProps) {
   if (!open) return null;
 
   return (
-    <div data-component="Settings" className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-        onClick={onClose}
-      />
-
-      {/* Panel */}
-      <div className="relative w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-t-2xl sm:rounded-2xl p-5 pb-8 sm:pb-5 animate-in slide-in-from-bottom">
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="text-sm font-medium text-neutral-300">Settings</h2>
-          <button
-            onClick={onClose}
-            className="w-7 h-7 flex items-center justify-center rounded-full text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800 transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+    <div data-component="Settings" className={styles.Overlay}>
+      <div className={styles.Backdrop} onClick={onClose} />
+      <div className={styles.Panel}>
+        <div className={styles.PanelHeader}>
+          <h2 className={styles.Title}>Settings</h2>
+          <button onClick={onClose} className={styles.CloseButton}>
+            <svg className={styles.CloseIcon} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
 
-        <div className="flex flex-col gap-4">
-          {/* Auto-listen toggle */}
-          <label className="flex items-center justify-between gap-3 cursor-pointer">
-            <div className="flex flex-col gap-0.5">
-              <span className="text-sm text-neutral-200">Auto-listen</span>
-              <span className="text-xs text-neutral-500">
+        <div className={styles.SettingsList}>
+          <label className={styles.SettingRow}>
+            <div className={styles.SettingLabel}>
+              <span className={styles.SettingTitle}>Auto-listen</span>
+              <span className={styles.SettingDescription}>
                 Automatically start recording when Claude finishes speaking
               </span>
             </div>
@@ -38,25 +30,16 @@ export function Settings({ open, onClose, settings, onUpdate }: SettingsProps) {
               role="switch"
               aria-checked={settings.autoListen}
               onClick={() => onUpdate({ autoListen: !settings.autoListen })}
-              className={`
-                relative shrink-0 w-10 h-6 rounded-full transition-colors duration-200
-                ${settings.autoListen ? 'bg-blue-500' : 'bg-neutral-700'}
-              `}
+              className={classNames(styles.Toggle, { [styles.ToggleActive]: settings.autoListen })}
             >
-              <span
-                className={`
-                  absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200
-                  ${settings.autoListen ? 'translate-x-4' : 'translate-x-0'}
-                `}
-              />
+              <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.autoListen })} />
             </button>
           </label>
 
-          {/* Speaker mute toggle */}
-          <label className="flex items-center justify-between gap-3 cursor-pointer">
-            <div className="flex flex-col gap-0.5">
-              <span className="text-sm text-neutral-200">Mute speaker</span>
-              <span className="text-xs text-neutral-500">
+          <label className={styles.SettingRow}>
+            <div className={styles.SettingLabel}>
+              <span className={styles.SettingTitle}>Mute speaker</span>
+              <span className={styles.SettingDescription}>
                 Mute Claude's voice playback on this tab
               </span>
             </div>
@@ -64,25 +47,16 @@ export function Settings({ open, onClose, settings, onUpdate }: SettingsProps) {
               role="switch"
               aria-checked={settings.speakerMuted}
               onClick={() => onUpdate({ speakerMuted: !settings.speakerMuted })}
-              className={`
-                relative shrink-0 w-10 h-6 rounded-full transition-colors duration-200
-                ${settings.speakerMuted ? 'bg-blue-500' : 'bg-neutral-700'}
-              `}
+              className={classNames(styles.Toggle, { [styles.ToggleActive]: settings.speakerMuted })}
             >
-              <span
-                className={`
-                  absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200
-                  ${settings.speakerMuted ? 'translate-x-4' : 'translate-x-0'}
-                `}
-              />
+              <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.speakerMuted })} />
             </button>
           </label>
 
-          {/* Status pill toggle */}
-          <label className="flex items-center justify-between gap-3 cursor-pointer">
-            <div className="flex flex-col gap-0.5">
-              <span className="text-sm text-neutral-200">Status pill</span>
-              <span className="text-xs text-neutral-500">
+          <label className={styles.SettingRow}>
+            <div className={styles.SettingLabel}>
+              <span className={styles.SettingTitle}>Status pill</span>
+              <span className={styles.SettingDescription}>
                 Show the agent status pill above the voice controls
               </span>
             </div>
@@ -90,17 +64,9 @@ export function Settings({ open, onClose, settings, onUpdate }: SettingsProps) {
               role="switch"
               aria-checked={settings.showStatusPill}
               onClick={() => onUpdate({ showStatusPill: !settings.showStatusPill })}
-              className={`
-                relative shrink-0 w-10 h-6 rounded-full transition-colors duration-200
-                ${settings.showStatusPill ? 'bg-blue-500' : 'bg-neutral-700'}
-              `}
+              className={classNames(styles.Toggle, { [styles.ToggleActive]: settings.showStatusPill })}
             >
-              <span
-                className={`
-                  absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200
-                  ${settings.showStatusPill ? 'translate-x-4' : 'translate-x-0'}
-                `}
-              />
+              <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.showStatusPill })} />
             </button>
           </label>
         </div>
