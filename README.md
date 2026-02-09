@@ -520,7 +520,7 @@ Known issues to investigate and fix:
 
 ### Low Priority / Future
 
-- [ ] **Streaming TTS**: Stream Kokoro output chunks to LiveKit as they're generated instead of waiting for full synthesis
+- [x] **Streaming TTS**: Stream Kokoro output chunks to LiveKit as they're generated instead of waiting for full synthesis
 - [ ] **Streaming STT**: Use streaming Whisper for real-time partial transcriptions
 - [x] **Multi-room LiveKit**: Separate LiveKit rooms per session (`vmux_{session_name}`), audio isolated between sessions
 - [x] **Theme customization**: Light/dark mode with system preference detection and three-option selector (System/Light/Dark)

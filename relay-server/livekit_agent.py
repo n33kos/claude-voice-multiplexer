@@ -331,8 +331,8 @@ class SessionRoom:
                 await self.registry.unregister(self.session_id)
 
     async def handle_claude_response(self, text: str):
-        """Called when Claude sends a text response. Synthesize and play."""
-        print(f"[room:{self.room_name}] Synthesizing response: {text[:50]}...")
+        """Called when Claude sends a text response. Stream-synthesize and play."""
+        print(f"[room:{self.room_name}] Streaming TTS response: {text[:50]}...")
 
         if self._idle_timer and not self._idle_timer.done():
             self._idle_timer.cancel()
@@ -341,20 +341,34 @@ class SessionRoom:
         self._is_speaking = True
         await self._notify_status("speaking")
         try:
+            total_samples = 0
+            publish_start = time.time()
+            got_audio = False
+
             try:
-                audio_bytes = await audio_pipeline.synthesize_pcm(text)
+                async for pcm_chunk in audio_pipeline.synthesize_pcm_stream(text):
+                    got_audio = True
+                    total_samples += await self._publish_audio_chunk(pcm_chunk)
             except Exception as e:
-                print(f"[room:{self.room_name}] Kokoro TTS error: {e}")
-                await self._notify_status("error", "Text-to-speech failed. Is Kokoro running?")
-                self._schedule_error_recovery()
-                return
-            if not audio_bytes:
-                print(f"[room:{self.room_name}] TTS synthesis returned empty")
+                print(f"[room:{self.room_name}] Kokoro TTS stream error: {e}")
+                if not got_audio:
+                    await self._notify_status("error", "Text-to-speech failed. Is Kokoro running?")
+                    self._schedule_error_recovery()
+                    return
+
+            if not got_audio:
+                print(f"[room:{self.room_name}] TTS stream returned no audio")
                 await self._notify_status("error", "Text-to-speech returned no audio.")
                 self._schedule_error_recovery()
                 return
 
-            await self._publish_audio(audio_bytes)
+            # Wait for remaining playback to finish
+            playback_duration = total_samples / LIVEKIT_SAMPLE_RATE
+            elapsed = time.time() - publish_start
+            remaining = playback_duration - elapsed + 0.5
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+
         finally:
             self._is_speaking = False
             self._speaking_ended_at = time.time()
@@ -402,10 +416,10 @@ class SessionRoom:
     def get_current_status(self) -> dict:
         return {"state": self._current_state, "activity": self._current_activity}
 
-    async def _publish_audio(self, pcm_bytes: bytes):
-        """Publish PCM audio bytes to the LiveKit room and wait for playback."""
+    async def _publish_audio_chunk(self, pcm_bytes: bytes) -> int:
+        """Publish a PCM chunk to LiveKit. Returns the number of output samples published."""
         if not self.audio_source:
-            return
+            return 0
 
         samples = np.frombuffer(pcm_bytes, dtype=np.int16)
 
@@ -416,24 +430,18 @@ class SessionRoom:
                 int(len(samples) * LIVEKIT_SAMPLE_RATE / SAMPLE_RATE),
             ).astype(np.int16)
 
-        playback_duration = len(samples) / LIVEKIT_SAMPLE_RATE
-        publish_start = time.time()
+        frame_size = LIVEKIT_SAMPLE_RATE // 100  # 10ms frames
+        for i in range(0, len(samples), frame_size):
+            chunk = samples[i:i + frame_size]
+            if len(chunk) < frame_size:
+                chunk = np.pad(chunk, (0, frame_size - len(chunk)))
 
-        chunk_size = LIVEKIT_SAMPLE_RATE // 100  # 10ms
-        for i in range(0, len(samples), chunk_size):
-            chunk = samples[i:i + chunk_size]
-            if len(chunk) < chunk_size:
-                chunk = np.pad(chunk, (0, chunk_size - len(chunk)))
-
-            frame = rtc.AudioFrame.create(LIVEKIT_SAMPLE_RATE, NUM_CHANNELS, chunk_size)
+            frame = rtc.AudioFrame.create(LIVEKIT_SAMPLE_RATE, NUM_CHANNELS, frame_size)
             audio_data = np.frombuffer(frame.data, dtype=np.int16)
             np.copyto(audio_data, chunk)
             await self.audio_source.capture_frame(frame)
 
-        elapsed = time.time() - publish_start
-        remaining = playback_duration - elapsed + 0.5
-        if remaining > 0:
-            await asyncio.sleep(remaining)
+        return len(samples)
 
     async def _notify_status(self, state: str, activity: str | None = None):
         """Notify connected client of agent status change."""
