@@ -114,7 +114,7 @@ export function VoiceBar({ agentStatus, isMicEnabled, analyserRef }: VoiceBarPro
         } else if (agentState === "thinking") {
           const wave = Math.sin(t * 2.5 + i * 0.35) * 0.5 + 0.5;
           const wave2 = Math.sin(t * 1.8 + i * 0.5 + 1.2) * 0.3 + 0.3;
-          target = (wave * 0.6 + wave2 * 0.4) * height * 0.6 + BAR_MIN_HEIGHT;
+          target = (wave * 0.6 + wave2 * 0.4) * height * 0.3 + BAR_MIN_HEIGHT;
         } else if (agentState === "error") {
           const pulse = Math.sin(t * 1.5) * 0.3 + 0.4;
           target = pulse * height * 0.4 + BAR_MIN_HEIGHT;
