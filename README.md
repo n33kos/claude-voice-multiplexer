@@ -191,7 +191,8 @@ A static-built React app served by the relay server. Mobile-first design for pho
 - Interrupt button (visible during thinking/speaking/error states)
 - Audio chimes on state transitions (ascending for ready, descending for captured)
 - Live transcript with IndexedDB persistence (keyed by session name)
-- Settings panel (auto-listen toggle, speaker mute)
+- Settings panel (theme selector, auto-listen toggle, speaker mute)
+- Light/dark mode with system preference detection (three-option: System/Light/Dark)
 - Connection status bar (Relay Server / LiveKit Audio / Claude indicators)
 - Animated rainbow gradient header
 
@@ -203,20 +204,21 @@ A static-built React app served by the relay server. Mobile-first design for pho
 | `hooks/useRelay.ts`            | WebSocket state, `AgentStatus`, persistent sessions, transcript management |
 | `hooks/useLiveKit.ts`          | LiveKit token fetching and connection state                                |
 | `hooks/useChime.ts`            | Audio feedback chimes on state transitions                                 |
-| `hooks/useSettings.ts`         | localStorage-backed settings (auto-listen, speaker mute)                   |
+| `hooks/useSettings.ts`         | localStorage-backed settings (theme, auto-listen, speaker mute)            |
+| `hooks/useTheme.ts`            | Theme application (system preference detection, data-theme attribute)      |
 | `hooks/useTranscriptDB.ts`     | IndexedDB persistence for transcripts and sessions                         |
 | `components/VoiceControls/`    | LiveKit room, mic/speaker/interrupt controls, audio analysers              |
 | `components/VoiceBar/`         | Canvas audio visualizer with voice-optimized frequency mapping             |
 | `components/SessionList/`      | Collapsible session drawer with dropdown menus                             |
 | `components/Transcript/`       | Scrolling transcript with activity entries                                 |
 | `components/StatusBar/`        | Connection status indicators (Relay Server / LiveKit / Claude)             |
-| `components/Settings/`         | Settings panel (auto-listen, speaker mute)                                 |
+| `components/Settings/`         | Settings panel (theme, auto-listen, speaker mute)                          |
 | `components/Header/`           | Animated rainbow gradient header with settings button                      |
 | `components/ParticleNetwork/`  | Background particle animation canvas                                       |
 
 Components use a folder-based architecture with co-located `.module.scss` stylesheets, `.types.d.ts` type definitions, and sub-components in nested `components/` directories.
 
-**Tech stack:** React 19, Vite 7, LiveKit React SDK, CSS Modules + SCSS, TypeScript
+**Tech stack:** React 19, Vite 7, LiveKit React SDK, CSS Modules + SCSS (with CSS custom property theming), TypeScript
 
 ### 4. Skills (`skills/`)
 
@@ -423,7 +425,7 @@ claude-voice-multiplexer/
 │   │   ├── App.tsx                      # Root component
 │   │   ├── App.module.scss              # Root layout styles
 │   │   ├── main.tsx                     # Entry point
-│   │   ├── index.scss                   # Global reset and base styles
+│   │   ├── index.scss                   # Global reset, theme tokens (CSS custom properties)
 │   │   ├── components/                  # Folder-based component architecture
 │   │   │   ├── Header/                  # Header with settings button
 │   │   │   ├── ParticleNetwork/         # Background particle animation
@@ -437,7 +439,8 @@ claude-voice-multiplexer/
 │   │       ├── useRelay.ts              # WebSocket state, persistent sessions
 │   │       ├── useLiveKit.ts            # LiveKit token + connection
 │   │       ├── useChime.ts              # Audio feedback chimes
-│   │       ├── useSettings.ts           # localStorage settings
+│   │       ├── useSettings.ts           # localStorage settings (theme, auto-listen, mute)
+│   │       ├── useTheme.ts             # Theme application (system pref + manual override)
 │   │       └── useTranscriptDB.ts       # IndexedDB persistence
 │   ├── index.html
 │   ├── package.json
@@ -520,6 +523,6 @@ Known issues to investigate and fix:
 - [ ] **Streaming TTS**: Stream Kokoro output chunks to LiveKit as they're generated instead of waiting for full synthesis
 - [ ] **Streaming STT**: Use streaming Whisper for real-time partial transcriptions
 - [x] **Multi-room LiveKit**: Separate LiveKit rooms per session (`vmux_{session_name}`), audio isolated between sessions
-- [ ] **Theme customization**: Light/dark mode toggle, custom accent colors
+- [x] **Theme customization**: Light/dark mode with system preference detection and three-option selector (System/Light/Dark)
 - [ ] **Keyboard shortcuts**: Desktop web client keyboard shortcuts for mic toggle, interrupt, session switching
 - [ ] **Tunnel integration**: Built-in Cloudflare/ngrok tunnel setup for remote access
