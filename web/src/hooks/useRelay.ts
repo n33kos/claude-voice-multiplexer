@@ -9,24 +9,31 @@ import {
   type PersistedSession,
 } from './useTranscriptDB'
 
+export interface ConnectedClient {
+  client_id: string
+  device_name: string
+}
+
 export interface Session {
   session_id: string
   name: string
   cwd: string
   dir_name: string
   room_name: string
-  connected_client: string | null
+  connected_clients: ConnectedClient[]
   created_at: number
   last_heartbeat: number
 }
 
 export interface DisplaySession {
   session_name: string
+  display_name: string          // user-set name, falls back to session_name
   dir_name: string
   room_name: string
   online: boolean
   session_id: string | null   // null for offline-only sessions
   last_seen: number
+  connected_clients: ConnectedClient[]
 }
 
 export interface TranscriptEntry {
@@ -66,15 +73,22 @@ function mergeDisplaySessions(
 ): DisplaySession[] {
   const byName = new Map<string, DisplaySession>()
 
+  // Build a lookup for persisted display names
+  const displayNames = new Map(
+    persisted.filter(p => p.display_name).map(p => [p.session_name, p.display_name!])
+  )
+
   // Add persisted (offline) sessions first
   for (const p of persisted) {
     byName.set(p.session_name, {
       session_name: p.session_name,
+      display_name: p.display_name || p.session_name,
       dir_name: p.dir_name,
       room_name: makeRoomName(p.session_name),
       online: false,
       session_id: null,
       last_seen: p.last_seen,
+      connected_clients: [],
     })
   }
 
@@ -82,11 +96,13 @@ function mergeDisplaySessions(
   for (const s of live) {
     byName.set(s.name, {
       session_name: s.name,
+      display_name: displayNames.get(s.name) || s.name,
       dir_name: s.dir_name,
       room_name: s.room_name,
       online: true,
       session_id: s.session_id,
       last_seen: s.last_heartbeat,
+      connected_clients: s.connected_clients || [],
     })
   }
 
@@ -326,6 +342,20 @@ export function useRelay(authenticated: boolean = true) {
     }))
   }, [])
 
+  const renameSession = useCallback((sessionName: string, displayName: string) => {
+    setState(s => ({
+      ...s,
+      persistedSessions: s.persistedSessions.map(p =>
+        p.session_name === sessionName ? { ...p, display_name: displayName || undefined } : p
+      ),
+    }))
+    // Persist to IndexedDB
+    const existing = stateRef.current.persistedSessions.find(p => p.session_name === sessionName)
+    if (existing) {
+      savePersistedSession({ ...existing, display_name: displayName || undefined })
+    }
+  }, [])
+
   // Merge live + persisted for display
   const displaySessions = mergeDisplaySessions(state.liveSessions, state.persistedSessions)
 
@@ -362,6 +392,7 @@ export function useRelay(authenticated: boolean = true) {
     interruptAgent,
     clearTranscript,
     removeSession,
+    renameSession,
     viewSessionTranscript,
   }
 }

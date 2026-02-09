@@ -17,6 +17,11 @@ COOKIE_NAME = "vmux_token"
 # In-memory store for pending pairing codes: {code: {expires_at}}
 _pending_codes: dict[str, dict] = {}
 
+# Rate limiting for pairing attempts: {ip: [timestamps]}
+_pair_attempts: dict[str, list[float]] = {}
+PAIR_RATE_LIMIT = 5  # max attempts per window
+PAIR_RATE_WINDOW = 60  # window in seconds
+
 
 def _load_devices() -> list[dict]:
     try:
@@ -47,6 +52,22 @@ def generate_pair_code() -> str:
     code = f"{random.randint(0, 999999):06d}"
     _pending_codes[code] = {"expires_at": now + CODE_TTL_S}
     return code
+
+
+def check_pair_rate_limit(client_ip: str) -> bool:
+    """Check if a client IP has exceeded the pairing attempt rate limit.
+
+    Returns True if the request is allowed, False if rate-limited.
+    """
+    now = time.time()
+    attempts = _pair_attempts.get(client_ip, [])
+    # Prune old attempts outside the window
+    attempts = [t for t in attempts if now - t < PAIR_RATE_WINDOW]
+    _pair_attempts[client_ip] = attempts
+    if len(attempts) >= PAIR_RATE_LIMIT:
+        return False
+    attempts.append(now)
+    return True
 
 
 def validate_pair_code(code: str) -> bool:

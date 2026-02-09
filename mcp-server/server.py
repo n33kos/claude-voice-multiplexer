@@ -36,9 +36,9 @@ mcp = FastMCP("voice-multiplexer")
 
 RELAY_URL = os.environ.get("RELAY_URL", "ws://localhost:3100")
 SESSION_ID = str(uuid.uuid4())[:8]
-HEARTBEAT_INTERVAL = 15  # seconds
-STANDBY_LISTEN_TIMEOUT = 120  # seconds — how long each relay_standby call waits
-RECONNECT_MAX_DELAY = 30  # seconds — max backoff between reconnect attempts
+HEARTBEAT_INTERVAL = 30  # seconds
+STANDBY_LISTEN_TIMEOUT = 600  # seconds (10 min) — how long each relay_standby call waits
+RECONNECT_MAX_DELAY = 60  # seconds — max backoff between reconnect attempts
 RECONNECT_BASE_DELAY = 2  # seconds — initial backoff
 
 # Derive HTTP URL from WebSocket URL for health checks
@@ -59,7 +59,7 @@ async def _check_relay_health() -> str | None:
     """Check if the relay server is reachable. Returns error message or None if healthy."""
     try:
         import urllib.request
-        req = urllib.request.Request(f"{_RELAY_HTTP_URL}/api/sessions", method="GET")
+        req = urllib.request.Request(f"{_RELAY_HTTP_URL}/api/auth/status", method="GET")
         urllib.request.urlopen(req, timeout=3)
         return None
     except Exception:
@@ -98,7 +98,7 @@ async def _connect_to_relay(session_name: str = "") -> str | None:
     _relay_state["session_name"] = metadata["name"]
 
     ws_url = f"{RELAY_URL}/ws/session"
-    max_attempts = 5
+    max_attempts = 10
     delay = RECONNECT_BASE_DELAY
 
     for attempt in range(1, max_attempts + 1):
@@ -156,7 +156,11 @@ async def _connect_to_relay(session_name: str = "") -> str | None:
 
 
 async def _start_listener(ws):
-    """Background task that reads WebSocket messages into the queue."""
+    """Background task that reads WebSocket messages into the queue.
+
+    On connection loss, automatically attempts to reconnect with backoff
+    instead of terminating. Only gives up after repeated failures.
+    """
     queue = _relay_state["message_queue"]
     while _relay_state["connected"]:
         try:
@@ -173,18 +177,83 @@ async def _start_listener(ws):
             elif data.get("type") == "disconnect":
                 await queue.put("[System]: Relay server requested disconnect.")
                 await _cleanup()
-                break
+                return
         except asyncio.TimeoutError:
-            # No message within timeout — keep listening
             continue
-        except websockets.ConnectionClosed:
-            await queue.put("[System]: Connection to relay server lost.")
-            await _cleanup()
-            break
-        except Exception as e:
-            await queue.put(f"[System]: Relay error: {e}")
-            await _cleanup()
-            break
+        except (websockets.ConnectionClosed, Exception):
+            # Connection lost — attempt auto-reconnect
+            new_ws = await _attempt_reconnect()
+            if new_ws:
+                ws = new_ws  # swap to new connection and keep listening
+            else:
+                await queue.put("[System]: Connection to relay server lost. Reconnect failed.")
+                await _cleanup()
+                return
+
+
+async def _attempt_reconnect() -> object | None:
+    """Try to re-establish the WebSocket connection with backoff.
+
+    Returns the new WebSocket on success, or None after all attempts fail.
+    Preserves the existing message queue so no messages are lost.
+    """
+    # Cancel the old heartbeat (it's using the dead ws)
+    old_hb = _relay_state.get("heartbeat_task")
+    if old_hb:
+        old_hb.cancel()
+        _relay_state["heartbeat_task"] = None
+
+    if _relay_state["ws"]:
+        try:
+            await _relay_state["ws"].close()
+        except Exception:
+            pass
+        _relay_state["ws"] = None
+
+    ws_url = f"{RELAY_URL}/ws/session"
+    delay = RECONNECT_BASE_DELAY
+    max_attempts = 10
+
+    for attempt in range(1, max_attempts + 1):
+        await asyncio.sleep(delay)
+
+        health_err = await _check_relay_health()
+        if health_err:
+            delay = min(delay * 2, RECONNECT_MAX_DELAY)
+            continue
+
+        try:
+            ws = await websockets.connect(ws_url)
+        except Exception:
+            delay = min(delay * 2, RECONNECT_MAX_DELAY)
+            continue
+
+        # Re-register with same session metadata
+        metadata = _get_session_metadata()
+        await ws.send(json.dumps({"type": "register", **metadata}))
+
+        try:
+            ack = await asyncio.wait_for(ws.recv(), timeout=5.0)
+            ack_data = json.loads(ack)
+            if ack_data.get("type") != "registered":
+                await ws.close()
+                delay = min(delay * 2, RECONNECT_MAX_DELAY)
+                continue
+        except (asyncio.TimeoutError, Exception):
+            try:
+                await ws.close()
+            except Exception:
+                pass
+            delay = min(delay * 2, RECONNECT_MAX_DELAY)
+            continue
+
+        # Success — update state and restart heartbeat
+        _relay_state["ws"] = ws
+        _relay_state["connected"] = True
+        _relay_state["heartbeat_task"] = asyncio.create_task(_start_heartbeat(ws))
+        return ws
+
+    return None
 
 
 async def _start_heartbeat(ws):
@@ -212,7 +281,7 @@ async def relay_standby(session_name: str = "") -> str:
     Args:
         session_name: Optional friendly name for this session (defaults to directory name)
     """
-    # If already connected, signal that Claude is ready and wait for next message
+    # If connected, signal readiness and wait for next message
     if _relay_state["connected"] and _relay_state["message_queue"]:
         # Tell the relay server Claude is listening again
         try:
@@ -221,6 +290,8 @@ async def relay_standby(session_name: str = "") -> str:
                 "session_id": SESSION_ID,
             }))
         except Exception:
+            # Send failed — connection may be dead, but the listener
+            # task will handle reconnection. Fall through to wait on queue.
             pass
 
         try:
@@ -228,6 +299,12 @@ async def relay_standby(session_name: str = "") -> str:
                 _relay_state["message_queue"].get(),
                 timeout=STANDBY_LISTEN_TIMEOUT,
             )
+            # If we got a system reconnect-failure message, try a fresh connect
+            if msg.startswith("[System]:") and "Reconnect failed" in msg:
+                err = await _connect_to_relay(session_name or _relay_state.get("session_name", ""))
+                if err:
+                    return err
+                return "[Standby]: Reconnected after connection loss. Still listening."
             return msg
         except asyncio.TimeoutError:
             return "[Standby]: No voice input received. Still listening."
@@ -339,44 +416,33 @@ async def generate_auth_code() -> str:
 
     Requires an active connection to the relay server (call relay_standby first).
     """
-    if not _relay_state["connected"] or not _relay_state["ws"]:
-        return "Not connected to relay. Use relay_standby first."
-
     try:
-        ws = _relay_state["ws"]
-        await ws.send(json.dumps({"type": "generate_code"}))
+        import urllib.request
+        req = urllib.request.Request(
+            f"{_RELAY_HTTP_URL}/api/auth/session-code",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            data=b"{}",
+        )
+        resp = urllib.request.urlopen(req, timeout=5)
+        data = json.loads(resp.read())
 
-        # Wait for the auth_code response (up to 5 seconds)
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
-                data = json.loads(raw)
-                if data.get("type") == "auth_code":
-                    code = data.get("code")
-                    if code:
-                        expires_in = data.get("expires_in", 60)
-                        return (
-                            f"Pairing code: {code}\n"
-                            f"Enter this code on the web app to authorize the device.\n"
-                            f"Code expires in {expires_in} seconds."
-                        )
-                    else:
-                        msg = data.get("message", "Authentication is not enabled on the server.")
-                        return msg
-                # Not an auth_code message — put it in the regular queue if applicable
-                if data.get("type") == "voice_message" and _relay_state["message_queue"]:
-                    text = data.get("text", "")
-                    caller = data.get("caller", "remote user")
-                    if text:
-                        await _relay_state["message_queue"].put(f"[Voice from {caller}]: {text}")
-                elif data.get("type") == "ping":
-                    await ws.send(json.dumps({"type": "pong"}))
-            except asyncio.TimeoutError:
-                continue
-
-        return "Timed out waiting for auth code from server."
+        if "code" in data:
+            code = data["code"]
+            expires_in = data.get("expires_in", 60)
+            return (
+                f"Pairing code: {code}\n"
+                f"Enter this code on the web app to authorize the device.\n"
+                f"Code expires in {expires_in} seconds."
+            )
+        elif "error" in data:
+            return data["error"]
+        return "Unexpected response from relay server."
     except Exception as e:
+        # Check if relay is reachable at all
+        health_err = await _check_relay_health()
+        if health_err:
+            return health_err
         return f"Failed to generate auth code: {e}"
 
 

@@ -23,7 +23,7 @@ class Session:
     ws: object  # WebSocket connection
     created_at: float = field(default_factory=time.time)
     last_heartbeat: float = field(default_factory=time.time)
-    connected_client: str | None = None  # client ID currently connected to this session
+    connected_clients: dict[str, str] = field(default_factory=dict)  # client_id → device_name
 
     @property
     def room_name(self) -> str:
@@ -40,7 +40,10 @@ class Session:
             "cwd": self.cwd,
             "dir_name": self.dir_name,
             "room_name": self.room_name,
-            "connected_client": self.connected_client,
+            "connected_clients": [
+                {"client_id": cid, "device_name": dname}
+                for cid, dname in self.connected_clients.items()
+            ],
             "created_at": self.created_at,
             "last_heartbeat": self.last_heartbeat,
         }
@@ -79,19 +82,22 @@ class SessionRegistry:
         await self._prune_stale()
         return [s.to_dict() for s in self._sessions.values()]
 
-    async def connect_client(self, session_id: str, client_id: str) -> bool:
+    async def connect_client(self, session_id: str, client_id: str, device_name: str = "Unknown") -> bool:
         async with self._lock:
             session = self._sessions.get(session_id)
             if session:
-                session.connected_client = client_id
+                session.connected_clients[client_id] = device_name
                 return True
             return False
 
-    async def disconnect_client(self, session_id: str):
+    async def disconnect_client(self, session_id: str, client_id: str | None = None):
         async with self._lock:
             session = self._sessions.get(session_id)
             if session:
-                session.connected_client = None
+                if client_id:
+                    session.connected_clients.pop(client_id, None)
+                else:
+                    session.connected_clients.clear()
 
     async def _prune_stale(self):
         async with self._lock:

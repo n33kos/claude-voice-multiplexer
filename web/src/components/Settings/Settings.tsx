@@ -1,8 +1,43 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import classNames from "classnames";
 import type { ThemeMode } from "../../hooks/useSettings";
 import type { SettingsProps } from "./Settings.types";
 import styles from "./Settings.module.scss";
+
+interface ServiceHealth {
+  whisper: { status: string };
+  kokoro: { status: string };
+  livekit: { status: string };
+  relay: { status: string };
+}
+
+function useServiceHealth(open: boolean) {
+  const [health, setHealth] = useState<ServiceHealth | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const resp = await fetch("/api/health");
+      if (resp.ok) setHealth(await resp.json());
+    } catch {
+      // relay itself is down
+      setHealth({
+        whisper: { status: "unknown" },
+        kokoro: { status: "unknown" },
+        livekit: { status: "unknown" },
+        relay: { status: "down" },
+      });
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (open) refresh();
+  }, [open, refresh]);
+
+  return { health, loading, refresh };
+}
 
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: "system", label: "System" },
@@ -25,12 +60,14 @@ export function Settings({
   onUpdate,
   authEnabled,
   devices,
+  connectedClients,
   onGenerateCode,
   onRevokeDevice,
 }: SettingsProps) {
   const [pairCode, setPairCode] = useState<string | null>(null);
   const [codeLoading, setCodeLoading] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const { health, loading: healthLoading, refresh: refreshHealth } = useServiceHealth(open);
 
   if (!open) return null;
 
@@ -139,6 +176,82 @@ export function Settings({
               <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.showStatusPill })} />
             </button>
           </label>
+
+          <label className={styles.SettingRow}>
+            <div className={styles.SettingLabel}>
+              <span className={styles.SettingTitle}>Notifications</span>
+              <span className={styles.SettingDescription}>
+                Browser notification when Claude finishes while tab is hidden
+              </span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.notifications}
+              onClick={() => onUpdate({ notifications: !settings.notifications })}
+              className={classNames(styles.Toggle, { [styles.ToggleActive]: settings.notifications })}
+            >
+              <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.notifications })} />
+            </button>
+          </label>
+
+          <div className={styles.Divider} />
+
+          <div className={styles.SectionHeader}>
+            <span className={styles.SectionTitle}>Services</span>
+            <button
+              onClick={refreshHealth}
+              disabled={healthLoading}
+              className={styles.CodeButton}
+            >
+              {healthLoading ? "Checking..." : "Refresh"}
+            </button>
+          </div>
+
+          {health && (
+            <div className={styles.ServiceList}>
+              {(["relay", "whisper", "kokoro", "livekit"] as const).map((svc) => {
+                const status = health[svc]?.status ?? "unknown";
+                const labels = { relay: "Relay Server", whisper: "Whisper (STT)", kokoro: "Kokoro (TTS)", livekit: "LiveKit" };
+                return (
+                  <div key={svc} className={styles.ServiceRow}>
+                    <span
+                      className={classNames(styles.ServiceDot, {
+                        [styles.ServiceDotOk]: status === "ok",
+                        [styles.ServiceDotDown]: status === "down",
+                        [styles.ServiceDotUnknown]: status === "unknown",
+                      })}
+                    />
+                    <span className={styles.ServiceName}>{labels[svc]}</span>
+                    <span className={classNames(styles.ServiceStatus, {
+                      [styles.ServiceStatusOk]: status === "ok",
+                      [styles.ServiceStatusDown]: status === "down",
+                    })}>
+                      {status === "ok" ? "Running" : status === "down" ? "Down" : "Unknown"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {connectedClients && connectedClients.length > 0 && (
+            <>
+              <div className={styles.Divider} />
+              <div className={styles.SectionHeader}>
+                <span className={styles.SectionTitle}>Connected Clients</span>
+                <span className={styles.ClientCount}>{connectedClients.length}</span>
+              </div>
+              <div className={styles.ServiceList}>
+                {connectedClients.map((client) => (
+                  <div key={client.client_id} className={styles.ServiceRow}>
+                    <span className={classNames(styles.ServiceDot, styles.ServiceDotOk)} />
+                    <span className={styles.ServiceName}>{client.device_name}</span>
+                    <span className={styles.ServiceStatus}>{client.client_id}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
 
           {authEnabled && devices && (
             <>

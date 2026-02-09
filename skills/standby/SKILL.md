@@ -16,19 +16,24 @@ Before entering standby, verify services are installed and running:
 3. If exit code is non-zero (services not running), run `nohup "${CLAUDE_PLUGIN_ROOT}/scripts/start.sh" > /tmp/vmux-start.log 2>&1 &` and wait up to 90 seconds for Kokoro to finish loading.
 4. If the relay server still isn't responding after starting, inform the user and stop.
 
-## Show Connection URL
+## Show Connection URL and Pairing Code
 
-After services are confirmed running, print the web app URL so the user knows where to connect.
-Get the local network IP by running: `ipconfig getifaddr en0 2>/dev/null || echo localhost`
-Then print a message like:
+After services are confirmed running, print the web app URL and a fresh pairing code so the user can connect immediately.
+
+1. Get the local network IP by running: `ipconfig getifaddr en0 2>/dev/null || echo localhost`
+2. Call the `generate_auth_code` MCP tool to get a one-time pairing code
+3. Print everything together in a single block like:
 
 ```
 Voice Multiplexer ready — open on your phone:
   http://<local-ip>:3100
   (or http://localhost:3100 from this machine)
+
+Pairing code: <CODE>  (expires in 60s)
 ```
 
 Use the `RELAY_PORT` from the config (default 3100). If `DEV_MODE=true`, show `:5173` for the Vite dev server instead.
+If the auth code tool returns an error (e.g. auth not enabled), skip the pairing code line silently — just show the URL.
 
 ## Instructions
 
@@ -49,6 +54,10 @@ When invoked, use the `relay_standby` MCP tool to register this session with the
 - If `relay_standby` returns a `[System]` error or disconnect message, inform the user and stop the loop.
 - Keep responses short and spoken-word friendly. Avoid markdown, bullet lists, or code blocks in your `relay_respond` text.
 - You can still use all your normal tools while in standby (read files, run commands, etc.) — just relay the results conversationally.
+- **NEVER use `AskUserQuestion` or `EnterPlanMode` while in standby.** These tools block the CLI waiting for terminal input, which freezes the voice relay — the user won't hear a response and messages will pile up. Instead:
+  - If you need to clarify something, ask the question conversationally via `relay_respond` and wait for the answer on the next `relay_standby` call.
+  - If a task would normally warrant planning, describe your approach via `relay_respond` and ask for verbal confirmation before proceeding.
+  - Bypass permission prompts where possible (e.g., proceed with safe defaults rather than asking for confirmation).
 
 ## Activity Updates
 

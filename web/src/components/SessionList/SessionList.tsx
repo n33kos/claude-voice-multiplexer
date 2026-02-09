@@ -9,13 +9,13 @@ import styles from "./SessionList.module.scss";
 export function SessionList({
   sessions,
   connectedSessionId,
-  connectedSessionName,
   expanded,
   onToggleExpanded,
   onConnect,
   onDisconnect,
   onClearTranscript,
   onRemoveSession,
+  onRenameSession,
 }: SessionListProps) {
   if (sessions.length === 0) {
     return (
@@ -42,7 +42,7 @@ export function SessionList({
             <>
               <div className={styles.GreenDot} />
               <span className={styles.SessionName}>
-                {connectedSessionName || connectedSession.session_name}
+                {connectedSession.display_name}
               </span>
             </>
           ) : (
@@ -92,7 +92,7 @@ export function SessionList({
                           [styles.NameTextOffline]: !session.online,
                         })}
                       >
-                        {session.session_name}
+                        {session.display_name}
                       </span>
                       {!session.online && (
                         <span className={styles.OfflineBadge}>offline</span>
@@ -108,6 +108,7 @@ export function SessionList({
                       session={session}
                       onClearTranscript={onClearTranscript}
                       onRemoveSession={onRemoveSession}
+                      onRenameSession={onRenameSession}
                     />
                   </div>
                 </div>

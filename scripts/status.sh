@@ -12,7 +12,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-PID_FILE="$PROJECT_DIR/.vmux.pid"
+PID_FILE="$HOME/.claude/voice-multiplexer/.vmux.pid"
 PROCESS_NAME="claude-voice-multiplexer:start"
 DATA_DIR="$HOME/.claude/voice-multiplexer"
 QUIET=false

@@ -19,8 +19,8 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-PID_FILE="$PROJECT_DIR/.vmux.pid"
 DATA_DIR="$HOME/.claude/voice-multiplexer"
+PID_FILE="$DATA_DIR/.vmux.pid"
 
 # Load configuration
 if [ -f "$DATA_DIR/voice-multiplexer.env" ]; then
@@ -270,7 +270,7 @@ if curl -s "$LIVEKIT_CHECK_URL" > /dev/null 2>&1; then
     log "  LiveKit: already running on :${LIVEKIT_PORT}"
 else
     log "  LiveKit: starting on :${LIVEKIT_PORT}..."
-    livekit-server --dev --bind 127.0.0.1 > /dev/null 2>&1 &
+    livekit-server --dev --bind 0.0.0.0 > /dev/null 2>&1 &
     PIDS+=($!)
     sleep 2
     log "  LiveKit: running on :${LIVEKIT_PORT}"

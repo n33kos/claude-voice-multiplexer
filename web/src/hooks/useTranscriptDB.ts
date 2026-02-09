@@ -9,6 +9,7 @@ export interface PersistedSession {
   session_name: string
   dir_name: string
   last_seen: number
+  display_name?: string
 }
 
 function openDB(): Promise<IDBDatabase> {

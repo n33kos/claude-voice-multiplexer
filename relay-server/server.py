@@ -19,7 +19,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, 
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import RELAY_HOST, RELAY_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AUTH_ENABLED
+from config import RELAY_HOST, RELAY_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AUTH_ENABLED, WHISPER_URL, KOKORO_URL
 import auth
 from registry import SessionRegistry
 from livekit_agent import RelayAgent
@@ -65,20 +65,22 @@ def _get_ws_device(ws: WebSocket) -> dict | None:
 
 
 async def _notify_client_status(session_id: str, state: str, activity: str | None = None):
-    """Send agent status update to the web client connected to a session."""
+    """Send agent status update to all web clients connected to a session."""
     session = await registry.get(session_id)
-    if session and session.connected_client:
-        client_ws = _clients.get(session.connected_client)
-        if client_ws:
-            try:
-                await client_ws.send_text(json.dumps({
-                    "type": "agent_status",
-                    "state": state,
-                    "activity": activity,
-                    "timestamp": time.time(),
-                }))
-            except Exception:
-                pass
+    if session and session.connected_clients:
+        msg = json.dumps({
+            "type": "agent_status",
+            "state": state,
+            "activity": activity,
+            "timestamp": time.time(),
+        })
+        for client_id in list(session.connected_clients):
+            client_ws = _clients.get(client_id)
+            if client_ws:
+                try:
+                    await client_ws.send_text(msg)
+                except Exception:
+                    pass
 
 
 async def _notify_client_transcript(session_id: str, speaker: str, text: str):
@@ -104,6 +106,16 @@ async def _notify_client_transcript(session_id: str, speaker: str, text: str):
             pass
 
 
+async def _warmup_kokoro():
+    """Send a tiny TTS request to Kokoro to prime the model, reducing first-response latency."""
+    try:
+        import audio as audio_pipeline
+        await audio_pipeline.synthesize("ready", response_format="pcm")
+        print("[server] Kokoro TTS warm-up complete")
+    except Exception as e:
+        print(f"[server] Kokoro TTS warm-up failed (non-fatal): {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _agent
@@ -113,6 +125,8 @@ async def lifespan(app: FastAPI):
         print("[server] Authentication enabled")
     else:
         print("[server] Authentication disabled (no AUTH_SECRET set)")
+    # Warm up Kokoro TTS in the background (non-blocking)
+    asyncio.create_task(_warmup_kokoro())
     yield
     if _agent:
         await _agent.stop()
@@ -139,6 +153,10 @@ async def pair_device(request: Request):
     """Pair a new device using a one-time code."""
     if not AUTH_ENABLED:
         return JSONResponse({"error": "Authentication is not enabled"}, status_code=400)
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not auth.check_pair_rate_limit(client_ip):
+        return JSONResponse({"error": "Too many pairing attempts. Try again later."}, status_code=429)
 
     body = await request.json()
     code = body.get("code", "").strip()
@@ -177,6 +195,22 @@ async def generate_code(request: Request):
     return JSONResponse({"code": code, "expires_in": auth.CODE_TTL_S})
 
 
+@app.post("/api/auth/session-code")
+async def generate_session_code(request: Request):
+    """Generate a pairing code for MCP sessions (localhost only).
+
+    Restricted to loopback addresses to prevent remote code generation
+    when the relay server is exposed via a tunnel.
+    """
+    if not AUTH_ENABLED:
+        return JSONResponse({"error": "Authentication is not enabled"}, status_code=400)
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=403, detail="Code generation is only available from localhost")
+    code = auth.generate_pair_code()
+    return JSONResponse({"code": code, "expires_in": auth.CODE_TTL_S})
+
+
 @app.get("/api/auth/devices")
 async def get_devices(request: Request):
     """List all authorized devices."""
@@ -194,6 +228,40 @@ async def delete_device(device_id: str, request: Request):
 
 
 # --- REST API ---
+
+@app.get("/api/health")
+async def health_check(request: Request):
+    """Check the health of all backend services."""
+    _require_auth(request)
+
+    import httpx
+
+    async def check_service(url: str) -> bool:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(url)
+                return resp.status_code < 500
+        except Exception:
+            return False
+
+    # Derive base URLs from config (strip /v1 suffix)
+    whisper_base = WHISPER_URL.rsplit("/v1", 1)[0]
+    kokoro_base = KOKORO_URL.rsplit("/v1", 1)[0]
+    livekit_http = LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
+
+    whisper_ok, kokoro_ok, livekit_ok = await asyncio.gather(
+        check_service(f"{whisper_base}/"),
+        check_service(f"{kokoro_base}/health"),
+        check_service(livekit_http),
+    )
+
+    return JSONResponse({
+        "whisper": {"status": "ok" if whisper_ok else "down", "url": whisper_base},
+        "kokoro": {"status": "ok" if kokoro_ok else "down", "url": kokoro_base},
+        "livekit": {"status": "ok" if livekit_ok else "down", "url": LIVEKIT_URL},
+        "relay": {"status": "ok"},
+    })
+
 
 @app.get("/api/sessions")
 async def list_sessions(request: Request):
@@ -226,9 +294,16 @@ async def get_token(request: Request, room: str = "multiplexer", identity: str =
         .to_jwt()
     )
 
+    # Return the relay server's own URL as the LiveKit endpoint.
+    # The relay proxies /livekit/* to the local LiveKit server, so remote
+    # clients (phones, ngrok tunnels) reach LiveKit through a single port.
+    host = request.headers.get("host", f"localhost:{RELAY_PORT}")
+    scheme = "wss" if request.headers.get("x-forwarded-proto") == "https" else "ws"
+    livekit_url = f"{scheme}://{host}/livekit"
+
     return JSONResponse({
         "token": jwt_token,
-        "url": LIVEKIT_URL,
+        "url": livekit_url,
         "room": room,
         "identity": identity,
     })
@@ -366,6 +441,7 @@ async def client_ws(ws: WebSocket):
 
     await ws.accept()
     client_id = f"client-{uuid.uuid4().hex[:6]}"
+    device_name = device.get("device_name", "Unknown")
     _clients[client_id] = ws
     connected_session_id = None
 
@@ -380,12 +456,12 @@ async def client_ws(ws: WebSocket):
             msg_type = data.get("type")
 
             if msg_type == "connect_session":
-                # Disconnect from current session if any
+                # Disconnect this client from its current session if any
                 if connected_session_id:
-                    await registry.disconnect_client(connected_session_id)
+                    await registry.disconnect_client(connected_session_id, client_id)
 
                 session_id = data["session_id"]
-                success = await registry.connect_client(session_id, client_id)
+                success = await registry.connect_client(session_id, client_id, device_name)
                 connected_session_id = session_id if success else None
 
                 session_data = await registry.get(session_id) if success else None
@@ -396,13 +472,13 @@ async def client_ws(ws: WebSocket):
                 if session_data:
                     msg["session_name"] = session_data.name
                 await ws.send_text(json.dumps(msg))
-                # Reset agent status for the new session context — the old
-                # session's thinking/speaking state doesn't apply here.
-                if success:
+                # Send current agent status so new clients see the real state
+                if success and _agent:
+                    status = _agent.get_current_status(session_id)
                     await ws.send_text(json.dumps({
                         "type": "agent_status",
-                        "state": "idle",
-                        "activity": None,
+                        "state": status.get("state", "idle"),
+                        "activity": status.get("activity"),
                         "timestamp": time.time(),
                     }))
                 await _broadcast_sessions()
@@ -414,7 +490,7 @@ async def client_ws(ws: WebSocket):
 
             elif msg_type == "disconnect_session":
                 if connected_session_id:
-                    await registry.disconnect_client(connected_session_id)
+                    await registry.disconnect_client(connected_session_id, client_id)
                     connected_session_id = None
                     await _broadcast_sessions()
 
@@ -424,7 +500,7 @@ async def client_ws(ws: WebSocket):
         print(f"Client WebSocket error: {e}")
     finally:
         if connected_session_id:
-            await registry.disconnect_client(connected_session_id)
+            await registry.disconnect_client(connected_session_id, client_id)
         _clients.pop(client_id, None)
         await _broadcast_sessions()
 
@@ -438,6 +514,79 @@ async def _broadcast_sessions():
             await client_ws.send_text(msg)
         except Exception:
             pass
+
+
+# --- LiveKit proxy ---
+# Proxies WebSocket and HTTP requests from /livekit/* to the local LiveKit
+# server so that remote clients (phones, ngrok) can reach LiveKit through the
+# relay server's single port.
+
+from urllib.parse import urlparse as _urlparse
+
+_lk_parsed = _urlparse(LIVEKIT_URL)
+_LK_HOST = _lk_parsed.hostname or "127.0.0.1"
+_LK_PORT = _lk_parsed.port or 7880
+
+
+@app.websocket("/livekit/{path:path}")
+async def livekit_ws_proxy(ws: WebSocket, path: str):
+    """Proxy WebSocket connections to the local LiveKit server."""
+    await ws.accept()
+
+    import websockets
+
+    # Build target URL with query string
+    query = str(ws.scope.get("query_string", b""), "utf-8")
+    target = f"ws://{_LK_HOST}:{_LK_PORT}/{path}"
+    if query:
+        target += f"?{query}"
+
+    try:
+        async with websockets.connect(target) as lk_ws:
+            async def client_to_lk():
+                try:
+                    while True:
+                        data = await ws.receive()
+                        if "text" in data:
+                            await lk_ws.send(data["text"])
+                        elif "bytes" in data:
+                            await lk_ws.send(data["bytes"])
+                except Exception:
+                    pass
+
+            async def lk_to_client():
+                try:
+                    async for msg in lk_ws:
+                        if isinstance(msg, bytes):
+                            await ws.send_bytes(msg)
+                        else:
+                            await ws.send_text(msg)
+                except Exception:
+                    pass
+
+            await asyncio.gather(client_to_lk(), lk_to_client())
+    except Exception:
+        pass
+
+
+@app.api_route("/livekit/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def livekit_http_proxy(request: Request, path: str):
+    """Proxy HTTP requests (e.g. /validate) to the local LiveKit server."""
+    import httpx
+
+    target = f"http://{_LK_HOST}:{_LK_PORT}/{path}"
+    query = str(request.url.query)
+    if query:
+        target += f"?{query}"
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.request(
+            method=request.method,
+            url=target,
+            content=await request.body(),
+            headers={k: v for k, v in request.headers.items() if k.lower() not in ("host", "transfer-encoding")},
+        )
+        return Response(content=resp.content, status_code=resp.status_code, headers=dict(resp.headers))
 
 
 # --- Static file serving (React web app) ---

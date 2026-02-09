@@ -49,6 +49,13 @@ function playStoppedChime() {
   setTimeout(() => playTone(660, 0.15, 0.25), 100)
 }
 
+export function playNotificationChime() {
+  // Bright three-note ascending: "something new happened"
+  playTone(523, 0.1, 0.2)
+  setTimeout(() => playTone(659, 0.1, 0.2), 80)
+  setTimeout(() => playTone(784, 0.15, 0.2), 160)
+}
+
 export function useChime(agentStatus: AgentStatus, autoListen: boolean) {
   const prevState = useRef<AgentState>(agentStatus.state)
 

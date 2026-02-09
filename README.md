@@ -114,14 +114,14 @@ A lightweight MCP server (FastMCP) that adds voice relay tools to any Claude Cod
 
 **Tools:**
 
-| Tool                  | Description                                                                     |
-| --------------------- | ------------------------------------------------------------------------------- |
-| `relay_standby`       | Register and enter standby mode. Blocks until a voice message arrives.          |
-| `relay_respond`       | Send Claude's response text back to the relay for TTS synthesis.                |
-| `relay_activity`      | Update the web client with Claude's current activity (e.g. "Reading files..."). |
-| `relay_disconnect`    | Unregister from the relay and exit standby mode.                                |
-| `relay_status`        | Show current relay connection status.                                           |
-| `generate_auth_code`  | Generate a 6-digit pairing code for authorizing a new device.                   |
+| Tool                 | Description                                                                     |
+| -------------------- | ------------------------------------------------------------------------------- |
+| `relay_standby`      | Register and enter standby mode. Blocks until a voice message arrives.          |
+| `relay_respond`      | Send Claude's response text back to the relay for TTS synthesis.                |
+| `relay_activity`     | Update the web client with Claude's current activity (e.g. "Reading files..."). |
+| `relay_disconnect`   | Unregister from the relay and exit standby mode.                                |
+| `relay_status`       | Show current relay connection status.                                           |
+| `generate_auth_code` | Generate a 6-digit pairing code for authorizing a new device.                   |
 
 The MCP plugin only deals in text. All audio processing happens in the relay server.
 
@@ -142,21 +142,25 @@ A Python server (FastAPI + Uvicorn) that bridges the web client, Claude sessions
 - **Authentication** (`auth.py`): Device pairing with JWT tokens, pairing codes, and device management
 - **WebSocket hub** (`server.py`): Manages connections to both MCP plugins and web clients
 - **Token generation**: Issues LiveKit JWTs for client authentication
+- **LiveKit proxy**: Proxies WebSocket and HTTP traffic to the local LiveKit server, enabling single-port remote access
 
 **Endpoints:**
 
-| Endpoint                             | Type      | Description                                                      |
-| ------------------------------------ | --------- | ---------------------------------------------------------------- |
-| `GET /`                              | HTTP      | Serve the React web app (from `web/dist/`)                       |
-| `GET /api/sessions`                  | HTTP      | List all registered Claude sessions (auth required)              |
-| `GET /api/token`                     | HTTP      | Generate LiveKit JWT for client connection (auth required)       |
-| `GET /api/auth/status`               | HTTP      | Check if the current client is authenticated                     |
-| `POST /api/auth/pair`                | HTTP      | Pair a new device using a one-time code                          |
-| `POST /api/auth/code`                | HTTP      | Generate a pairing code (auth required)                          |
-| `GET /api/auth/devices`              | HTTP      | List all authorized devices (auth required)                      |
-| `DELETE /api/auth/devices/{id}`      | HTTP      | Revoke a device's authorization (auth required)                  |
-| `WS /ws/session`                     | WebSocket | MCP plugin registration, voice text relay, status updates        |
-| `WS /ws/client`                      | WebSocket | Web client events (auth required on handshake)                   |
+| Endpoint                        | Type      | Description                                                |
+| ------------------------------- | --------- | ---------------------------------------------------------- |
+| `GET /`                         | HTTP      | Serve the React web app (from `web/dist/`)                 |
+| `GET /api/sessions`             | HTTP      | List all registered Claude sessions (auth required)        |
+| `GET /api/token`                | HTTP      | Generate LiveKit JWT for client connection (auth required)  |
+| `GET /api/health`               | HTTP      | Service health check (Whisper, Kokoro, LiveKit, relay)     |
+| `WS /livekit/{path}`            | WebSocket | Proxy to local LiveKit server (for remote/tunnel access)   |
+| `GET /livekit/{path}`           | HTTP      | HTTP proxy to local LiveKit server                         |
+| `GET /api/auth/status`          | HTTP      | Check if the current client is authenticated               |
+| `POST /api/auth/pair`           | HTTP      | Pair a new device using a one-time code                    |
+| `POST /api/auth/code`           | HTTP      | Generate a pairing code (auth required)                    |
+| `GET /api/auth/devices`         | HTTP      | List all authorized devices (auth required)                |
+| `DELETE /api/auth/devices/{id}` | HTTP      | Revoke a device's authorization (auth required)            |
+| `WS /ws/session`                | WebSocket | MCP plugin registration, voice text relay, status updates  |
+| `WS /ws/client`                 | WebSocket | Web client events (auth required on handshake)             |
 
 **WebSocket protocol — `/ws/session` (MCP plugin):**
 
@@ -277,7 +281,7 @@ All settings are configured via `~/.claude/voice-multiplexer/voice-multiplexer.e
 | `LIVEKIT_URL`           | `ws://localhost:7880`      | LiveKit server URL                                            |
 | `LIVEKIT_API_KEY`       |                            | LiveKit API key                                               |
 | `LIVEKIT_API_SECRET`    |                            | LiveKit API secret                                            |
-| `SESSION_TIMEOUT`       | `60`                       | Session heartbeat timeout (seconds)                           |
+| `SESSION_TIMEOUT`       | `120`                      | Session heartbeat timeout (seconds)                           |
 | `VAD_AGGRESSIVENESS`    | `1`                        | VAD sensitivity (0=permissive, 3=strict)                      |
 | `SILENCE_THRESHOLD_MS`  | `2000`                     | Silence duration before utterance ends                        |
 | `MIN_SPEECH_DURATION_S` | `0.5`                      | Minimum speech before silence can end utterance               |
@@ -415,6 +419,30 @@ npm run build   # Production build → dist/ (served by relay server)
 3. Open `http://localhost:3100` (or `:5173` in dev mode) on your phone
 4. Tap a session to connect, enable mic, and start talking
 
+### Remote Access (Tunnels)
+
+To access the voice multiplexer from outside your local network, expose the relay server via a tunnel. Any tunnel provider works — ngrok, Cloudflare Tunnel, Tailscale Funnel, etc.
+
+**Example with ngrok:**
+
+```bash
+ngrok http 3100
+```
+
+This gives you a public URL (e.g. `https://abc123.ngrok-free.app`) that you can open on any device.
+
+**How it works:**
+
+LiveKit WebSocket and HTTP traffic is proxied through the relay server at `/livekit/*`, so only one port needs to be tunneled. The token endpoint automatically detects the requesting host and returns the correct URL (e.g. `wss://abc123.ngrok-free.app/livekit`).
+
+**Security notes:**
+
+- **Authentication is required.** When exposed via tunnel, the JWT-based device authentication protects all endpoints. Only devices paired with a valid code can access sessions or audio.
+- **Pairing codes can only be generated from localhost.** The `/api/auth/session-code` endpoint rejects requests from non-loopback addresses, so an attacker with the tunnel URL cannot generate their own pairing codes.
+- **Pairing attempts are rate-limited.** The `/api/auth/pair` endpoint allows 5 attempts per 60-second window per IP, preventing brute-force attacks on 6-digit codes.
+- **Generate codes before tunneling**, or use an already-paired device to generate codes for new devices via the Settings panel.
+- **LiveKit traffic** is proxied through the relay server and travels over the tunnel's encrypted connection.
+
 ## Project Structure
 
 ```
@@ -518,35 +546,3 @@ The stop script uses a two-pass strategy to find the running instance:
 1. **PID file** (`.vmux.pid`): Fast, reliable when the start script exited cleanly
 2. **Process name search**: Falls back to `pgrep -f "claude-voice-multiplexer:start"` if the PID file is stale or missing (e.g., after an unclean shutdown)
 
-## Bugs
-
-Known issues to investigate and fix:
-
-- [x] ~~recording chime still plays when microphone auto record is disabled~~ — Fixed: chimes now only play when auto-listen is enabled
-- [ ] When claude went into plan mode and asked a multipel choice question, it never responded to the relay server. We may need to build in some method of handling user prompts in the CLI
-- [ ] Should the .vmux.pid file be stored in the nested claude directory instead of project root?
-
-## To Do
-
-### High Priority
-
-- [ ] **Multiple simultaneous clients**: Map participant identity → client_id → session properly instead of naive first-match
-- [x] **Authentication**: Device pairing with JWT tokens, one-time pairing codes, and device management (naming, revocation)
-- [ ] **Error recovery UX**: When Whisper or Kokoro goes down, show persistent error with retry button instead of transient auto-recover
-- [ ] **Reconnect handling**: When MCP plugin WebSocket drops and reconnects, restore session state cleanly
-
-### Medium Priority
-
-- [x] **Service management**: Start/stop/status scripts with PID file tracking, duplicate-instance protection, and Claude Code skills for service lifecycle
-- [ ] **Voice commands for session switching**: "Switch to project X" should work via voice
-- [x] **Persistent conversation history**: Store transcripts across sessions/reconnects (IndexedDB, keyed by session name)
-- [x] **Session metadata display**: Show working directory, session age, last activity in the session list (collapsible drawer with online/offline status)
-- [x] **Audio level indicator**: Voice bar visualizer shows real-time mic audio with voice-optimized frequency mapping
-
-### Low Priority / Future
-
-- [x] **Streaming TTS**: Stream Kokoro output chunks to LiveKit as they're generated instead of waiting for full synthesis
-- [x] **Multi-room LiveKit**: Separate LiveKit rooms per session (`vmux_{session_name}`), audio isolated between sessions
-- [x] **Theme customization**: Light/dark mode with system preference detection and three-option selector (System/Light/Dark)
-- [ ] **Keyboard shortcuts**: Desktop web client keyboard shortcuts for mic toggle, interrupt, session switching
-- [ ] **Tunnel integration**: Built-in Cloudflare/ngrok tunnel setup for remote access

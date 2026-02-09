@@ -6,14 +6,19 @@ interface SessionMenuProps {
   session: DisplaySession;
   onClearTranscript: (sessionName: string) => void;
   onRemoveSession: (sessionName: string) => void;
+  onRenameSession: (sessionName: string, displayName: string) => void;
 }
 
 export function SessionMenu({
   session,
   onClearTranscript,
   onRemoveSession,
+  onRenameSession,
 }: SessionMenuProps) {
   const [open, setOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -43,27 +48,64 @@ export function SessionMenu({
 
       {open && (
         <div className={styles.Dropdown}>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClearTranscript(session.session_name);
-              setOpen(false);
-            }}
-            className={styles.MenuItem}
-          >
-            Clear transcripts
-          </button>
-          {!session.online && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onRemoveSession(session.session_name);
-                setOpen(false);
-              }}
-              className={styles.DeleteItem}
-            >
-              Delete session
-            </button>
+          {renaming ? (
+            <div className={styles.RenameRow}>
+              <input
+                ref={inputRef}
+                className={styles.RenameInput}
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") {
+                    onRenameSession(session.session_name, renameValue.trim());
+                    setRenaming(false);
+                    setOpen(false);
+                  } else if (e.key === "Escape") {
+                    setRenaming(false);
+                  }
+                }}
+                onClick={(e) => e.stopPropagation()}
+                placeholder={session.session_name}
+                autoFocus
+              />
+            </div>
+          ) : (
+            <>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setRenameValue(session.display_name);
+                  setRenaming(true);
+                  setTimeout(() => inputRef.current?.select(), 0);
+                }}
+                className={styles.MenuItem}
+              >
+                Rename
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClearTranscript(session.session_name);
+                  setOpen(false);
+                }}
+                className={styles.MenuItem}
+              >
+                Clear transcripts
+              </button>
+              {!session.online && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRemoveSession(session.session_name);
+                    setOpen(false);
+                  }}
+                  className={styles.DeleteItem}
+                >
+                  Delete session
+                </button>
+              )}
+            </>
           )}
         </div>
       )}

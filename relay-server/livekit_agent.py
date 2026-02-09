@@ -13,6 +13,7 @@ joins that room. When a phone client connects to a session, the agent in that ro
 
 import asyncio
 import io
+import re
 import struct
 import time
 
@@ -41,13 +42,113 @@ NUM_CHANNELS = 1
 VAD_FRAME_MS = 30  # WebRTC VAD frame size (10, 20, or 30ms)
 VAD_SAMPLE_RATE = 16000  # WebRTC VAD only supports 8k, 16k, 32k
 
-# Whisper blank audio artifacts to discard
-BLANK_PATTERNS = {
-    "[BLANK_AUDIO]",
+# Whisper noise/hallucination filtering.
+#
+# When Whisper processes silence or ambient noise it frequently hallucinates
+# well-known phrases (YouTube outros, subtitle credits, single filler words).
+# We maintain two lists: exact-match patterns (compared case-insensitively
+# after stripping punctuation) and substring patterns (if the transcript
+# *contains* any of these, it's filtered).
+#
+# Sources:
+#   - https://arxiv.org/html/2501.11378v1 (AGH University hallucination study)
+#   - https://github.com/openai/whisper/discussions/679
+#   - https://github.com/openai/whisper/discussions/928
+#   - https://github.com/openai/whisper/discussions/1455
+#   - https://github.com/openai/whisper/discussions/1873
+#   - https://huggingface.co/datasets/sachaarbonel/whisper-hallucinations
+
+# Transcriptions matching these exactly (case-insensitive, punctuation-stripped)
+# are discarded. Covers the top silence hallucinations by frequency.
+NOISE_EXACT = {
+    # Blank/silence markers
     "[blank_audio]",
     "(blank audio)",
-    "",
+    "[silence]",
+    "(silence)",
+    "[inaudible]",
+    ">>",
+    # Top single-word/short hallucinations on silence
+    "you",
+    "so",
+    "the",
+    "oh",
+    "okay",
+    "bye",
+    "bye-bye",
+    "bye bye",
+    "thank you",
+    "thank you very much",
+    "thanks",
+    "i'm sorry",
+    "oh my god",
+    "hmm",
+    "huh",
+    "ah",
+    "uh",
+    "um",
+    "mm",
+    "yeah",
+    # YouTube outro hallucinations
+    "thanks for watching",
+    "thank you for watching",
+    "i'll see you in the next video",
+    "i'll see you next time",
+    "see you next time",
+    "see you in the next one",
+    "i'll see you later",
+    "thank you bye",
+    "the end",
+    "we'll be right back",
+    "stay tuned",
+    # Sound/music markers
+    "[music]",
+    "(music)",
+    "[applause]",
+    "(applause)",
+    "[laughter]",
+    "(laughter)",
+    "[typing]",
+    "[clapping]",
+    "[buzzing]",
+    "\u266a",
+    "\u266a\u266a",
+    "\u266a \u266a \u266a",
+    "\u266b",
+    # Attribution artifacts
+    "satsang with mooji",
+    "www.mooji.org",
+    "transcript emily beynon",
+    "transcription outsourcing llc",
+    "transcription outsourcing",
+    "transcription by castingwords",
+    "copyright wdr",
 }
+
+# If the transcript contains any of these substrings (case-insensitive),
+# it's filtered. Catches variations in punctuation and phrasing.
+NOISE_SUBSTRINGS = [
+    "subtitles by",
+    "transcribed by",
+    "transcription by",
+    "translation by",
+    "captions by",
+    "subtitles made by",
+    "amara.org",
+    "otter.ai",
+    "rev.com",
+    "subscribe",
+    "thanks for watching",
+    "thank you for watching",
+    "don't forget to like",
+    "please like and subscribe",
+    "like and subscribe",
+    "for more information, visit",
+    "sous-titres",
+    "untertitel",
+    "sottotitoli",
+    "legendas pela comunidade",
+]
 
 # Max time to stay in "thinking" after TTS before auto-returning to idle.
 THINKING_TIMEOUT_S = 15.0
@@ -294,8 +395,19 @@ class SessionRoom:
             return
 
         stripped = text.strip()
-        if stripped in BLANK_PATTERNS or len(stripped) < 2:
+        # Normalize for comparison: lowercase, strip punctuation
+        import re
+        normalized = re.sub(r"[^\w\s\u266a\u266b\[\]()>]", "", stripped.lower()).strip()
+        # Check exact match against known hallucinations
+        if normalized in NOISE_EXACT or len(normalized) < 2:
             print(f"[room:{self.room_name}] Filtered noise transcription: {stripped!r}")
+            if session:
+                await self._notify_status("idle")
+            return
+        # Check substring match
+        lower = stripped.lower()
+        if any(sub in lower for sub in NOISE_SUBSTRINGS):
+            print(f"[room:{self.room_name}] Filtered noise transcription (substring): {stripped!r}")
             if session:
                 await self._notify_status("idle")
             return

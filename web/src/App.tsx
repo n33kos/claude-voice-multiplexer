@@ -1,12 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useRelay } from "./hooks/useRelay";
 import { useLiveKit } from "./hooks/useLiveKit";
-import { useChime } from "./hooks/useChime";
+import { useChime, playNotificationChime } from "./hooks/useChime";
 import { useSettings } from "./hooks/useSettings";
 import { useTheme } from "./hooks/useTheme";
 import { useAuth } from "./hooks/useAuth";
 import { SessionList } from "./components/SessionList/SessionList";
-import { VoiceControls } from "./components/VoiceControls/VoiceControls";
 import { Transcript } from "./components/Transcript/Transcript";
 import { StatusBar } from "./components/StatusBar/StatusBar";
 import { Settings } from "./components/Settings/Settings";
@@ -14,6 +13,13 @@ import { ParticleNetwork } from "./components/ParticleNetwork/ParticleNetwork";
 import { Header } from "./components/Header/Header";
 import { PairScreen } from "./components/PairScreen/PairScreen";
 import styles from "./App.module.scss";
+
+// Lazy-load VoiceControls (pulls in heavy livekit-client bundle)
+const VoiceControls = lazy(() =>
+  import("./components/VoiceControls/VoiceControls").then((m) => ({
+    default: m.VoiceControls,
+  })),
+);
 
 export default function App() {
   const auth = useAuth();
@@ -26,6 +32,56 @@ export default function App() {
   );
   useChime(relay.agentStatus, settings.autoListen);
   useTheme(settings.theme);
+
+  // Play notification chime when a new online session appears
+  const prevOnlineIds = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const currentIds = new Set(
+      relay.sessions.filter((s) => s.online && s.session_id).map((s) => s.session_id!),
+    );
+    const isNew = [...currentIds].some((id) => !prevOnlineIds.current.has(id));
+    // Only chime if we had sessions before (skip initial load)
+    if (isNew && prevOnlineIds.current.size > 0) {
+      playNotificationChime();
+    }
+    prevOnlineIds.current = currentIds;
+  }, [relay.sessions]);
+
+  // Request notification permission on first user interaction when enabled
+  useEffect(() => {
+    if (!settings.notifications) return;
+    if ("Notification" in window && Notification.permission === "default") {
+      const handler = () => {
+        Notification.requestPermission();
+        document.removeEventListener("click", handler);
+      };
+      document.addEventListener("click", handler);
+      return () => document.removeEventListener("click", handler);
+    }
+  }, [settings.notifications]);
+
+  // Browser notification when Claude finishes a task while tab is hidden
+  const prevAgentState = useRef(relay.agentStatus.state);
+  useEffect(() => {
+    const prev = prevAgentState.current;
+    prevAgentState.current = relay.agentStatus.state;
+    if (prev === relay.agentStatus.state) return;
+
+    if (
+      settings.notifications &&
+      document.hidden &&
+      (prev === "thinking" || prev === "speaking") &&
+      relay.agentStatus.state === "idle" &&
+      relay.connectedSessionName
+    ) {
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification("Claude is ready", {
+          body: `Session "${relay.connectedSessionName}" is waiting for input.`,
+          tag: "vmux-ready",
+        });
+      }
+    }
+  }, [relay.agentStatus.state, relay.connectedSessionName, settings.notifications]);
 
   // Auto-collapse session list when connected, expand when disconnected
   useEffect(() => {
@@ -102,22 +158,25 @@ export default function App() {
           onDisconnect={relay.disconnectSession}
           onClearTranscript={relay.clearTranscript}
           onRemoveSession={relay.removeSession}
+          onRenameSession={relay.renameSession}
         />
 
         {relay.connectedSessionId && livekit.token && livekit.url && (
-          <VoiceControls
-            token={livekit.token}
-            serverUrl={livekit.url}
-            agentStatus={relay.agentStatus}
-            autoListen={settings.autoListen}
-            speakerMuted={settings.speakerMuted}
-            showStatusPill={settings.showStatusPill}
-            onAutoListenChange={(v) => updateSettings({ autoListen: v })}
-            onSpeakerMutedChange={(v) => updateSettings({ speakerMuted: v })}
-            onConnected={() => livekit.setConnected(true)}
-            onDisconnected={() => livekit.setConnected(false)}
-            onInterrupt={relay.interruptAgent}
-          />
+          <Suspense fallback={null}>
+            <VoiceControls
+              token={livekit.token}
+              serverUrl={livekit.url}
+              agentStatus={relay.agentStatus}
+              autoListen={settings.autoListen}
+              speakerMuted={settings.speakerMuted}
+              showStatusPill={settings.showStatusPill}
+              onAutoListenChange={(v) => updateSettings({ autoListen: v })}
+              onSpeakerMutedChange={(v) => updateSettings({ speakerMuted: v })}
+              onConnected={() => livekit.setConnected(true)}
+              onDisconnected={() => livekit.setConnected(false)}
+              onInterrupt={relay.interruptAgent}
+            />
+          </Suspense>
         )}
 
         {relay.connectedSessionId && (
@@ -137,6 +196,11 @@ export default function App() {
           onUpdate={updateSettings}
           authEnabled={auth.authEnabled}
           devices={auth.devices}
+          connectedClients={
+            relay.sessions.find(
+              (s) => s.session_id === relay.connectedSessionId,
+            )?.connected_clients
+          }
           onGenerateCode={auth.generateCode}
           onRevokeDevice={auth.revokeDevice}
         />

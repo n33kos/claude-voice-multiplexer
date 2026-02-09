@@ -10,4 +10,5 @@ export interface SessionListProps {
   onDisconnect: () => void;
   onClearTranscript: (sessionName: string) => void;
   onRemoveSession: (sessionName: string) => void;
+  onRenameSession: (sessionName: string, displayName: string) => void;
 }

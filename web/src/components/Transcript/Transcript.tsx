@@ -3,6 +3,23 @@ import classNames from "classnames";
 import type { TranscriptProps } from "./Transcript.types";
 import styles from "./Transcript.module.scss";
 
+/**
+ * Split a long text into paragraphs of ~2-3 sentences for readability.
+ */
+function splitIntoParagraphs(text: string): string[] {
+  // Split on sentence-ending punctuation followed by a space
+  const sentences = text.match(/[^.!?]+[.!?]+(?:\s|$)|[^.!?]+$/g) || [text];
+  const paragraphs: string[] = [];
+  const SENTENCES_PER_PARAGRAPH = 3;
+
+  for (let i = 0; i < sentences.length; i += SENTENCES_PER_PARAGRAPH) {
+    const chunk = sentences.slice(i, i + SENTENCES_PER_PARAGRAPH).join("").trim();
+    if (chunk) paragraphs.push(chunk);
+  }
+
+  return paragraphs.length > 0 ? paragraphs : [text];
+}
+
 export function Transcript({ entries }: TranscriptProps) {
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -37,6 +54,10 @@ export function Transcript({ entries }: TranscriptProps) {
               </div>
             );
           }
+          // Split long responses into paragraphs (~2-3 sentences each)
+          const paragraphs = entry.speaker === "claude"
+            ? splitIntoParagraphs(entry.text)
+            : [entry.text];
           return (
             <div
               key={i}
@@ -53,7 +74,9 @@ export function Transcript({ entries }: TranscriptProps) {
                   entry.speaker === "user" ? styles.BubbleUser : styles.BubbleClaude,
                 )}
               >
-                {entry.text}
+                {paragraphs.map((p, j) => (
+                  <p key={j} className={styles.Paragraph}>{p}</p>
+                ))}
               </div>
             </div>
           );

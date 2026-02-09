@@ -29,7 +29,7 @@ LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
 
 # --- Session registry ---
-SESSION_TIMEOUT = int(os.environ.get("SESSION_TIMEOUT", "60"))
+SESSION_TIMEOUT = int(os.environ.get("SESSION_TIMEOUT", "120"))
 
 # --- Audio / TTS ---
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "whisper-1")
