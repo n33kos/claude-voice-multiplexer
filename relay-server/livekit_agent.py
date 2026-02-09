@@ -156,6 +156,9 @@ THINKING_TIMEOUT_S = 15.0
 # Error state auto-recovers to idle after this many seconds.
 ERROR_RECOVERY_S = 5.0
 
+# Brief debounce after entering idle to let mic settle before accepting speech.
+IDLE_DEBOUNCE_S = 0.25
+
 
 class SessionRoom:
     """Per-session LiveKit room with its own audio pipeline and state machine."""
@@ -184,6 +187,7 @@ class SessionRoom:
         self._idle_timer: asyncio.Task | None = None
         self._error_timer: asyncio.Task | None = None
         self._pending_listening: str | None = None
+        self._idle_entered_at: float = 0.0
 
         # Track audio stream tasks per participant
         self._audio_stream_tasks: dict[str, asyncio.Task] = {}
@@ -302,6 +306,8 @@ class SessionRoom:
             if self._waiting_for_response or self._is_speaking:
                 continue
             if time.time() - self._speaking_ended_at < ECHO_COOLDOWN_S:
+                continue
+            if time.time() - self._idle_entered_at < IDLE_DEBOUNCE_S:
                 continue
 
             frame = event.frame
@@ -477,7 +483,7 @@ class SessionRoom:
             # Wait for remaining playback to finish
             playback_duration = total_samples / LIVEKIT_SAMPLE_RATE
             elapsed = time.time() - publish_start
-            remaining = playback_duration - elapsed + 0.5
+            remaining = playback_duration - elapsed + 1.0
             if remaining > 0:
                 await asyncio.sleep(remaining)
 
@@ -559,6 +565,8 @@ class SessionRoom:
         """Notify connected client of agent status change."""
         self._current_state = state
         self._current_activity = activity
+        if state == "idle":
+            self._idle_entered_at = time.time()
         if self.notify_status_fn:
             try:
                 await self.notify_status_fn(self.session_id, state, activity)
