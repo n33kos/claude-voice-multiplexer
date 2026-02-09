@@ -150,9 +150,6 @@ NOISE_SUBSTRINGS = [
     "legendas pela comunidade",
 ]
 
-# Max time to stay in "thinking" after TTS before auto-returning to idle.
-THINKING_TIMEOUT_S = 15.0
-
 # Error state auto-recovers to idle after this many seconds.
 ERROR_RECOVERY_S = 5.0
 
@@ -184,7 +181,6 @@ class SessionRoom:
         # Status state machine
         self._current_state: str = "idle"
         self._current_activity: str | None = None
-        self._idle_timer: asyncio.Task | None = None
         self._error_timer: asyncio.Task | None = None
         self._pending_listening: str | None = None
         self._idle_entered_at: float = 0.0
@@ -251,8 +247,6 @@ class SessionRoom:
         self._audio_stream_tasks.clear()
 
         # Cancel timers
-        if self._idle_timer and not self._idle_timer.done():
-            self._idle_timer.cancel()
         if self._error_timer and not self._error_timer.done():
             self._error_timer.cancel()
 
@@ -452,10 +446,6 @@ class SessionRoom:
         """Called when Claude sends a text response. Stream-synthesize and play."""
         print(f"[room:{self.room_name}] Streaming TTS response: {text[:50]}...")
 
-        if self._idle_timer and not self._idle_timer.done():
-            self._idle_timer.cancel()
-            self._idle_timer = None
-
         self._is_speaking = True
         await self._notify_status("speaking")
         try:
@@ -499,25 +489,9 @@ class SessionRoom:
                 await self._notify_status("idle")
             else:
                 await self._notify_status("thinking", "Waiting for Claude...")
-                self._idle_timer = asyncio.create_task(self._deferred_idle())
-
-    async def _deferred_idle(self):
-        """Fallback: transition to idle after timeout if no listening signal."""
-        try:
-            await asyncio.sleep(THINKING_TIMEOUT_S)
-            print(f"[room:{self.room_name}] Thinking timeout — auto-transitioning to idle")
-            self._waiting_for_response = False
-            self._current_activity = None
-            await self._notify_status("idle")
-        except asyncio.CancelledError:
-            pass
 
     async def handle_claude_listening(self):
         """Called when Claude enters relay_standby again — ready for next voice input."""
-        if self._idle_timer and not self._idle_timer.done():
-            self._idle_timer.cancel()
-            self._idle_timer = None
-
         if self._is_speaking:
             self._pending_listening = self.session_id
             return

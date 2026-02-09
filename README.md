@@ -89,7 +89,7 @@ Claude calls relay_respond(text)
             → Agent status → idle
 ```
 
-Error states auto-recover to idle after 5 seconds. A 15-second thinking timeout prevents permanent stuck states if Claude is interrupted before calling `relay_standby`.
+Error states auto-recover to idle after 5 seconds. The agent stays in the thinking state until Claude explicitly calls `relay_standby`; the interrupt button provides manual recovery if Claude disconnects.
 
 ### Input Gating
 
