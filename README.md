@@ -8,19 +8,19 @@ A Claude Code MCP plugin and relay server for remote voice interaction with mult
 Phone / Browser                    Mac (all local)
 ┌──────────────────────┐          ┌──────────────────────────────────────────┐
 │                      │          │                                          │
-│  React Web App       │◄─LiveKit─►  Relay Server (:3100)                  │
-│  (mic/speaker/UI)    │  WebRTC  │  ├── LiveKit Agent (embedded)           │
-│                      │          │  │   ├── VAD + audio buffering          │
-│  Features:           │          │  │   ├── Whisper STT                    │
-│  - Voice I/O         │          │  │   └── Kokoro TTS                     │
-│  - Session list      │          │  ├── WebSocket hub                      │
-│  - Session switching │          │  ├── Session registry                   │
-│  - Text transcript   │          │  └── LiveKit token server               │
+│  React Web App       │◄─LiveKit─►  Relay Server (:3100)                    │
+│  (mic/speaker/UI)    │  WebRTC  │  ├── LiveKit Agent (embedded)            │
+│                      │          │  │   ├── VAD + audio buffering           │
+│  Features:           │          │  │   ├── Whisper STT                     │
+│  - Voice I/O         │          │  │   └── Kokoro TTS                      │
+│  - Session list      │          │  ├── WebSocket hub                       │
+│  - Session switching │          │  ├── Session registry                    │
+│  - Text transcript   │          │  └── LiveKit token server                │
 │  - Agent status      │          │                                          │
 │  - Activity display  │          │  Claude Code Sessions (iTerm2)           │
-│                      │          │  ├── Session A ← MCP plugin (standby)   │
-└──────────────────────┘          │  ├── Session B ← MCP plugin (standby)   │
-                                  │  └── Session C ← MCP plugin (standby)   │
+│                      │          │  ├── Session A ← MCP plugin (standby)    │
+└──────────────────────┘          │  ├── Session B ← MCP plugin (standby)    │
+                                  │  └── Session C ← MCP plugin (standby)    │
                                   └──────────────────────────────────────────┘
 
 For remote access: expose relay server via tunnel (Cloudflare/ngrok/Tailscale)
@@ -114,13 +114,14 @@ A lightweight MCP server (FastMCP) that adds voice relay tools to any Claude Cod
 
 **Tools:**
 
-| Tool               | Description                                                                     |
-| ------------------ | ------------------------------------------------------------------------------- |
-| `relay_standby`    | Register and enter standby mode. Blocks until a voice message arrives.          |
-| `relay_respond`    | Send Claude's response text back to the relay for TTS synthesis.                |
-| `relay_activity`   | Update the web client with Claude's current activity (e.g. "Reading files..."). |
-| `relay_disconnect` | Unregister from the relay and exit standby mode.                                |
-| `relay_status`     | Show current relay connection status.                                           |
+| Tool                  | Description                                                                     |
+| --------------------- | ------------------------------------------------------------------------------- |
+| `relay_standby`       | Register and enter standby mode. Blocks until a voice message arrives.          |
+| `relay_respond`       | Send Claude's response text back to the relay for TTS synthesis.                |
+| `relay_activity`      | Update the web client with Claude's current activity (e.g. "Reading files..."). |
+| `relay_disconnect`    | Unregister from the relay and exit standby mode.                                |
+| `relay_status`        | Show current relay connection status.                                           |
+| `generate_auth_code`  | Generate a 6-digit pairing code for authorizing a new device.                   |
 
 The MCP plugin only deals in text. All audio processing happens in the relay server.
 
@@ -138,18 +139,24 @@ A Python server (FastAPI + Uvicorn) that bridges the web client, Claude sessions
 - **LiveKit agent** (`livekit_agent.py`): Embedded agent that joins the LiveKit room, handles VAD, STT, TTS, and the agent status state machine
 - **Audio pipeline** (`audio.py`): HTTP clients for Whisper (STT) and Kokoro (TTS) with PCM support
 - **Configuration** (`config.py`): All env-var-driven settings with sensible defaults
+- **Authentication** (`auth.py`): Device pairing with JWT tokens, pairing codes, and device management
 - **WebSocket hub** (`server.py`): Manages connections to both MCP plugins and web clients
 - **Token generation**: Issues LiveKit JWTs for client authentication
 
 **Endpoints:**
 
-| Endpoint            | Type      | Description                                                      |
-| ------------------- | --------- | ---------------------------------------------------------------- |
-| `GET /`             | HTTP      | Serve the React web app (from `web/dist/`)                       |
-| `GET /api/sessions` | HTTP      | List all registered Claude sessions                              |
-| `GET /api/token`    | HTTP      | Generate LiveKit JWT for client connection                       |
-| `WS /ws/session`    | WebSocket | MCP plugin registration, voice text relay, status updates        |
-| `WS /ws/client`     | WebSocket | Web client events (session switching, transcripts, agent status) |
+| Endpoint                             | Type      | Description                                                      |
+| ------------------------------------ | --------- | ---------------------------------------------------------------- |
+| `GET /`                              | HTTP      | Serve the React web app (from `web/dist/`)                       |
+| `GET /api/sessions`                  | HTTP      | List all registered Claude sessions (auth required)              |
+| `GET /api/token`                     | HTTP      | Generate LiveKit JWT for client connection (auth required)       |
+| `GET /api/auth/status`               | HTTP      | Check if the current client is authenticated                     |
+| `POST /api/auth/pair`                | HTTP      | Pair a new device using a one-time code                          |
+| `POST /api/auth/code`                | HTTP      | Generate a pairing code (auth required)                          |
+| `GET /api/auth/devices`              | HTTP      | List all authorized devices (auth required)                      |
+| `DELETE /api/auth/devices/{id}`      | HTTP      | Revoke a device's authorization (auth required)                  |
+| `WS /ws/session`                     | WebSocket | MCP plugin registration, voice text relay, status updates        |
+| `WS /ws/client`                      | WebSocket | Web client events (auth required on handshake)                   |
 
 **WebSocket protocol — `/ws/session` (MCP plugin):**
 
@@ -161,7 +168,9 @@ A Python server (FastAPI + Uvicorn) that bridges the web client, Claude sessions
 | Plugin → Server | `response`      | Claude's text response for TTS                  |
 | Plugin → Server | `listening`     | Claude is ready for next voice input            |
 | Plugin → Server | `status_update` | Activity label update (e.g. "Reading files...") |
+| Plugin → Server | `generate_code` | Request a device pairing code                   |
 | Server → Plugin | `voice_message` | Transcribed voice text from user                |
+| Server → Plugin | `auth_code`     | Generated pairing code response                 |
 
 **WebSocket protocol — `/ws/client` (web app):**
 
@@ -191,30 +200,33 @@ A static-built React app served by the relay server. Mobile-first design for pho
 - Interrupt button (visible during thinking/speaking/error states)
 - Audio chimes on state transitions (ascending for ready, descending for captured)
 - Live transcript with IndexedDB persistence (keyed by session name)
-- Settings panel (theme selector, auto-listen toggle, speaker mute)
+- Settings panel (theme selector, auto-listen toggle, speaker mute, device management)
 - Light/dark mode with system preference detection (three-option: System/Light/Dark)
+- Device authentication with pairing codes and JWT tokens
 - Connection status bar (Relay Server / LiveKit Audio / Claude indicators)
 - Animated rainbow gradient header
 
 **Key files:**
 
-| File                           | Description                                                                |
-| ------------------------------ | -------------------------------------------------------------------------- |
-| `App.tsx`                      | Root component, wires hooks to components                                  |
-| `hooks/useRelay.ts`            | WebSocket state, `AgentStatus`, persistent sessions, transcript management |
-| `hooks/useLiveKit.ts`          | LiveKit token fetching and connection state                                |
-| `hooks/useChime.ts`            | Audio feedback chimes on state transitions                                 |
-| `hooks/useSettings.ts`         | localStorage-backed settings (theme, auto-listen, speaker mute)            |
-| `hooks/useTheme.ts`            | Theme application (system preference detection, data-theme attribute)      |
-| `hooks/useTranscriptDB.ts`     | IndexedDB persistence for transcripts and sessions                         |
-| `components/VoiceControls/`    | LiveKit room, mic/speaker/interrupt controls, audio analysers              |
-| `components/VoiceBar/`         | Canvas audio visualizer with voice-optimized frequency mapping             |
-| `components/SessionList/`      | Collapsible session drawer with dropdown menus                             |
-| `components/Transcript/`       | Scrolling transcript with activity entries                                 |
-| `components/StatusBar/`        | Connection status indicators (Relay Server / LiveKit / Claude)             |
-| `components/Settings/`         | Settings panel (theme, auto-listen, speaker mute)                          |
-| `components/Header/`           | Animated rainbow gradient header with settings button                      |
-| `components/ParticleNetwork/`  | Background particle animation canvas                                       |
+| File                          | Description                                                                |
+| ----------------------------- | -------------------------------------------------------------------------- |
+| `App.tsx`                     | Root component, wires hooks to components                                  |
+| `hooks/useRelay.ts`           | WebSocket state, `AgentStatus`, persistent sessions, transcript management |
+| `hooks/useLiveKit.ts`         | LiveKit token fetching and connection state                                |
+| `hooks/useChime.ts`           | Audio feedback chimes on state transitions                                 |
+| `hooks/useSettings.ts`        | localStorage-backed settings (theme, auto-listen, speaker mute)            |
+| `hooks/useTheme.ts`           | Theme application (system preference detection, data-theme attribute)      |
+| `hooks/useAuth.ts`            | Auth state, device pairing, device management API                          |
+| `hooks/useTranscriptDB.ts`    | IndexedDB persistence for transcripts and sessions                         |
+| `components/VoiceControls/`   | LiveKit room, mic/speaker/interrupt controls, audio analysers              |
+| `components/VoiceBar/`        | Canvas audio visualizer with voice-optimized frequency mapping             |
+| `components/SessionList/`     | Collapsible session drawer with dropdown menus                             |
+| `components/Transcript/`      | Scrolling transcript with activity entries                                 |
+| `components/StatusBar/`       | Connection status indicators (Relay Server / LiveKit / Claude)             |
+| `components/PairScreen/`      | Device pairing code entry screen                                           |
+| `components/Settings/`        | Settings panel (theme, auto-listen, speaker mute, device management)       |
+| `components/Header/`          | Animated rainbow gradient header with settings button                      |
+| `components/ParticleNetwork/` | Background particle animation canvas                                       |
 
 Components use a folder-based architecture with co-located `.module.scss` stylesheets, `.types.d.ts` type definitions, and sub-components in nested `components/` directories.
 
@@ -224,12 +236,13 @@ Components use a folder-based architecture with co-located `.module.scss` styles
 
 Claude Code skill definitions that invoke the MCP tools and service scripts.
 
-| Skill              | Description                                                      |
-| ------------------ | ---------------------------------------------------------------- |
-| `standby`          | Enter standby mode with conversation loop and activity reporting |
-| `start-services`   | Start all services (auto-installs on first use)                  |
-| `stop-services`    | Stop all running Voice Multiplexer services                      |
-| `service-status`   | Check the status of all services                                 |
+| Skill            | Description                                                      |
+| ---------------- | ---------------------------------------------------------------- |
+| `standby`        | Enter standby mode with conversation loop and activity reporting |
+| `start-services` | Start all services (auto-installs on first use)                  |
+| `stop-services`  | Stop all running Voice Multiplexer services                      |
+| `service-status` | Check the status of all services                                 |
+| `auth-code`      | Generate a device pairing code for the web app                   |
 
 The `standby` skill automatically checks if services are installed and running, handling first-time setup and startup before entering standby mode.
 
@@ -237,14 +250,14 @@ The `standby` skill automatically checks if services are installed and running, 
 
 All services are self-contained and managed by `scripts/start.sh`:
 
-| Service            | Port   | Description                                                    |
-| ------------------ | ------ | -------------------------------------------------------------- |
-| **Whisper server** | `:8100` | Local STT (whisper.cpp, compiled from source with Metal GPU)   |
-| **Kokoro server**  | `:8101` | Local TTS (kokoro-fastapi, PyTorch with MPS acceleration)      |
-| **LiveKit server** | `:7880` | WebRTC media server for audio transport                        |
-| **Relay server**   | `:3100` | The core hub (FastAPI + WebSocket)                             |
-| **MCP server**     | —      | Started automatically by Claude Code via the plugin system     |
-| **Vite dev server**| `:5173` | Optional, started when `DEV_MODE=true`                         |
+| Service             | Port    | Description                                                  |
+| ------------------- | ------- | ------------------------------------------------------------ |
+| **Whisper server**  | `:8100` | Local STT (whisper.cpp, compiled from source with Metal GPU) |
+| **Kokoro server**   | `:8101` | Local TTS (kokoro-fastapi, PyTorch with MPS acceleration)    |
+| **LiveKit server**  | `:7880` | WebRTC media server for audio transport                      |
+| **Relay server**    | `:3100` | The core hub (FastAPI + WebSocket)                           |
+| **MCP server**      | —       | Started automatically by Claude Code via the plugin system   |
+| **Vite dev server** | `:5173` | Optional, started when `DEV_MODE=true`                       |
 
 Whisper and Kokoro are installed to `~/.claude/voice-multiplexer/` by the install script and started/stopped alongside the other services.
 
@@ -278,6 +291,8 @@ All settings are configured via `~/.claude/voice-multiplexer/voice-multiplexer.e
 | `VMUX_KOKORO_PORT`      | `8101`                     | Kokoro server listen port                                     |
 | `VMUX_KOKORO_VOICE`     | `af_sky`                   | Default Kokoro TTS voice                                      |
 | `VMUX_KOKORO_DEVICE`    | `mps` (macOS)              | PyTorch device (mps, cuda, cpu)                               |
+| `AUTH_SECRET`           | (auto-generated)           | JWT signing secret (if empty, auth is disabled)               |
+| `AUTH_TOKEN_TTL_DAYS`   | `90`                       | How long device authorization tokens last                     |
 
 ## Installation
 
@@ -321,7 +336,8 @@ This compiles whisper.cpp from source with Metal GPU acceleration, sets up a Pyt
 │   ├── start.log                 # Start script output
 │   ├── whisper.log               # Whisper server logs
 │   └── kokoro.log                # Kokoro server logs
-└── voice-multiplexer.env         # Service config (ports, model, device)
+├── devices.json                  # Authorized devices (created on first pairing)
+└── voice-multiplexer.env         # Service config (ports, model, device, auth secret)
 ```
 
 Logs are rotated at 5 MB (one `.old` backup kept per log file).
@@ -341,11 +357,13 @@ Logs are rotated at 5 MB (one `.old` backup kept per log file).
 ### Loading the Plugin
 
 **From a marketplace** (recommended):
+
 ```
 /plugin install <marketplace-name>/voice-multiplexer
 ```
 
 **From a local directory** (development):
+
 ```bash
 alias claude='command claude --plugin-dir /path/to/claude-voice-multiplexer'
 ```
@@ -409,7 +427,8 @@ claude-voice-multiplexer/
 │   ├── standby/SKILL.md                 # Standby skill (auto-installs and starts services)
 │   ├── start-services/SKILL.md          # Start all services
 │   ├── stop-services/SKILL.md           # Stop all services
-│   └── service-status/SKILL.md          # Check service status
+│   ├── service-status/SKILL.md          # Check service status
+│   └── auth-code/SKILL.md              # Generate device pairing code
 ├── mcp-server/
 │   ├── server.py                        # FastMCP server with relay tools
 │   └── requirements.txt
@@ -418,6 +437,7 @@ claude-voice-multiplexer/
 │   ├── livekit_agent.py                 # LiveKit agent (VAD, audio I/O, status)
 │   ├── audio.py                         # Whisper/Kokoro HTTP clients
 │   ├── registry.py                      # Session registry with heartbeat timeout
+│   ├── auth.py                          # Device authentication (JWT, pairing codes)
 │   ├── config.py                        # Configuration (env vars + .env)
 │   └── requirements.txt
 ├── web/
@@ -434,13 +454,15 @@ claude-voice-multiplexer/
 │   │   │   ├── VoiceBar/                # Canvas audio visualizer
 │   │   │   ├── Transcript/              # Scrolling transcript + activity
 │   │   │   ├── StatusBar/               # Connection status indicators
-│   │   │   └── Settings/                # Settings panel
+│   │   │   ├── Settings/                # Settings panel + device management
+│   │   │   └── PairScreen/             # Device pairing code entry
 │   │   └── hooks/
 │   │       ├── useRelay.ts              # WebSocket state, persistent sessions
 │   │       ├── useLiveKit.ts            # LiveKit token + connection
 │   │       ├── useChime.ts              # Audio feedback chimes
 │   │       ├── useSettings.ts           # localStorage settings (theme, auto-listen, mute)
 │   │       ├── useTheme.ts             # Theme application (system pref + manual override)
+│   │       ├── useAuth.ts              # Auth state, device pairing, device management
 │   │       └── useTranscriptDB.ts       # IndexedDB persistence
 │   ├── index.html
 │   ├── package.json
@@ -470,9 +492,9 @@ This gives you explicit control over when services are running, versus plist-bas
 
 ### Scripts
 
-| Script            | Description                                                           |
-| ----------------- | --------------------------------------------------------------------- |
-| `scripts/start.sh`  | Start all services. Writes `.vmux.pid`. Blocks until Ctrl+C.      |
+| Script              | Description                                                        |
+| ------------------- | ------------------------------------------------------------------ |
+| `scripts/start.sh`  | Start all services. Writes `.vmux.pid`. Blocks until Ctrl+C.       |
 | `scripts/stop.sh`   | Stop running services. Finds process via PID file or process name. |
 | `scripts/status.sh` | Check status of all services. `--quiet` for exit code only.        |
 
@@ -480,11 +502,12 @@ This gives you explicit control over when services are running, versus plist-bas
 
 From any Claude Code session with the plugin loaded:
 
-| Skill                                     | Description                                       |
-| ----------------------------------------- | ------------------------------------------------- |
-| `/voice-multiplexer:start-services`       | Start services (if not already running)            |
-| `/voice-multiplexer:stop-services`        | Stop all running services                          |
-| `/voice-multiplexer:service-status`       | Check status of all services                       |
+| Skill                               | Description                             |
+| ----------------------------------- | --------------------------------------- |
+| `/voice-multiplexer:start-services` | Start services (if not already running) |
+| `/voice-multiplexer:stop-services`  | Stop all running services               |
+| `/voice-multiplexer:service-status` | Check status of all services            |
+| `/voice-multiplexer:auth-code`      | Generate a device pairing code          |
 
 The `standby` skill automatically checks if services are installed and running, and starts them if needed before entering standby mode.
 
@@ -500,13 +523,15 @@ The stop script uses a two-pass strategy to find the running instance:
 Known issues to investigate and fix:
 
 - [x] ~~recording chime still plays when microphone auto record is disabled~~ — Fixed: chimes now only play when auto-listen is enabled
+- [ ] When claude went into plan mode and asked a multipel choice question, it never responded to the relay server. We may need to build in some method of handling user prompts in the CLI
+- [ ] Should the .vmux.pid file be stored in the nested claude directory instead of project root?
 
 ## To Do
 
 ### High Priority
 
 - [ ] **Multiple simultaneous clients**: Map participant identity → client_id → session properly instead of naive first-match
-- [ ] **Authentication**: Add auth to the web app (JWT or session-based) to prevent unauthorized access
+- [x] **Authentication**: Device pairing with JWT tokens, one-time pairing codes, and device management (naming, revocation)
 - [ ] **Error recovery UX**: When Whisper or Kokoro goes down, show persistent error with retry button instead of transient auto-recover
 - [ ] **Reconnect handling**: When MCP plugin WebSocket drops and reconnects, restore session state cleanly
 
