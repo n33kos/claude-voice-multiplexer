@@ -37,7 +37,7 @@ mcp = FastMCP("voice-multiplexer")
 RELAY_URL = os.environ.get("RELAY_URL", "ws://localhost:3100")
 SESSION_ID = str(uuid.uuid4())[:8]
 HEARTBEAT_INTERVAL = 30  # seconds
-STANDBY_LISTEN_TIMEOUT = 3600  # seconds (60 min) — how long each relay_standby call waits
+STANDBY_LISTEN_TIMEOUT = 86400  # seconds (24 hr) — how long each relay_standby call waits
 RECONNECT_MAX_DELAY = 60  # seconds — max backoff between reconnect attempts
 RECONNECT_BASE_DELAY = 2  # seconds — initial backoff
 
