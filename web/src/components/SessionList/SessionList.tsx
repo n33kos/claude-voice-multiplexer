@@ -35,7 +35,7 @@ export function SessionList({
   );
 
   return (
-    <div data-component="SessionList" className={styles.Root}>
+    <div data-component="SessionList" className={classNames(styles.Root, { [styles.RootFull]: !connectedSessionId })}>
       <button onClick={onToggleExpanded} className={styles.HeaderBar}>
         <div className={styles.HeaderLeft}>
           {connectedSession ? (
@@ -60,7 +60,7 @@ export function SessionList({
       </button>
 
       {expanded && (
-        <div className={styles.ExpandedList}>
+        <div className={classNames(styles.ExpandedList, { [styles.ExpandedListFull]: !connectedSessionId })}>
           {sessions.map((session) => {
             const isConnected =
               session.session_id === connectedSessionId && !!connectedSessionId;

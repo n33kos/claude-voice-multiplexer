@@ -140,11 +140,18 @@ export function useRelay(authenticated: boolean = true) {
 
   // Persist live sessions to IndexedDB as they arrive
   const persistLiveSessions = useCallback((sessions: Session[]) => {
+    // Preserve existing display_name when updating persisted sessions
+    const currentPersisted = stateRef.current.persistedSessions
+    const existingNames = new Map(
+      currentPersisted.filter(p => p.display_name).map(p => [p.session_name, p.display_name!])
+    )
+
     for (const s of sessions) {
       savePersistedSession({
         session_name: s.name,
         dir_name: s.dir_name,
         last_seen: s.last_heartbeat,
+        display_name: existingNames.get(s.name),
       })
     }
     // Also update local persisted state so merge is correct
@@ -153,10 +160,12 @@ export function useRelay(authenticated: boolean = true) {
         prev.persistedSessions.map(p => [p.session_name, p])
       )
       for (const s of sessions) {
+        const existing = persistedMap.get(s.name)
         persistedMap.set(s.name, {
           session_name: s.name,
           dir_name: s.dir_name,
           last_seen: s.last_heartbeat,
+          display_name: existing?.display_name,
         })
       }
       return { ...prev, persistedSessions: Array.from(persistedMap.values()) }
@@ -200,14 +209,28 @@ export function useRelay(authenticated: boolean = true) {
         case 'session_connected': {
           const sessionName = data.session_name || data.session_id
           setState(s => ({ ...s, connectedSessionId: data.session_id, connectedSessionName: sessionName, agentStatus: { state: 'idle', activity: null } }))
-          // Load persisted transcripts from IndexedDB
-          loadTranscripts(sessionName).then(entries => {
-            if (entries.length > 0) {
-              setState(s => ({
-                ...s,
-                transcripts: { ...s.transcripts, [sessionName]: entries },
-              }))
-            }
+          // Load persisted transcripts from IndexedDB, merging with any
+          // entries already in state (e.g. from a transcript_sync message)
+          loadTranscripts(sessionName).then(dbEntries => {
+            if (dbEntries.length === 0) return
+            setState(s => {
+              const existing = s.transcripts[sessionName] || []
+              if (existing.length === 0) {
+                return { ...s, transcripts: { ...s.transcripts, [sessionName]: dbEntries } }
+              }
+              // Merge: keep all DB entries, add any existing entries not in DB
+              const merged = [...dbEntries]
+              for (const entry of existing) {
+                const isDupe = dbEntries.some(
+                  e => e.speaker === entry.speaker &&
+                    e.text === entry.text &&
+                    Math.abs(e.timestamp - entry.timestamp) < 2000
+                )
+                if (!isDupe) merged.push(entry)
+              }
+              merged.sort((a, b) => a.timestamp - b.timestamp)
+              return { ...s, transcripts: { ...s.transcripts, [sessionName]: merged } }
+            })
           })
           break
         }
@@ -222,7 +245,7 @@ export function useRelay(authenticated: boolean = true) {
               speaker: data.speaker,
               text: data.text,
               session_id: data.session_id,
-              timestamp: Date.now(),
+              timestamp: data.ts ? data.ts * 1000 : Date.now(),
             }
             return {
               ...s,
@@ -233,6 +256,40 @@ export function useRelay(authenticated: boolean = true) {
             }
           })
           scheduleSave(transcriptSessionName)
+          break
+        }
+        case 'transcript_sync': {
+          // Merge buffered transcripts from server on reconnect
+          const syncSessionName = data.session_name || data.session_id
+          const serverEntries: TranscriptEntry[] = (data.entries || [])
+            .filter((e: { speaker: string }) => e.speaker === 'user' || e.speaker === 'claude')
+            .map((e: { speaker: string; text: string; session_id: string; ts: number }) => ({
+              speaker: e.speaker as TranscriptEntry['speaker'],
+              text: e.text,
+              session_id: e.session_id,
+              timestamp: e.ts ? e.ts * 1000 : Date.now(),
+            }))
+          if (serverEntries.length === 0) break
+          setState(s => {
+            const existing = s.transcripts[syncSessionName] || []
+            // Merge: deduplicate by matching text + speaker within a 2s window
+            const merged = [...existing]
+            for (const entry of serverEntries) {
+              const isDuplicate = existing.some(
+                e => e.speaker === entry.speaker &&
+                  e.text === entry.text &&
+                  Math.abs(e.timestamp - entry.timestamp) < 2000
+              )
+              if (!isDuplicate) merged.push(entry)
+            }
+            // Sort by timestamp to maintain order
+            merged.sort((a, b) => a.timestamp - b.timestamp)
+            return {
+              ...s,
+              transcripts: { ...s.transcripts, [syncSessionName]: merged },
+            }
+          })
+          scheduleSave(syncSessionName)
           break
         }
         case 'agent_status': {

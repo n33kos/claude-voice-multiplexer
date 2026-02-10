@@ -32,6 +32,12 @@ _clients: dict[str, WebSocket] = {}
 # LiveKit agent (initialized on startup)
 _agent: RelayAgent | None = None
 
+# Transcript buffer per session (keyed by session_id)
+# Holds the last N entries so reconnecting clients can catch up.
+MAX_TRANSCRIPT_BUFFER = 100
+_transcript_buffers: dict[str, list[dict]] = {}  # session_id → [entry, ...]
+_transcript_seq: dict[str, int] = {}  # session_id → next sequence number
+
 
 # --- Auth helpers ---
 
@@ -87,18 +93,33 @@ async def _notify_client_transcript(session_id: str, speaker: str, text: str):
     """Send a transcript entry to all connected web clients.
 
     Transcripts are broadcast so clients can persist them even when
-    they're viewing a different session.
+    they're viewing a different session.  Each entry is also buffered
+    (up to MAX_TRANSCRIPT_BUFFER) so reconnecting clients can catch up.
     """
     session = await registry.get(session_id)
     if not session:
         return
-    msg = json.dumps({
+
+    # Assign a sequence number and buffer the entry
+    seq = _transcript_seq.get(session_id, 0)
+    _transcript_seq[session_id] = seq + 1
+
+    entry = {
         "type": "transcript",
         "speaker": speaker,
         "text": text,
         "session_id": session_id,
         "session_name": session.name,
-    })
+        "seq": seq,
+        "ts": time.time(),
+    }
+
+    buf = _transcript_buffers.setdefault(session_id, [])
+    buf.append(entry)
+    if len(buf) > MAX_TRANSCRIPT_BUFFER:
+        _transcript_buffers[session_id] = buf[-MAX_TRANSCRIPT_BUFFER:]
+
+    msg = json.dumps(entry)
     for client_ws in list(_clients.values()):
         try:
             await client_ws.send_text(msg)
@@ -416,6 +437,8 @@ async def session_ws(ws: WebSocket):
                 except Exception as e:
                     print(f"[server] Error removing room: {e}")
             await registry.unregister(session_id)
+            _transcript_buffers.pop(session_id, None)
+            _transcript_seq.pop(session_id, None)
             print(f"Session unregistered: {session_id}")
             await _broadcast_sessions()
 
@@ -481,6 +504,17 @@ async def client_ws(ws: WebSocket):
                         "activity": status.get("activity"),
                         "timestamp": time.time(),
                     }))
+
+                # Send buffered transcripts so reconnecting clients can catch up
+                if success and session_id in _transcript_buffers:
+                    buf = _transcript_buffers[session_id]
+                    if buf:
+                        await ws.send_text(json.dumps({
+                            "type": "transcript_sync",
+                            "session_id": session_id,
+                            "session_name": session_data.name if session_data else session_id,
+                            "entries": buf,
+                        }))
                 await _broadcast_sessions()
 
             elif msg_type == "interrupt":
