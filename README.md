@@ -89,7 +89,7 @@ Claude calls relay_respond(text)
             → Agent status → idle
 ```
 
-Error states auto-recover to idle after 5 seconds. The agent stays in the thinking state until Claude explicitly calls `relay_standby`; the interrupt button provides manual recovery if Claude disconnects.
+Error states auto-recover to idle after 5 seconds. The agent stays in the thinking state until Claude explicitly calls `relay_standby`; the interrupt button provides manual recovery if Claude disconnects. A 250ms idle debounce prevents Whisper hallucinations from ambient noise on mic unmute. After TTS playback completes, timestamp-based priority resolution determines the correct state: if Claude called `relay_standby` during TTS with no newer status updates, the agent transitions to idle; if Claude sent a status update during TTS, the agent stays in thinking with the latest activity.
 
 ### Input Gating
 
@@ -198,13 +198,13 @@ A static-built React app served by the relay server. Mobile-first design for pho
 - Persistent sessions in IndexedDB (survive disconnects and page reloads)
 - Voice bar visualizer with real audio data (voice-optimized frequency mapping)
 - Mic toggle with auto-listen mode (mic auto-enables when agent goes idle)
-- Speaker mute button for silencing TTS playback
+- Speaker mute button for silencing TTS playback (uses Web Audio API GainNode for iOS hardware volume compatibility)
 - Activity label display (shows what Claude is doing in real time)
 - Activity entries persisted inline in the transcript
 - Interrupt button (visible during thinking/speaking/error states)
 - Audio chimes on state transitions (ascending for ready, descending for captured)
 - Live transcript with IndexedDB persistence (keyed by session name)
-- Settings panel (theme selector, auto-listen toggle, speaker mute, device management)
+- Settings panel (theme selector, auto-listen toggle, speaker mute, status pill toggle, device management)
 - Light/dark mode with system preference detection (three-option: System/Light/Dark)
 - Device authentication with pairing codes and JWT tokens
 - Connection status bar (Relay Server / LiveKit Audio / Claude indicators)
@@ -218,17 +218,17 @@ A static-built React app served by the relay server. Mobile-first design for pho
 | `hooks/useRelay.ts`           | WebSocket state, `AgentStatus`, persistent sessions, transcript management |
 | `hooks/useLiveKit.ts`         | LiveKit token fetching and connection state                                |
 | `hooks/useChime.ts`           | Audio feedback chimes on state transitions                                 |
-| `hooks/useSettings.ts`        | localStorage-backed settings (theme, auto-listen, speaker mute)            |
-| `hooks/useTheme.ts`           | Theme application (system preference detection, data-theme attribute)      |
+| `hooks/useSettings.ts`        | localStorage-backed settings (theme, auto-listen, speaker mute, status pill)  |
+| `hooks/useTheme.ts`           | Theme application (system preference detection, data-theme attribute)         |
 | `hooks/useAuth.ts`            | Auth state, device pairing, device management API                          |
 | `hooks/useTranscriptDB.ts`    | IndexedDB persistence for transcripts and sessions                         |
-| `components/VoiceControls/`   | LiveKit room, mic/speaker/interrupt controls, audio analysers              |
+| `components/VoiceControls/`   | LiveKit room, mic/speaker/interrupt, Web Audio API routing for iOS        |
 | `components/VoiceBar/`        | Canvas audio visualizer with voice-optimized frequency mapping             |
 | `components/SessionList/`     | Collapsible session drawer with dropdown menus                             |
 | `components/Transcript/`      | Scrolling transcript with activity entries                                 |
 | `components/StatusBar/`       | Connection status indicators (Relay Server / LiveKit / Claude)             |
 | `components/PairScreen/`      | Device pairing code entry screen                                           |
-| `components/Settings/`        | Settings panel (theme, auto-listen, speaker mute, device management)       |
+| `components/Settings/`        | Settings panel (theme, auto-listen, speaker mute, status pill, devices)     |
 | `components/Header/`          | Animated rainbow gradient header with settings button                      |
 | `components/ParticleNetwork/` | Background particle animation canvas                                       |
 
@@ -488,7 +488,7 @@ claude-voice-multiplexer/
 │   │       ├── useRelay.ts              # WebSocket state, persistent sessions
 │   │       ├── useLiveKit.ts            # LiveKit token + connection
 │   │       ├── useChime.ts              # Audio feedback chimes
-│   │       ├── useSettings.ts           # localStorage settings (theme, auto-listen, mute)
+│   │       ├── useSettings.ts           # localStorage settings (theme, auto-listen, mute, status pill)
 │   │       ├── useTheme.ts             # Theme application (system pref + manual override)
 │   │       ├── useAuth.ts              # Auth state, device pairing, device management
 │   │       └── useTranscriptDB.ts       # IndexedDB persistence

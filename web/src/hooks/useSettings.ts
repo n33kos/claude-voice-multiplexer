@@ -6,7 +6,6 @@ export interface Settings {
   autoListen: boolean
   speakerMuted: boolean
   showStatusPill: boolean
-  notifications: boolean
   theme: ThemeMode
 }
 
@@ -16,7 +15,6 @@ const DEFAULTS: Settings = {
   autoListen: true,
   speakerMuted: false,
   showStatusPill: true,
-  notifications: true,
   theme: 'system',
 }
 

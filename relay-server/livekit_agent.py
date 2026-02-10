@@ -183,7 +183,9 @@ class SessionRoom:
         self._current_activity: str | None = None
         self._error_timer: asyncio.Task | None = None
         self._pending_listening: str | None = None
+        self._pending_listening_at: float = 0.0
         self._idle_entered_at: float = 0.0
+        self._last_status_update_at: float = 0.0
 
         # Track audio stream tasks per participant
         self._audio_stream_tasks: dict[str, asyncio.Task] = {}
@@ -447,6 +449,7 @@ class SessionRoom:
         print(f"[room:{self.room_name}] Streaming TTS response: {text[:50]}...")
 
         self._is_speaking = True
+        tts_started_at = time.time()
         await self._notify_status("speaking")
         try:
             total_samples = 0
@@ -482,18 +485,25 @@ class SessionRoom:
             self._speaking_ended_at = time.time()
             self._audio_buffer = []
 
-            if self._pending_listening:
+            if self._pending_listening and self._last_status_update_at <= self._pending_listening_at:
+                # Claude called relay_standby during TTS and no newer work started
                 self._pending_listening = None
                 self._waiting_for_response = False
                 self._current_activity = None
                 await self._notify_status("idle")
+            elif self._last_status_update_at > tts_started_at:
+                # Claude sent a status update during TTS — still working
+                self._pending_listening = None
+                await self._notify_status("thinking", self._current_activity)
             else:
+                self._pending_listening = None
                 await self._notify_status("thinking", "Waiting for Claude...")
 
     async def handle_claude_listening(self):
         """Called when Claude enters relay_standby again — ready for next voice input."""
         if self._is_speaking:
             self._pending_listening = self.session_id
+            self._pending_listening_at = time.time()
             return
 
         self._waiting_for_response = False
@@ -502,6 +512,7 @@ class SessionRoom:
 
     async def handle_status_update(self, activity: str):
         """Called when Claude sends a status_update with current activity."""
+        self._last_status_update_at = time.time()
         self._current_activity = activity
         await self._notify_status("thinking", activity=activity)
 

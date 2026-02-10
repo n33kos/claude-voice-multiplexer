@@ -77,11 +77,17 @@ export function MicControls({
   const pillStyle = (() => {
     switch (agentState) {
       case "thinking":
-        return { className: styles.StatusPillThinking, label: agentStatus.activity || "Processing..." };
+        return {
+          className: styles.StatusPillThinking,
+          label: agentStatus.activity || "Processing...",
+        };
       case "speaking":
         return { className: styles.StatusPillSpeaking, label: "Speaking" };
       case "error":
-        return { className: styles.StatusPillError, label: agentStatus.activity || "Error" };
+        return {
+          className: styles.StatusPillError,
+          label: agentStatus.activity || "Error",
+        };
       default:
         return autoListen
           ? { className: styles.StatusPillListening, label: "Listening" }
@@ -116,7 +122,10 @@ export function MicControls({
           )}
         >
           <svg
-            className={classNames(styles.ButtonIcon, autoListen ? styles.MicIconActive : styles.MicIconInactive)}
+            className={classNames(
+              styles.ButtonIcon,
+              autoListen ? styles.MicIconActive : styles.MicIconInactive,
+            )}
             fill="none"
             viewBox="0 0 24 24"
             strokeWidth={2}
@@ -141,35 +150,6 @@ export function MicControls({
                   d="M3 3l18 18"
                 />
               </>
-            )}
-          </svg>
-        </button>
-        <button
-          onClick={toggleSpeaker}
-          className={classNames(
-            styles.CircleButton,
-            speakerMuted ? styles.SpeakerButtonInactive : styles.SpeakerButtonActive,
-          )}
-        >
-          <svg
-            className={classNames(styles.ButtonIcon, speakerMuted ? styles.SpeakerIconInactive : styles.SpeakerIconActive)}
-            fill="none"
-            viewBox="0 0 24 24"
-            strokeWidth={2}
-            stroke="currentColor"
-          >
-            {speakerMuted ? (
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M17.25 9.75L19.5 12m0 0l2.25 2.25M19.5 12l2.25-2.25M19.5 12l-2.25 2.25m-10.5-6l4.72-3.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-3.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"
-              />
-            ) : (
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-3.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-3.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"
-              />
             )}
           </svg>
         </button>
@@ -201,6 +181,42 @@ export function MicControls({
             </svg>
           </button>
         )}
+        <button
+          onClick={toggleSpeaker}
+          className={classNames(
+            styles.CircleButton,
+            speakerMuted
+              ? styles.SpeakerButtonInactive
+              : styles.SpeakerButtonActive,
+          )}
+        >
+          <svg
+            className={classNames(
+              styles.ButtonIcon,
+              speakerMuted
+                ? styles.SpeakerIconInactive
+                : styles.SpeakerIconActive,
+            )}
+            fill="none"
+            viewBox="0 0 24 24"
+            strokeWidth={2}
+            stroke="currentColor"
+          >
+            {speakerMuted ? (
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M17.25 9.75L19.5 12m0 0l2.25 2.25M19.5 12l2.25-2.25M19.5 12l-2.25 2.25m-10.5-6l4.72-3.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-3.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"
+              />
+            ) : (
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-3.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-3.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"
+              />
+            )}
+          </svg>
+        </button>
       </div>
     </div>
   );

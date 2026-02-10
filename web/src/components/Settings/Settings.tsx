@@ -177,23 +177,6 @@ export function Settings({
             </button>
           </label>
 
-          <label className={styles.SettingRow}>
-            <div className={styles.SettingLabel}>
-              <span className={styles.SettingTitle}>Notifications</span>
-              <span className={styles.SettingDescription}>
-                Browser notification when Claude finishes while tab is hidden
-              </span>
-            </div>
-            <button
-              role="switch"
-              aria-checked={settings.notifications}
-              onClick={() => onUpdate({ notifications: !settings.notifications })}
-              className={classNames(styles.Toggle, { [styles.ToggleActive]: settings.notifications })}
-            >
-              <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.notifications })} />
-            </button>
-          </label>
-
           <div className={styles.Divider} />
 
           <div className={styles.SectionHeader}>

@@ -17,6 +17,8 @@ const AGENT_IDENTITY_PREFIX = "relay-agent";
  */
 function AgentAudioRenderer({ muted }: { muted: boolean }) {
   const audioRef = useRef<HTMLAudioElement>(null);
+  const gainRef = useRef<GainNode | null>(null);
+  const ctxRef = useRef<AudioContext | null>(null);
   const tracks = useTracks([Track.Source.Microphone]);
 
   const agentTrack = tracks.find(
@@ -32,11 +34,40 @@ function AgentAudioRenderer({ muted }: { muted: boolean }) {
       if (el) el.srcObject = null;
       return;
     }
-    el.srcObject = new MediaStream([mediaTrack]);
+
+    // Route audio through Web Audio API GainNode.
+    // This changes the iOS audio category so hardware volume buttons work,
+    // and gives us programmatic mute control via gain.
+    const stream = new MediaStream([mediaTrack]);
+    const ctx = new AudioContext();
+    const source = ctx.createMediaStreamSource(stream);
+    const gain = ctx.createGain();
+    source.connect(gain);
+    gain.connect(ctx.destination);
+    ctxRef.current = ctx;
+    gainRef.current = gain;
+
+    // Also attach to audio element to keep WebRTC session active on iOS
+    el.srcObject = stream;
+    el.muted = true; // Silence the element — audio plays through gain node
+
+    if (ctx.state === "suspended") ctx.resume();
+
+    return () => {
+      source.disconnect();
+      gain.disconnect();
+      ctx.close();
+      ctxRef.current = null;
+      gainRef.current = null;
+    };
   }, [agentTrack?.publication.track?.mediaStreamTrack]);
 
+  // Mute by zeroing the gain node
   useEffect(() => {
-    if (audioRef.current) audioRef.current.muted = muted;
+    if (gainRef.current) {
+      gainRef.current.gain.value = muted ? 0 : 1;
+    }
+    if (ctxRef.current?.state === "suspended") ctxRef.current.resume();
   }, [muted]);
 
   return <audio ref={audioRef} autoPlay />;

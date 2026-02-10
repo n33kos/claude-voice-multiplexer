@@ -47,42 +47,6 @@ export default function App() {
     prevOnlineIds.current = currentIds;
   }, [relay.sessions]);
 
-  // Request notification permission on first user interaction when enabled
-  useEffect(() => {
-    if (!settings.notifications) return;
-    if ("Notification" in window && Notification.permission === "default") {
-      const handler = () => {
-        Notification.requestPermission();
-        document.removeEventListener("click", handler);
-      };
-      document.addEventListener("click", handler);
-      return () => document.removeEventListener("click", handler);
-    }
-  }, [settings.notifications]);
-
-  // Browser notification when Claude finishes a task while tab is hidden
-  const prevAgentState = useRef(relay.agentStatus.state);
-  useEffect(() => {
-    const prev = prevAgentState.current;
-    prevAgentState.current = relay.agentStatus.state;
-    if (prev === relay.agentStatus.state) return;
-
-    if (
-      settings.notifications &&
-      document.hidden &&
-      (prev === "thinking" || prev === "speaking") &&
-      relay.agentStatus.state === "idle" &&
-      relay.connectedSessionName
-    ) {
-      if ("Notification" in window && Notification.permission === "granted") {
-        new Notification("Claude is ready", {
-          body: `Session "${relay.connectedSessionName}" is waiting for input.`,
-          tag: "vmux-ready",
-        });
-      }
-    }
-  }, [relay.agentStatus.state, relay.connectedSessionName, settings.notifications]);
-
   // Auto-collapse session list when connected, expand when disconnected
   useEffect(() => {
     setSessionsExpanded((prev) => {
