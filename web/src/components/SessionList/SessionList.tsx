@@ -64,17 +64,17 @@ export function SessionList({
           {sessions.map((session) => {
             const isConnected =
               session.session_id === connectedSessionId && !!connectedSessionId;
-            const canConnect = session.online && !!session.session_id;
+            const canConnect = session.online;
             return (
               <div
-                key={session.session_name}
+                key={session.session_id}
                 onClick={() => {
                   if (!canConnect) return;
                   initAudio();
                   if (isConnected) {
                     onDisconnect();
                   } else {
-                    onConnect(session.session_id!);
+                    onConnect(session.session_id);
                     onToggleExpanded();
                   }
                 }}
@@ -101,9 +101,11 @@ export function SessionList({
                     <div className={styles.DirName}>{session.dir_name}</div>
                   </div>
                   <div className={styles.SessionMeta}>
-                    <span className={styles.TimeAgo}>
-                      {timeAgo(session.last_seen)}
-                    </span>
+                    {session.last_interaction != null && (
+                      <span className={styles.TimeAgo}>
+                        {timeAgo(session.last_interaction / 1000)}
+                      </span>
+                    )}
                     <SessionMenu
                       session={session}
                       onClearTranscript={onClearTranscript}

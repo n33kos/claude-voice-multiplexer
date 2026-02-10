@@ -6,10 +6,10 @@ the voice multiplexer relay server for remote voice interaction.
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import time
-import uuid
 from pathlib import Path
 
 # Load configuration from voice-multiplexer.env
@@ -35,7 +35,17 @@ except ImportError:
 mcp = FastMCP("voice-multiplexer")
 
 RELAY_URL = os.environ.get("RELAY_URL", "ws://localhost:3100")
-SESSION_ID = str(uuid.uuid4())[:8]
+
+def _make_session_id() -> str:
+    """Generate a deterministic session ID from the working directory path.
+
+    Same directory always produces the same ID, so reconnecting in the same
+    folder seamlessly takes over the existing session.
+    """
+    cwd = os.path.realpath(os.getcwd())
+    return hashlib.sha256(cwd.encode()).hexdigest()[:12]
+
+SESSION_ID = _make_session_id()
 HEARTBEAT_INTERVAL = 30  # seconds
 STANDBY_LISTEN_TIMEOUT = 86400  # seconds (24 hr) — how long each relay_standby call waits
 RECONNECT_MAX_DELAY = 60  # seconds — max backoff between reconnect attempts
@@ -95,7 +105,7 @@ def _get_dir_name() -> str:
         if toplevel and common_dir:
             # Resolve both to absolute paths for comparison
             toplevel_path = Path(toplevel).resolve()
-            # git-common-dir is relative to .git dir; resolve from toplevel
+            # git-common-dir is relative to cwd; resolve from toplevel
             common_path = (Path(toplevel) / common_dir).resolve()
 
             # If common_dir points outside the toplevel, we're in a linked worktree
@@ -111,6 +121,8 @@ def _get_dir_name() -> str:
                     # Use the repo name from the main worktree + branch
                     repo_name = common_path.parent.name
                     return f"{repo_name}/{branch}"
+                # Fallback: use the worktree directory name if branch detection fails
+                return f"{dir_name} (worktree)"
     except Exception:
         pass
 

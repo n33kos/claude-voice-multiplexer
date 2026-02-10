@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useRelay } from "./hooks/useRelay";
 import { useLiveKit } from "./hooks/useLiveKit";
-import { useChime, playNotificationChime } from "./hooks/useChime";
+import { useChime, playNotificationChime, playDisconnectChime } from "./hooks/useChime";
 import { useSettings } from "./hooks/useSettings";
 import { useTheme } from "./hooks/useTheme";
 import { useAuth } from "./hooks/useAuth";
@@ -40,9 +40,11 @@ export default function App() {
       relay.sessions.filter((s) => s.online && s.session_id).map((s) => s.session_id!),
     );
     const isNew = [...currentIds].some((id) => !prevOnlineIds.current.has(id));
+    const isGone = [...prevOnlineIds.current].some((id) => !currentIds.has(id));
     // Only chime if we had sessions before (skip initial load)
-    if (isNew && prevOnlineIds.current.size > 0) {
-      playNotificationChime();
+    if (prevOnlineIds.current.size > 0) {
+      if (isNew) playNotificationChime();
+      if (isGone) playDisconnectChime();
     }
     prevOnlineIds.current = currentIds;
   }, [relay.sessions]);

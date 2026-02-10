@@ -4,9 +4,9 @@ import styles from "./SessionMenu.module.scss";
 
 interface SessionMenuProps {
   session: DisplaySession;
-  onClearTranscript: (sessionName: string) => void;
-  onRemoveSession: (sessionName: string) => void;
-  onRenameSession: (sessionName: string, displayName: string) => void;
+  onClearTranscript: (sessionId: string) => void;
+  onRemoveSession: (sessionId: string) => void;
+  onRenameSession: (sessionId: string, displayName: string) => void;
 }
 
 export function SessionMenu({
@@ -58,7 +58,7 @@ export function SessionMenu({
                 onKeyDown={(e) => {
                   e.stopPropagation();
                   if (e.key === "Enter") {
-                    onRenameSession(session.session_name, renameValue.trim());
+                    onRenameSession(session.session_id, renameValue.trim());
                     setRenaming(false);
                     setOpen(false);
                   } else if (e.key === "Escape") {
@@ -86,7 +86,7 @@ export function SessionMenu({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  onClearTranscript(session.session_name);
+                  onClearTranscript(session.session_id);
                   setOpen(false);
                 }}
                 className={styles.MenuItem}
@@ -97,7 +97,7 @@ export function SessionMenu({
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    onRemoveSession(session.session_name);
+                    onRemoveSession(session.session_id);
                     setOpen(false);
                   }}
                   className={styles.DeleteItem}

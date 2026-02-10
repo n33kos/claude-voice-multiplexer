@@ -26,13 +26,14 @@ export interface Session {
 }
 
 export interface DisplaySession {
-  session_name: string
-  display_name: string          // user-set name, falls back to session_name
+  session_id: string             // primary key — always present (hash of path)
+  session_name: string           // default name from MCP server
+  display_name: string           // user-set override, falls back to session_name
   dir_name: string
   room_name: string
   online: boolean
-  session_id: string | null   // null for offline-only sessions
   last_seen: number
+  last_interaction: number | null  // ms timestamp of last user/claude transcript entry
   connected_clients: ConnectedClient[]
 }
 
@@ -55,7 +56,7 @@ interface RelayState {
   persistedSessions: PersistedSession[]
   connectedSessionId: string | null
   connectedSessionName: string | null
-  transcripts: Record<string, TranscriptEntry[]>  // keyed by session name
+  transcripts: Record<string, TranscriptEntry[]>  // keyed by session_id
   status: 'disconnected' | 'connecting' | 'connected'
   agentStatus: AgentStatus
 }
@@ -67,49 +68,71 @@ function makeRoomName(sessionName: string): string {
   return `vmux_${sessionName.replace(/[^a-zA-Z0-9_\-]/g, '_')}`
 }
 
+/** Find the timestamp (ms) of the last user or claude transcript entry. */
+function getLastInteraction(transcripts: Record<string, TranscriptEntry[]>, sessionId: string): number | null {
+  const entries = transcripts[sessionId]
+  if (!entries) return null
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i].speaker === 'user' || entries[i].speaker === 'claude') {
+      return entries[i].timestamp
+    }
+  }
+  return null
+}
+
 function mergeDisplaySessions(
   live: Session[],
   persisted: PersistedSession[],
+  transcripts: Record<string, TranscriptEntry[]>,
 ): DisplaySession[] {
-  const byName = new Map<string, DisplaySession>()
+  const result = new Map<string, DisplaySession>()
 
-  // Build a lookup for persisted display names
+  // Build a lookup for persisted display names (keyed by session_id)
   const displayNames = new Map(
-    persisted.filter(p => p.display_name).map(p => [p.session_name, p.display_name!])
+    persisted.filter(p => p.display_name).map(p => [p.session_id, p.display_name!])
   )
 
-  // Add persisted (offline) sessions first
+  // Track which session_ids are live
+  const liveIds = new Set(live.map(s => s.session_id))
+
+  // Add persisted (offline) sessions — only those not currently live
   for (const p of persisted) {
-    byName.set(p.session_name, {
-      session_name: p.session_name,
-      display_name: p.display_name || p.session_name,
-      dir_name: p.dir_name,
-      room_name: makeRoomName(p.session_name),
-      online: false,
-      session_id: null,
-      last_seen: p.last_seen,
-      connected_clients: [],
-    })
+    if (!liveIds.has(p.session_id)) {
+      result.set(p.session_id, {
+        session_id: p.session_id,
+        session_name: p.session_name,
+        display_name: p.display_name || p.session_name,
+        dir_name: p.dir_name,
+        room_name: makeRoomName(p.session_name),
+        online: false,
+        last_seen: p.last_seen,
+        last_interaction: getLastInteraction(transcripts, p.session_id),
+        connected_clients: [],
+      })
+    }
   }
 
-  // Override with live sessions (use server-provided room_name)
+  // Add live sessions (keyed by session_id — unique per directory)
   for (const s of live) {
-    byName.set(s.name, {
+    result.set(s.session_id, {
+      session_id: s.session_id,
       session_name: s.name,
-      display_name: displayNames.get(s.name) || s.name,
+      display_name: displayNames.get(s.session_id) || s.name,
       dir_name: s.dir_name,
       room_name: s.room_name,
       online: true,
-      session_id: s.session_id,
       last_seen: s.last_heartbeat,
+      last_interaction: getLastInteraction(transcripts, s.session_id),
       connected_clients: s.connected_clients || [],
     })
   }
 
-  // Sort: online first, then by last_seen descending
-  return Array.from(byName.values()).sort((a, b) => {
+  // Sort: online first, then by last interaction descending (no interaction goes last)
+  return Array.from(result.values()).sort((a, b) => {
     if (a.online !== b.online) return a.online ? -1 : 1
-    return b.last_seen - a.last_seen
+    const aTime = a.last_interaction ?? 0
+    const bTime = b.last_interaction ?? 0
+    return bTime - aTime
   })
 }
 
@@ -140,28 +163,30 @@ export function useRelay(authenticated: boolean = true) {
 
   // Persist live sessions to IndexedDB as they arrive
   const persistLiveSessions = useCallback((sessions: Session[]) => {
-    // Preserve existing display_name when updating persisted sessions
     const currentPersisted = stateRef.current.persistedSessions
-    const existingNames = new Map(
-      currentPersisted.filter(p => p.display_name).map(p => [p.session_name, p.display_name!])
+    // Preserve existing display_name when updating
+    const existingDisplayNames = new Map(
+      currentPersisted.filter(p => p.display_name).map(p => [p.session_id, p.display_name!])
     )
 
     for (const s of sessions) {
       savePersistedSession({
+        session_id: s.session_id,
         session_name: s.name,
         dir_name: s.dir_name,
         last_seen: s.last_heartbeat,
-        display_name: existingNames.get(s.name),
+        display_name: existingDisplayNames.get(s.session_id),
       })
     }
     // Also update local persisted state so merge is correct
     setState(prev => {
       const persistedMap = new Map(
-        prev.persistedSessions.map(p => [p.session_name, p])
+        prev.persistedSessions.map(p => [p.session_id, p])
       )
       for (const s of sessions) {
-        const existing = persistedMap.get(s.name)
-        persistedMap.set(s.name, {
+        const existing = persistedMap.get(s.session_id)
+        persistedMap.set(s.session_id, {
+          session_id: s.session_id,
           session_name: s.name,
           dir_name: s.dir_name,
           last_seen: s.last_heartbeat,
@@ -173,12 +198,12 @@ export function useRelay(authenticated: boolean = true) {
   }, [])
 
   // Debounced save to IndexedDB whenever transcripts change
-  const scheduleSave = useCallback((sessionName: string) => {
+  const scheduleSave = useCallback((sessionId: string) => {
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
-      const entries = stateRef.current.transcripts[sessionName]
+      const entries = stateRef.current.transcripts[sessionId]
       if (entries) {
-        saveTranscripts(sessionName, entries)
+        saveTranscripts(sessionId, entries)
       }
     }, 500)
   }, [])
@@ -207,16 +232,16 @@ export function useRelay(authenticated: boolean = true) {
           persistLiveSessions(data.sessions)
           break
         case 'session_connected': {
-          const sessionName = data.session_name || data.session_id
-          setState(s => ({ ...s, connectedSessionId: data.session_id, connectedSessionName: sessionName, agentStatus: { state: 'idle', activity: null } }))
-          // Load persisted transcripts from IndexedDB, merging with any
-          // entries already in state (e.g. from a transcript_sync message)
-          loadTranscripts(sessionName).then(dbEntries => {
+          const sessionId = data.session_id
+          const sessionName = data.session_name || sessionId
+          setState(s => ({ ...s, connectedSessionId: sessionId, connectedSessionName: sessionName, agentStatus: { state: 'idle', activity: null } }))
+          // Load persisted transcripts from IndexedDB by session_id
+          loadTranscripts(sessionId).then(dbEntries => {
             if (dbEntries.length === 0) return
             setState(s => {
-              const existing = s.transcripts[sessionName] || []
+              const existing = s.transcripts[sessionId] || []
               if (existing.length === 0) {
-                return { ...s, transcripts: { ...s.transcripts, [sessionName]: dbEntries } }
+                return { ...s, transcripts: { ...s.transcripts, [sessionId]: dbEntries } }
               }
               // Merge: keep all DB entries, add any existing entries not in DB
               const merged = [...dbEntries]
@@ -229,7 +254,7 @@ export function useRelay(authenticated: boolean = true) {
                 if (!isDupe) merged.push(entry)
               }
               merged.sort((a, b) => a.timestamp - b.timestamp)
-              return { ...s, transcripts: { ...s.transcripts, [sessionName]: merged } }
+              return { ...s, transcripts: { ...s.transcripts, [sessionId]: merged } }
             })
           })
           break
@@ -238,29 +263,29 @@ export function useRelay(authenticated: boolean = true) {
           setState(s => ({ ...s, connectedSessionId: null, connectedSessionName: null }))
           break
         case 'transcript': {
-          // Use session_name from server (works even when viewing a different session)
-          const transcriptSessionName = data.session_name || data.session_id
+          // Key transcripts by session_id
+          const sessionId = data.session_id
           setState(s => {
             const entry: TranscriptEntry = {
               speaker: data.speaker,
               text: data.text,
-              session_id: data.session_id,
+              session_id: sessionId,
               timestamp: data.ts ? data.ts * 1000 : Date.now(),
             }
             return {
               ...s,
               transcripts: {
                 ...s.transcripts,
-                [transcriptSessionName]: [...(s.transcripts[transcriptSessionName] || []), entry],
+                [sessionId]: [...(s.transcripts[sessionId] || []), entry],
               },
             }
           })
-          scheduleSave(transcriptSessionName)
+          scheduleSave(sessionId)
           break
         }
         case 'transcript_sync': {
           // Merge buffered transcripts from server on reconnect
-          const syncSessionName = data.session_name || data.session_id
+          const syncSessionId = data.session_id
           const serverEntries: TranscriptEntry[] = (data.entries || [])
             .filter((e: { speaker: string }) => e.speaker === 'user' || e.speaker === 'claude')
             .map((e: { speaker: string; text: string; session_id: string; ts: number }) => ({
@@ -271,7 +296,7 @@ export function useRelay(authenticated: boolean = true) {
             }))
           if (serverEntries.length === 0) break
           setState(s => {
-            const existing = s.transcripts[syncSessionName] || []
+            const existing = s.transcripts[syncSessionId] || []
             // Merge: deduplicate by matching text + speaker within a 2s window
             const merged = [...existing]
             for (const entry of serverEntries) {
@@ -286,10 +311,10 @@ export function useRelay(authenticated: boolean = true) {
             merged.sort((a, b) => a.timestamp - b.timestamp)
             return {
               ...s,
-              transcripts: { ...s.transcripts, [syncSessionName]: merged },
+              transcripts: { ...s.transcripts, [syncSessionId]: merged },
             }
           })
-          scheduleSave(syncSessionName)
+          scheduleSave(syncSessionId)
           break
         }
         case 'agent_status': {
@@ -298,24 +323,24 @@ export function useRelay(authenticated: boolean = true) {
             const prevActivity = s.agentStatus.activity
             const updated = { ...s, agentStatus: { state: data.state as AgentState, activity: newActivity } }
             // Add activity to transcript if it changed and is non-empty
-            if (newActivity && newActivity !== prevActivity && s.connectedSessionName) {
-              const sessionName = s.connectedSessionName
+            if (newActivity && newActivity !== prevActivity && s.connectedSessionId) {
+              const sessionId = s.connectedSessionId
               const entry: TranscriptEntry = {
                 speaker: 'activity',
                 text: newActivity,
-                session_id: s.connectedSessionId || '',
+                session_id: sessionId,
                 timestamp: Date.now(),
               }
               updated.transcripts = {
                 ...s.transcripts,
-                [sessionName]: [...(s.transcripts[sessionName] || []), entry],
+                [sessionId]: [...(s.transcripts[sessionId] || []), entry],
               }
             }
             return updated
           })
           // Schedule save if we added a transcript entry
-          const name = stateRef.current.connectedSessionName
-          if (name && data.activity) scheduleSave(name)
+          const sid = stateRef.current.connectedSessionId
+          if (sid && data.activity) scheduleSave(sid)
           break
         }
         case 'agent_state':
@@ -377,69 +402,49 @@ export function useRelay(authenticated: boolean = true) {
     wsRef.current?.send(JSON.stringify({ type: 'text_message', text: text.trim() }))
   }, [])
 
-  const clearTranscript = useCallback((sessionName?: string) => {
+  const clearTranscript = useCallback((sessionId: string) => {
     setState(s => {
-      if (sessionName) {
-        const { [sessionName]: _, ...rest } = s.transcripts
-        return { ...s, transcripts: rest }
-      }
-      return { ...s, transcripts: {} }
+      const { [sessionId]: _, ...rest } = s.transcripts
+      return { ...s, transcripts: rest }
     })
-    if (sessionName) {
-      deleteTranscripts(sessionName)
-    }
+    deleteTranscripts(sessionId)
   }, [])
 
-  const removeSession = useCallback((sessionName: string) => {
+  const removeSession = useCallback((sessionId: string) => {
     // Remove from persisted sessions + IndexedDB
-    deletePersistedSession(sessionName)
-    deleteTranscripts(sessionName)
+    deletePersistedSession(sessionId)
+    deleteTranscripts(sessionId)
     setState(s => ({
       ...s,
-      persistedSessions: s.persistedSessions.filter(p => p.session_name !== sessionName),
+      persistedSessions: s.persistedSessions.filter(p => p.session_id !== sessionId),
       transcripts: (() => {
-        const { [sessionName]: _, ...rest } = s.transcripts
+        const { [sessionId]: _, ...rest } = s.transcripts
         return rest
       })(),
     }))
   }, [])
 
-  const renameSession = useCallback((sessionName: string, displayName: string) => {
+  const renameSession = useCallback((sessionId: string, displayName: string) => {
     setState(s => ({
       ...s,
       persistedSessions: s.persistedSessions.map(p =>
-        p.session_name === sessionName ? { ...p, display_name: displayName || undefined } : p
+        p.session_id === sessionId ? { ...p, display_name: displayName || undefined } : p
       ),
     }))
     // Persist to IndexedDB
-    const existing = stateRef.current.persistedSessions.find(p => p.session_name === sessionName)
+    const existing = stateRef.current.persistedSessions.find(p => p.session_id === sessionId)
     if (existing) {
       savePersistedSession({ ...existing, display_name: displayName || undefined })
     }
   }, [])
 
   // Merge live + persisted for display
-  const displaySessions = mergeDisplaySessions(state.liveSessions, state.persistedSessions)
+  const displaySessions = mergeDisplaySessions(state.liveSessions, state.persistedSessions, state.transcripts)
 
-  // Select transcript for connected session, or allow viewing offline transcripts by name
-  const viewingSessionName = state.connectedSessionName
-  const transcript = viewingSessionName
-    ? state.transcripts[viewingSessionName] || []
+  // Select transcript for connected session by session_id
+  const transcript = state.connectedSessionId
+    ? state.transcripts[state.connectedSessionId] || []
     : []
-
-  // Load transcript for a session name (for viewing offline sessions)
-  const viewSessionTranscript = useCallback((sessionName: string) => {
-    const existing = stateRef.current.transcripts[sessionName]
-    if (existing) return // already loaded
-    loadTranscripts(sessionName).then(entries => {
-      if (entries.length > 0) {
-        setState(s => ({
-          ...s,
-          transcripts: { ...s.transcripts, [sessionName]: entries },
-        }))
-      }
-    })
-  }, [])
 
   return {
     sessions: displaySessions,
@@ -456,6 +461,5 @@ export function useRelay(authenticated: boolean = true) {
     clearTranscript,
     removeSession,
     renameSession,
-    viewSessionTranscript,
   }
 }

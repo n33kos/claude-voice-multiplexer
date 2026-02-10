@@ -56,6 +56,13 @@ export function playNotificationChime() {
   setTimeout(() => playTone(784, 0.15, 0.2), 160)
 }
 
+export function playDisconnectChime() {
+  // Gentle three-note descending: "session went away"
+  playTone(784, 0.1, 0.15)
+  setTimeout(() => playTone(659, 0.1, 0.15), 80)
+  setTimeout(() => playTone(523, 0.15, 0.15), 160)
+}
+
 export function useChime(agentStatus: AgentStatus, autoListen: boolean) {
   const prevState = useRef<AgentState>(agentStatus.state)
 

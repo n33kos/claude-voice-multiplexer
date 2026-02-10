@@ -8,7 +8,7 @@ export interface SessionListProps {
   onToggleExpanded: () => void;
   onConnect: (sessionId: string) => void;
   onDisconnect: () => void;
-  onClearTranscript: (sessionName: string) => void;
-  onRemoveSession: (sessionName: string) => void;
-  onRenameSession: (sessionName: string, displayName: string) => void;
+  onClearTranscript: (sessionId: string) => void;
+  onRemoveSession: (sessionId: string) => void;
+  onRenameSession: (sessionId: string, displayName: string) => void;
 }
