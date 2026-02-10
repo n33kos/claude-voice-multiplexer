@@ -190,6 +190,10 @@ class SessionRoom:
         # Track audio stream tasks per participant
         self._audio_stream_tasks: dict[str, asyncio.Task] = {}
 
+        # Queue to serialize TTS responses (prevents concurrent playback conflicts)
+        self._response_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._response_worker_task: asyncio.Task | None = None
+
     async def start(self):
         """Connect to this session's LiveKit room."""
         self._running = True
@@ -238,9 +242,16 @@ class SessionRoom:
         await self.room.local_participant.publish_track(track, opts)
         print(f"[room:{self.room_name}] Published audio track")
 
+        # Start the response worker to serialize TTS playback
+        self._response_worker_task = asyncio.create_task(self._response_worker())
+
     async def stop(self):
         """Disconnect from LiveKit room and clean up."""
         self._running = False
+
+        # Cancel response worker
+        if self._response_worker_task and not self._response_worker_task.done():
+            self._response_worker_task.cancel()
 
         # Cancel all audio stream tasks
         for task in self._audio_stream_tasks.values():
@@ -445,7 +456,22 @@ class SessionRoom:
                 await self.registry.unregister(self.session_id)
 
     async def handle_claude_response(self, text: str):
-        """Called when Claude sends a text response. Stream-synthesize and play."""
+        """Queue a text response for serialized TTS playback."""
+        self._response_queue.put_nowait(text)
+
+    async def _response_worker(self):
+        """Process TTS responses one at a time to prevent state conflicts."""
+        while self._running:
+            try:
+                text = await self._response_queue.get()
+                await self._play_tts_response(text)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"[room:{self.room_name}] Response worker error: {e}")
+
+    async def _play_tts_response(self, text: str):
+        """Stream-synthesize and play a single TTS response."""
         print(f"[room:{self.room_name}] Streaming TTS response: {text[:50]}...")
 
         self._is_speaking = True
@@ -484,6 +510,11 @@ class SessionRoom:
             self._is_speaking = False
             self._speaking_ended_at = time.time()
             self._audio_buffer = []
+
+            # If more responses are queued, stay in speaking/thinking — don't go idle
+            if not self._response_queue.empty():
+                self._pending_listening = None
+                return
 
             if self._pending_listening and self._last_status_update_at <= self._pending_listening_at:
                 # Claude called relay_standby during TTS and no newer work started

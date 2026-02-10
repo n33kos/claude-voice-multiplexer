@@ -38,10 +38,12 @@ export interface DisplaySession {
 }
 
 export interface TranscriptEntry {
-  speaker: 'user' | 'claude' | 'system' | 'activity'
+  speaker: 'user' | 'claude' | 'system' | 'activity' | 'code'
   text: string
   session_id: string
   timestamp: number
+  filename?: string
+  language?: string
 }
 
 export type AgentState = 'idle' | 'thinking' | 'speaking' | 'error'
@@ -73,7 +75,7 @@ function getLastInteraction(transcripts: Record<string, TranscriptEntry[]>, sess
   const entries = transcripts[sessionId]
   if (!entries) return null
   for (let i = entries.length - 1; i >= 0; i--) {
-    if (entries[i].speaker === 'user' || entries[i].speaker === 'claude') {
+    if (entries[i].speaker === 'user' || entries[i].speaker === 'claude' || entries[i].speaker === 'code') {
       return entries[i].timestamp
     }
   }
@@ -271,6 +273,8 @@ export function useRelay(authenticated: boolean = true) {
               text: data.text,
               session_id: sessionId,
               timestamp: data.ts ? data.ts * 1000 : Date.now(),
+              ...(data.filename ? { filename: data.filename } : {}),
+              ...(data.language ? { language: data.language } : {}),
             }
             return {
               ...s,
@@ -287,12 +291,14 @@ export function useRelay(authenticated: boolean = true) {
           // Merge buffered transcripts from server on reconnect
           const syncSessionId = data.session_id
           const serverEntries: TranscriptEntry[] = (data.entries || [])
-            .filter((e: { speaker: string }) => e.speaker === 'user' || e.speaker === 'claude')
-            .map((e: { speaker: string; text: string; session_id: string; ts: number }) => ({
+            .filter((e: { speaker: string }) => e.speaker === 'user' || e.speaker === 'claude' || e.speaker === 'code')
+            .map((e: { speaker: string; text: string; session_id: string; ts: number; filename?: string; language?: string }) => ({
               speaker: e.speaker as TranscriptEntry['speaker'],
               text: e.text,
               session_id: e.session_id,
               timestamp: e.ts ? e.ts * 1000 : Date.now(),
+              ...(e.filename ? { filename: e.filename } : {}),
+              ...(e.language ? { language: e.language } : {}),
             }))
           if (serverEntries.length === 0) break
           setState(s => {

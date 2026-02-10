@@ -89,7 +89,7 @@ async def _notify_client_status(session_id: str, state: str, activity: str | Non
                     pass
 
 
-async def _notify_client_transcript(session_id: str, speaker: str, text: str):
+async def _notify_client_transcript(session_id: str, speaker: str, text: str, **extra):
     """Send a transcript entry to all connected web clients.
 
     Transcripts are broadcast so clients can persist them even when
@@ -112,6 +112,7 @@ async def _notify_client_transcript(session_id: str, speaker: str, text: str):
         "session_name": session.name,
         "seq": seq,
         "ts": time.time(),
+        **extra,
     }
 
     buf = _transcript_buffers.setdefault(session_id, [])
@@ -354,7 +355,7 @@ async def session_ws(ws: WebSocket):
 
             if msg_type == "register":
                 session_id = data["session_id"]
-                session = await registry.register(
+                session, is_reconnect = await registry.register(
                     session_id=session_id,
                     name=data.get("name", "unnamed"),
                     cwd=data.get("cwd", ""),
@@ -362,14 +363,17 @@ async def session_ws(ws: WebSocket):
                     ws=ws,
                 )
                 await ws.send_text(json.dumps({"type": "registered", "session_id": session_id}))
-                print(f"Session registered: {session.name} ({session_id}) → room {session.room_name}")
+                label = "reconnected" if is_reconnect else "registered"
+                print(f"Session {label}: {session.name} ({session_id}) → room {session.room_name}")
 
-                # Create a LiveKit room for this session
+                # Recycle the LiveKit room on reconnect, or create a new one
                 if _agent:
                     try:
+                        if is_reconnect:
+                            await _agent.remove_session(session_id)
                         await _agent.add_session(session_id, session.room_name)
                     except Exception as e:
-                        print(f"[server] Failed to create room for session: {e}")
+                        print(f"[server] Failed to manage room for session: {e}")
 
                 # Notify all clients of session list change
                 await _broadcast_sessions()
@@ -397,6 +401,17 @@ async def session_ws(ws: WebSocket):
                 sid = data.get("session_id", session_id)
                 if sid and _agent:
                     asyncio.create_task(_agent.handle_claude_listening(sid))
+
+            elif msg_type == "code_block":
+                # Claude pushing a code snippet into the transcript
+                sid = data.get("session_id", session_id)
+                code = data.get("code", "")
+                if code and sid:
+                    await _notify_client_transcript(
+                        sid, "code", code,
+                        filename=data.get("filename", ""),
+                        language=data.get("language", ""),
+                    )
 
             elif msg_type == "status_update":
                 # Claude reporting current activity

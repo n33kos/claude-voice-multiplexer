@@ -54,8 +54,23 @@ class SessionRegistry:
         self._sessions: dict[str, Session] = {}
         self._lock = asyncio.Lock()
 
-    async def register(self, session_id: str, name: str, cwd: str, dir_name: str, ws) -> Session:
+    async def register(self, session_id: str, name: str, cwd: str, dir_name: str, ws) -> tuple[Session, bool]:
+        """Register a session. Returns (session, is_reconnect).
+
+        If a session with this ID already exists, the old WebSocket is replaced
+        and timestamps are reset — the session identity is preserved.
+        """
         async with self._lock:
+            old = self._sessions.get(session_id)
+            is_reconnect = old is not None
+
+            # Close the old WebSocket if it's still open
+            if old and old.ws:
+                try:
+                    await old.ws.close()
+                except Exception:
+                    pass
+
             session = Session(
                 session_id=session_id,
                 name=name,
@@ -63,8 +78,11 @@ class SessionRegistry:
                 dir_name=dir_name,
                 ws=ws,
             )
+            # Preserve connected clients on reconnect
+            if old:
+                session.connected_clients = old.connected_clients
             self._sessions[session_id] = session
-            return session
+            return session, is_reconnect
 
     async def unregister(self, session_id: str):
         async with self._lock:

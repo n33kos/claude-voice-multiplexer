@@ -1,7 +1,55 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import classNames from "classnames";
+import hljs from "highlight.js/lib/core";
 import type { TranscriptProps } from "./Transcript.types";
 import styles from "./Transcript.module.scss";
+import "highlight.js/styles/github-dark.min.css";
+
+// Register common languages for syntax highlighting
+import javascript from "highlight.js/lib/languages/javascript";
+import typescript from "highlight.js/lib/languages/typescript";
+import python from "highlight.js/lib/languages/python";
+import bash from "highlight.js/lib/languages/bash";
+import json from "highlight.js/lib/languages/json";
+import css from "highlight.js/lib/languages/css";
+import scss from "highlight.js/lib/languages/scss";
+import xml from "highlight.js/lib/languages/xml";
+import yaml from "highlight.js/lib/languages/yaml";
+import diff from "highlight.js/lib/languages/diff";
+import sql from "highlight.js/lib/languages/sql";
+import rust from "highlight.js/lib/languages/rust";
+import go from "highlight.js/lib/languages/go";
+import ruby from "highlight.js/lib/languages/ruby";
+import markdown from "highlight.js/lib/languages/markdown";
+
+hljs.registerLanguage("javascript", javascript);
+hljs.registerLanguage("js", javascript);
+hljs.registerLanguage("jsx", javascript);
+hljs.registerLanguage("typescript", typescript);
+hljs.registerLanguage("ts", typescript);
+hljs.registerLanguage("tsx", typescript);
+hljs.registerLanguage("python", python);
+hljs.registerLanguage("py", python);
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("sh", bash);
+hljs.registerLanguage("shell", bash);
+hljs.registerLanguage("json", json);
+hljs.registerLanguage("css", css);
+hljs.registerLanguage("scss", scss);
+hljs.registerLanguage("html", xml);
+hljs.registerLanguage("xml", xml);
+hljs.registerLanguage("yaml", yaml);
+hljs.registerLanguage("yml", yaml);
+hljs.registerLanguage("diff", diff);
+hljs.registerLanguage("patch", diff);
+hljs.registerLanguage("sql", sql);
+hljs.registerLanguage("rust", rust);
+hljs.registerLanguage("rs", rust);
+hljs.registerLanguage("go", go);
+hljs.registerLanguage("ruby", ruby);
+hljs.registerLanguage("rb", ruby);
+hljs.registerLanguage("markdown", markdown);
+hljs.registerLanguage("md", markdown);
 
 /**
  * Split a long text into paragraphs of ~2-3 sentences for readability.
@@ -18,6 +66,26 @@ function splitIntoParagraphs(text: string): string[] {
   }
 
   return paragraphs.length > 0 ? paragraphs : [text];
+}
+
+function CodeBlock({ code, filename, language }: { code: string; filename?: string; language?: string }) {
+  const highlighted = useMemo(() => {
+    if (language && hljs.getLanguage(language)) {
+      return hljs.highlight(code, { language }).value;
+    }
+    // Auto-detect if no language specified
+    const result = hljs.highlightAuto(code);
+    return result.value;
+  }, [code, language]);
+
+  return (
+    <div className={styles.CodeBlockRow}>
+      {filename && <span className={styles.CodeFilename}>{filename}</span>}
+      <pre className={styles.CodeBlock}>
+        <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted }} />
+      </pre>
+    </div>
+  );
 }
 
 export function Transcript({ entries, onSendText }: TranscriptProps) {
@@ -91,6 +159,9 @@ export function Transcript({ entries, onSendText }: TranscriptProps) {
                 <span className={styles.ActivityBadge}>{entry.text}</span>
               </div>
             );
+          }
+          if (entry.speaker === "code") {
+            return <CodeBlock key={i} code={entry.text} filename={entry.filename} language={entry.language} />;
           }
           // Split long responses into paragraphs (~2-3 sentences each)
           const paragraphs = entry.speaker === "claude"

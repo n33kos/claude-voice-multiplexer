@@ -84,6 +84,48 @@
   border-radius: 9999px;
 }
 
+.CodeBlockRow {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 100%;
+}
+
+.CodeFilename {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  padding: 0 0.25rem;
+  margin-bottom: 0.125rem;
+  font-family: monospace;
+}
+
+.CodeBlock {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.625rem;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre;
+  margin: 0;
+  user-select: text;
+  -webkit-user-select: text;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace;
+
+  code {
+    font-family: inherit;
+  }
+
+  // Override highlight.js background to match app theme
+  :global(.hljs) {
+    background: transparent;
+    padding: 0;
+  }
+}
+
 .MessageRow {
   display: flex;
   flex-direction: column;

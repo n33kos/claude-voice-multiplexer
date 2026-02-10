@@ -439,6 +439,36 @@ async def relay_respond(text: str) -> str:
 
 
 @mcp.tool()
+async def relay_code_block(code: str, filename: str = "", language: str = "") -> str:
+    """Push a code snippet or diff into the voice relay transcript.
+
+    Use this to show the remote user code changes, file contents, or diffs
+    in the transcript with syntax highlighting. Call it after editing files
+    or when the user asks to see code.
+
+    Args:
+        code: The code snippet, diff, or file content to display
+        filename: Optional filename for context (e.g. "src/App.tsx")
+        language: Optional language hint for syntax highlighting (e.g. "typescript", "python", "diff")
+    """
+    if not _relay_state["connected"] or not _relay_state["ws"]:
+        return "Not connected to relay. Use relay_standby first."
+
+    try:
+        await _relay_state["ws"].send(json.dumps({
+            "type": "code_block",
+            "session_id": SESSION_ID,
+            "code": code,
+            "filename": filename,
+            "language": language,
+            "timestamp": time.time(),
+        }))
+        return "Code block sent."
+    except Exception as e:
+        return f"Failed to send code block: {e}"
+
+
+@mcp.tool()
 async def relay_disconnect() -> str:
     """Disconnect from the voice relay server and exit standby mode."""
     if not _relay_state["connected"]:
