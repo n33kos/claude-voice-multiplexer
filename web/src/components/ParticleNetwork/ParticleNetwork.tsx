@@ -2,7 +2,9 @@ import { useEffect, useRef } from "react";
 import type { Connection, Particle } from "./ParticleNetwork.types";
 import styles from "./ParticleNetwork.module.scss";
 
-const PARTICLE_COUNT = Math.floor(window.innerWidth / 5);
+const PARTICLE_COUNT = Math.floor(
+  (window.innerWidth * window.innerHeight) / 5000,
+);
 const CONNECTION_DISTANCE = 200;
 const PARTICLE_SPEED = 0.3;
 const MAX_PARTICLE_SPEED = 0.5;

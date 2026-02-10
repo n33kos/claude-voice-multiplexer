@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <!-- Background -->
+    <radialGradient id="bg" cx="35%" cy="30%" r="85%">
+      <stop offset="0%" stop-color="#1b1f2a"/>
+      <stop offset="100%" stop-color="#0b0d12"/>
+    </radialGradient>
+
+    <!-- Soft shadow -->
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+
+    <!-- Rainbow fill for the C -->
+    <linearGradient id="rainbowFill" x1="120" y1="512" x2="640" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#ff3b30"/>
+      <stop offset="14%"  stop-color="#ff9500"/>
+      <stop offset="28%"  stop-color="#ffd60a"/>
+      <stop offset="42%"  stop-color="#34c759"/>
+      <stop offset="56%"  stop-color="#30d5c8"/>
+      <stop offset="70%"  stop-color="#0a84ff"/>
+      <stop offset="84%"  stop-color="#5856d6"/>
+      <stop offset="100%" stop-color="#af52de"/>
+    </linearGradient>
+
+    <!-- Glow filter -->
+    <filter id="rainbowGlow" x="-15%" y="-15%" width="130%" height="130%">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Mac-style rounded icon -->
+  <rect x="32" y="32" width="960" height="960" rx="220" fill="url(#bg)"/>
+  <rect x="62" y="62" width="900" height="900" rx="200"
+        fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="8"/>
+
+  <!-- C hub — Audiowide font glyph -->
+  <g filter="url(#softShadow)">
+    <path d="M640.6 798.8 H265.4 Q251.0 798.8 234.4 795.4 Q217.8 792.0 201.6 784.8 Q185.4 777.6 170.6 766.2 Q155.8 754.8 144.4 738.6 Q133.0 722.4 126.2 701.0 Q119.4 679.6 119.4 652.8 V371.2 Q119.4 356.8 122.8 340.2 Q126.2 323.6 133.4 307.4 Q140.6 291.2 152.2 276.4 Q163.8 261.6 180.0 250.2 Q196.2 238.8 217.4 232.0 Q238.6 225.2 265.4 225.2 H640.6 V329.2 H265.4 Q245.0 329.2 234.2 340.0 Q223.4 350.8 223.4 372.0 V652.8 Q223.4 672.8 234.4 683.8 Q245.4 694.8 265.4 694.8 H640.6 Z"
+          fill="url(#rainbowFill)"
+          filter="url(#rainbowGlow)"/>
+  </g>
+
+  <!-- Bus lines converging from the right into hub -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" filter="url(#rainbowGlow)">
+
+    <!-- Individual colored buses (symmetric range: ±280 from center at 512) -->
+    <path d="M 900 284 L 680 284 L 680 344 L 680 512"
+          stroke="#ff3b30" stroke-width="18" stroke-opacity="0.95"/>
+    <path d="M 900 354 L 730 354 L 730 400 L 680 512"
+          stroke="#ff9500" stroke-width="18" stroke-opacity="0.95"/>
+    <path d="M 900 419 L 790 419 L 790 456 L 680 512"
+          stroke="#ffd60a" stroke-width="18" stroke-opacity="0.95"/>
+    <path d="M 900 512 L 680 512"
+          stroke="#34c759" stroke-width="18" stroke-opacity="0.95"/>
+    <path d="M 900 605 L 790 605 L 790 559 L 680 512"
+          stroke="#0a84ff" stroke-width="18" stroke-opacity="0.95"/>
+    <path d="M 900 670 L 730 670 L 730 638 L 680 512"
+          stroke="#5856d6" stroke-width="18" stroke-opacity="0.95"/>
+    <path d="M 900 740 L 680 740 L 680 680 L 680 512"
+          stroke="#af52de" stroke-width="18" stroke-opacity="0.95"/>
+
+    <!-- Junction node -->
+    <circle cx="680" cy="512" r="18" fill="#ffffff"/>
+
+    <!-- Shared exit bundle (extends right from hub) -->
+    <path d="M 680 512 L 400 512"
+          stroke="#ffffff" stroke-opacity="0.75" stroke-width="34"/>
+  </g>
+</svg>
