@@ -517,6 +517,27 @@ async def client_ws(ws: WebSocket):
                         }))
                 await _broadcast_sessions()
 
+            elif msg_type == "text_message":
+                # User typed a text message — forward directly to session
+                text = data.get("text", "").strip()
+                if text and connected_session_id:
+                    session = await registry.get(connected_session_id)
+                    if session and session.ws:
+                        try:
+                            await session.ws.send_text(json.dumps({
+                                "type": "voice_message",
+                                "text": text,
+                                "caller": client_id,
+                                "timestamp": time.time(),
+                            }))
+                        except Exception:
+                            pass
+                    # Set agent to thinking state
+                    if _agent:
+                        asyncio.create_task(_agent.handle_text_message(connected_session_id, text, client_id))
+                    # Broadcast transcript
+                    await _notify_client_transcript(connected_session_id, "user", text)
+
             elif msg_type == "interrupt":
                 # User pressed interrupt — force agent to idle
                 if connected_session_id and _agent:

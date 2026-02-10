@@ -70,13 +70,60 @@ async def _check_relay_health() -> str | None:
         )
 
 
+def _get_dir_name() -> str:
+    """Get a unique directory name, accounting for git worktrees.
+
+    For worktrees, appends the branch name to distinguish them from
+    the main repo and from each other (e.g. "babylist-web/feature-branch").
+    """
+    import subprocess
+
+    cwd = os.getcwd()
+    dir_name = Path(cwd).name
+
+    try:
+        # Check if we're in a git worktree (not the main worktree)
+        toplevel = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, cwd=cwd, timeout=3,
+        ).stdout.strip()
+        common_dir = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, cwd=cwd, timeout=3,
+        ).stdout.strip()
+
+        if toplevel and common_dir:
+            # Resolve both to absolute paths for comparison
+            toplevel_path = Path(toplevel).resolve()
+            # git-common-dir is relative to .git dir; resolve from toplevel
+            common_path = (Path(toplevel) / common_dir).resolve()
+
+            # If common_dir points outside the toplevel, we're in a linked worktree
+            is_worktree = not str(common_path).startswith(str(toplevel_path))
+
+            if is_worktree:
+                # Get the branch name for uniqueness
+                branch = subprocess.run(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    capture_output=True, text=True, cwd=cwd, timeout=3,
+                ).stdout.strip()
+                if branch and branch != "HEAD":
+                    # Use the repo name from the main worktree + branch
+                    repo_name = common_path.parent.name
+                    return f"{repo_name}/{branch}"
+    except Exception:
+        pass
+
+    return dir_name
+
+
 def _get_session_metadata() -> dict:
     """Gather metadata about the current Claude Code session.
 
     Name priority: explicit relay_standby arg > CLAUDE_SESSION_NAME env > dir name.
     """
     cwd = os.getcwd()
-    dir_name = Path(cwd).name
+    dir_name = _get_dir_name()
     claude_name = os.environ.get("CLAUDE_SESSION_NAME", "").strip()
     return {
         "session_id": SESSION_ID,

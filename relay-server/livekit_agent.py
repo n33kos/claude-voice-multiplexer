@@ -510,6 +510,11 @@ class SessionRoom:
         self._current_activity = None
         await self._notify_status("idle")
 
+    async def handle_text_message(self):
+        """Called when a text message is sent — set status to thinking."""
+        self._waiting_for_response = True
+        await self._notify_status("thinking", "Processing text message...")
+
     async def handle_status_update(self, activity: str):
         """Called when Claude sends a status_update with current activity."""
         self._last_status_update_at = time.time()
@@ -622,6 +627,12 @@ class RelayAgent:
         room = self._rooms.get(session_id)
         if room:
             await room.handle_claude_listening()
+
+    async def handle_text_message(self, session_id: str, text: str, caller: str):
+        room = self._rooms.get(session_id)
+        if room:
+            await room.handle_text_message()
+            print(f"[room:{room.room_name}] Text message from {caller}: {text[:50]}...")
 
     async def handle_status_update(self, session_id: str, activity: str):
         room = self._rooms.get(session_id)

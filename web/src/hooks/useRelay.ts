@@ -372,6 +372,11 @@ export function useRelay(authenticated: boolean = true) {
     wsRef.current?.send(JSON.stringify({ type: 'interrupt' }))
   }, [])
 
+  const sendTextMessage = useCallback((text: string) => {
+    if (!text.trim()) return
+    wsRef.current?.send(JSON.stringify({ type: 'text_message', text: text.trim() }))
+  }, [])
+
   const clearTranscript = useCallback((sessionName?: string) => {
     setState(s => {
       if (sessionName) {
@@ -447,6 +452,7 @@ export function useRelay(authenticated: boolean = true) {
     connectSession,
     disconnectSession,
     interruptAgent,
+    sendTextMessage,
     clearTranscript,
     removeSession,
     renameSession,

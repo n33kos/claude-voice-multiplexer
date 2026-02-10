@@ -125,6 +125,10 @@ export default function App() {
           onRenameSession={relay.renameSession}
         />
 
+        {relay.connectedSessionId && (
+          <Transcript entries={relay.transcript} onSendText={relay.sendTextMessage} />
+        )}
+
         {relay.connectedSessionId && livekit.token && livekit.url && (
           <Suspense fallback={null}>
             <VoiceControls
@@ -141,10 +145,6 @@ export default function App() {
               onInterrupt={relay.interruptAgent}
             />
           </Suspense>
-        )}
-
-        {relay.connectedSessionId && (
-          <Transcript entries={relay.transcript} />
         )}
 
         <StatusBar
