@@ -25,15 +25,15 @@
 }
 
 .StatusPillSpeaking {
-  background-color: rgba(59, 130, 246, 0.15);
-  border-color: rgba(59, 130, 246, 0.3);
-  color: #60a5fa;
+  background-color: rgba(168, 85, 247, 0.15);
+  border-color: rgba(168, 85, 247, 0.3);
+  color: #c084fc;
 }
 
 .StatusPillError {
-  background-color: rgba(245, 158, 11, 0.15);
-  border-color: rgba(245, 158, 11, 0.3);
-  color: #fbbf24;
+  background-color: rgba(234, 88, 12, 0.15);
+  border-color: rgba(234, 88, 12, 0.3);
+  color: #fb923c;
 }
 
 .StatusPillListening {
@@ -111,11 +111,11 @@
 }
 
 .SpeakerButtonActive {
-  background-color: rgba(59, 130, 246, 0.2);
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  background-color: rgba(168, 85, 247, 0.2);
+  border: 1px solid rgba(168, 85, 247, 0.4);
 
   &:active {
-    background-color: rgba(59, 130, 246, 0.3);
+    background-color: rgba(168, 85, 247, 0.3);
   }
 }
 
@@ -129,11 +129,11 @@
 }
 
 .InterruptButton {
-  background-color: rgba(245, 158, 11, 0.2);
-  border: 1px solid rgba(245, 158, 11, 0.4);
+  background-color: rgba(234, 88, 12, 0.2);
+  border: 1px solid rgba(234, 88, 12, 0.4);
 
   &:active {
-    background-color: rgba(245, 158, 11, 0.3);
+    background-color: rgba(234, 88, 12, 0.3);
   }
 }
 
@@ -151,7 +151,7 @@
 }
 
 .SpeakerIconActive {
-  color: #60a5fa;
+  color: #c084fc;
 }
 
 .SpeakerIconInactive {
@@ -159,5 +159,5 @@
 }
 
 .InterruptIcon {
-  color: #fbbf24;
+  color: #fb923c;
 }

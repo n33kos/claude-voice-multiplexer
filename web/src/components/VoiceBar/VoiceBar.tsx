@@ -11,8 +11,8 @@ const BOOST_LEVEL = 1;
 const COLORS: Record<string, RGB> = {
   recording: { r: 239, g: 68, b: 68 },
   thinking: { r: 168, g: 85, b: 247 },
-  speaking: { r: 59, g: 130, b: 246 },
-  error: { r: 245, g: 158, b: 11 },
+  speaking: { r: 168, g: 85, b: 247 },
+  error: { r: 234, g: 88, b: 12 },
   idle: { r: 115, g: 115, b: 115 },
 };
 
