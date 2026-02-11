@@ -97,6 +97,17 @@
   padding: 0 0.25rem;
   margin-bottom: 0.125rem;
   font-family: monospace;
+  text-decoration: none;
+}
+
+a.CodeFilename {
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 255, 255, 0.2);
+  text-underline-offset: 2px;
+
+  &:active {
+    opacity: 0.7;
+  }
 }
 
 .CodeBlock {

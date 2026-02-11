@@ -446,6 +446,20 @@ async def relay_code_block(code: str, filename: str = "", language: str = "") ->
     in the transcript with syntax highlighting. Call it after editing files
     or when the user asks to see code.
 
+    IMPORTANT: When in voice relay mode, the user is viewing a chat-style
+    transcript on their phone/browser. Use this tool whenever the user asks
+    you to show, display, or output structured content — including:
+    - Code snippets or file contents
+    - Diffs or patches
+    - Tables (use markdown table syntax, language="markdown")
+    - Structured data (JSON, YAML, etc.)
+    - Command output or logs
+    - Any content that benefits from monospace formatting
+
+    If the user asks to "see" something, "show" something, or requests
+    output that would be hard to read as spoken text, use this tool to
+    surface it visually in the transcript.
+
     Args:
         code: The code snippet, diff, or file content to display
         filename: Optional filename for context (e.g. "src/App.tsx")

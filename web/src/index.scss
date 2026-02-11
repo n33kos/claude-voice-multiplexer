@@ -149,8 +149,13 @@ body {
   -webkit-font-smoothing: antialiased;
   height: 100dvh;
   overflow: hidden;
+  // Safe area padding for fullscreen PWA (notch, dynamic island, home indicator)
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 #root {
-  height: 100dvh;
+  height: 100%;
 }

@@ -44,7 +44,7 @@ AUTH_ENABLED = bool(AUTH_SECRET)
 
 # --- VAD (Voice Activity Detection) ---
 VAD_AGGRESSIVENESS = int(os.environ.get("VAD_AGGRESSIVENESS", "1"))  # 0=permissive, 3=strict
-SILENCE_THRESHOLD_MS = int(os.environ.get("SILENCE_THRESHOLD_MS", "2000"))
+SILENCE_THRESHOLD_MS = int(os.environ.get("SILENCE_THRESHOLD_MS", "2500"))
 MIN_SPEECH_DURATION_S = float(os.environ.get("MIN_SPEECH_DURATION_S", "0.5"))
 ECHO_COOLDOWN_S = float(os.environ.get("ECHO_COOLDOWN_S", "0.8"))
 ENERGY_THRESHOLD = int(os.environ.get("ENERGY_THRESHOLD", "500"))

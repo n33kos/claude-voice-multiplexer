@@ -68,7 +68,20 @@ function splitIntoParagraphs(text: string): string[] {
   return paragraphs.length > 0 ? paragraphs : [text];
 }
 
-function CodeBlock({ code, filename, language }: { code: string; filename?: string; language?: string }) {
+/** Check if a filename looks like a real file path (has extension or path separator). */
+function isFilePath(name: string): boolean {
+  return /\.[a-zA-Z0-9]+$/.test(name) || name.includes("/");
+}
+
+function resolveFilePath(filename: string, cwd?: string): string | null {
+  if (!filename || !isFilePath(filename)) return null;
+  if (filename.startsWith("/")) return filename;
+  if (filename.startsWith("~/")) return filename;
+  if (cwd) return `${cwd.replace(/\/$/, "")}/${filename}`;
+  return null;
+}
+
+function CodeBlock({ code, filename, language, cwd }: { code: string; filename?: string; language?: string; cwd?: string }) {
   const highlighted = useMemo(() => {
     if (language && hljs.getLanguage(language)) {
       return hljs.highlight(code, { language }).value;
@@ -78,9 +91,16 @@ function CodeBlock({ code, filename, language }: { code: string; filename?: stri
     return result.value;
   }, [code, language]);
 
+  const absolutePath = filename ? resolveFilePath(filename, cwd) : null;
+  const vscodeUrl = absolutePath ? `vscode://file${absolutePath.startsWith("/") ? "" : "/"}${absolutePath}` : null;
+
   return (
     <div className={styles.CodeBlockRow}>
-      {filename && <span className={styles.CodeFilename}>{filename}</span>}
+      {filename && (
+        vscodeUrl
+          ? <a href={vscodeUrl} className={styles.CodeFilename}>{filename}</a>
+          : <span className={styles.CodeFilename}>{filename}</span>
+      )}
       <pre className={styles.CodeBlock}>
         <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted }} />
       </pre>
@@ -88,7 +108,7 @@ function CodeBlock({ code, filename, language }: { code: string; filename?: stri
   );
 }
 
-export function Transcript({ entries, onSendText }: TranscriptProps) {
+export function Transcript({ entries, cwd, onSendText }: TranscriptProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const [textInput, setTextInput] = useState("");
 
@@ -161,7 +181,7 @@ export function Transcript({ entries, onSendText }: TranscriptProps) {
             );
           }
           if (entry.speaker === "code") {
-            return <CodeBlock key={i} code={entry.text} filename={entry.filename} language={entry.language} />;
+            return <CodeBlock key={i} code={entry.text} filename={entry.filename} language={entry.language} cwd={cwd} />;
           }
           // Split long responses into paragraphs (~2-3 sentences each)
           const paragraphs = entry.speaker === "claude"

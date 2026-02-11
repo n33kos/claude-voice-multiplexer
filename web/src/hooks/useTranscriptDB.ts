@@ -127,3 +127,44 @@ export async function deletePersistedSession(sessionId: string): Promise<void> {
     // ignore
   }
 }
+
+// --- Cleanup: auto-delete data older than 30 days ---
+
+const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+
+export async function pruneStaleData(): Promise<void> {
+  try {
+    const db = await openDB()
+    const cutoff = Date.now() - MAX_AGE_MS
+
+    // Prune sessions older than 30 days
+    const sessions: PersistedSession[] = await new Promise((resolve, reject) => {
+      const tx = db.transaction(SESSIONS_STORE, 'readonly')
+      const req = tx.objectStore(SESSIONS_STORE).getAll()
+      req.onsuccess = () => resolve(req.result || [])
+      req.onerror = () => reject(req.error)
+    })
+
+    const staleIds = sessions
+      .filter(s => s.last_seen * 1000 < cutoff)
+      .map(s => s.session_id)
+
+    if (staleIds.length === 0) return
+
+    // Delete stale sessions and their transcripts
+    const tx = db.transaction([SESSIONS_STORE, TRANSCRIPTS_STORE], 'readwrite')
+    const sessStore = tx.objectStore(SESSIONS_STORE)
+    const txStore = tx.objectStore(TRANSCRIPTS_STORE)
+    for (const id of staleIds) {
+      sessStore.delete(id)
+      txStore.delete(id)
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
+  } catch {
+    // ignore cleanup errors
+  }
+}

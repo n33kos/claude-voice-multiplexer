@@ -45,110 +45,111 @@ VAD_SAMPLE_RATE = 16000  # WebRTC VAD only supports 8k, 16k, 32k
 # Whisper noise/hallucination filtering.
 #
 # When Whisper processes silence or ambient noise it frequently hallucinates
-# well-known phrases (YouTube outros, subtitle credits, single filler words).
-# We maintain two lists: exact-match patterns (compared case-insensitively
-# after stripping punctuation) and substring patterns (if the transcript
-# *contains* any of these, it's filtered).
+# bracketed/parenthesized artifacts like [music], (silence), ♪, etc.
+# Instead of discarding the entire transcription, we STRIP these artifacts
+# from the text. If nothing meaningful remains, we signal the web client
+# to disable auto-listen (preventing a record→transcribe→filter loop).
+#
+# Only bracketed/parenthesized patterns are stripped — never plain text that
+# could be real speech.
 #
 # Sources:
 #   - https://arxiv.org/html/2501.11378v1 (AGH University hallucination study)
 #   - https://github.com/openai/whisper/discussions/679
 #   - https://github.com/openai/whisper/discussions/928
-#   - https://github.com/openai/whisper/discussions/1455
-#   - https://github.com/openai/whisper/discussions/1873
-#   - https://huggingface.co/datasets/sachaarbonel/whisper-hallucinations
 
-# Transcriptions matching these exactly (case-insensitive, punctuation-stripped)
-# are discarded. Covers the top silence hallucinations by frequency.
-NOISE_EXACT = {
-    # Blank/silence markers
-    "[blank_audio]",
-    "(blank audio)",
-    "[silence]",
-    "(silence)",
-    "[inaudible]",
-    ">>",
-    # Top single-word/short hallucinations on silence
-    "you",
-    "so",
-    "the",
-    "oh",
-    "okay",
-    "bye",
-    "bye-bye",
-    "bye bye",
-    "thank you",
-    "thank you very much",
-    "thanks",
-    "i'm sorry",
-    "oh my god",
-    "hmm",
-    "huh",
-    "ah",
-    "uh",
-    "um",
-    "mm",
-    "yeah",
-    # YouTube outro hallucinations
-    "thanks for watching",
-    "thank you for watching",
-    "i'll see you in the next video",
-    "i'll see you next time",
-    "see you next time",
-    "see you in the next one",
-    "i'll see you later",
-    "thank you bye",
-    "the end",
-    "we'll be right back",
-    "stay tuned",
-    # Sound/music markers
-    "[music]",
-    "(music)",
-    "[applause]",
-    "(applause)",
-    "[laughter]",
-    "(laughter)",
-    "[typing]",
-    "[clapping]",
-    "[buzzing]",
-    "\u266a",
-    "\u266a\u266a",
-    "\u266a \u266a \u266a",
-    "\u266b",
-    # Attribution artifacts
-    "satsang with mooji",
-    "www.mooji.org",
-    "transcript emily beynon",
-    "transcription outsourcing llc",
-    "transcription outsourcing",
-    "transcription by castingwords",
-    "copyright wdr",
+import re as _re
+
+# Patterns to strip from transcriptions (case-insensitive).
+# Only includes bracketed/parenthesized artifacts and music symbols.
+NOISE_STRIP_PATTERNS = [
+    # Bracketed markers: [anything] and (anything) that Whisper hallucinates
+    r"\[blank[_ ]audio\]",
+    r"\(blank audio\)",
+    r"\[silence\]",
+    r"\(silence\)",
+    r"\(no audio\)",
+    r"\[no audio\]",
+    r"\[inaudible\]",
+    r"\[music(?:\s+playing)?\]",
+    r"\(music(?:\s+playing)?\)",
+    r"\[applause\]",
+    r"\(applause\)",
+    r"\[laughter\]",
+    r"\(laughter\)",
+    r"\[typing\]",
+    r"\[clapping\]",
+    r"\[buzzing\]",
+    r"\[noise\]",
+    r"\(noise\)",
+    r"\[door\s+(?:opens|closes)\]",
+    r"\(door\s+(?:opens|closes)\)",
+    r"\[footsteps\]",
+    r"\(footsteps\)",
+    r"\[coughing\]",
+    r"\(coughing\)",
+    r"\[sighing\]",
+    r"\(sighing\)",
+    r"\[breathing\]",
+    r"\(breathing\)",
+    r"\[static\]",
+    r"\(static\)",
+    r"\[wind\]",
+    r"\(wind\)",
+    r"\[birds?\s+chirping\]",
+    r"\(birds?\s+chirping\)",
+    r"\[phone\s+ringing\]",
+    r"\(phone\s+ringing\)",
+    r"\[bell\s+rings?\]",
+    r"\(bell\s+rings?\)",
+    r"\[chimes?\]",
+    r"\(chimes?\)",
+    # Generic bracketed/parenthesized content that looks like stage directions
+    r"\[[\w\s]+(?:playing|music|noise|sound)\]",
+    r"\([\w\s]+(?:playing|music|noise|sound)\)",
+    # Music symbols
+    r"[♪♫]+",
+    # Attribution artifacts (always hallucinated, never real speech)
+    r">>",
+]
+
+# Compiled regex: matches any noise pattern (case-insensitive)
+_NOISE_RE = _re.compile(
+    "|".join(NOISE_STRIP_PATTERNS),
+    _re.IGNORECASE,
+)
+
+
+def strip_noise(text: str) -> str:
+    """Strip known Whisper hallucination artifacts from text.
+
+    Returns the cleaned text with artifacts removed and whitespace normalized.
+    """
+    cleaned = _NOISE_RE.sub("", text)
+    # Collapse multiple spaces left by stripping
+    cleaned = _re.sub(r"\s{2,}", " ", cleaned).strip()
+    return cleaned
+
+# Voice commands: spoken phrases that trigger actions instead of being sent to Claude.
+# Matched case-insensitively against the full cleaned transcription.
+_VOICE_COMMAND_PATTERNS = {
+    "disable_auto_listen": _re.compile(
+        r"^\s*(?:"
+        r"(?:disable|stop|turn off|kill)\s+(?:auto[- ]?listen(?:ing)?|recording|microphone|the mic(?:rophone)?)"
+        r"|stop\s+listening"
+        r")\s*\.?\s*$",
+        _re.IGNORECASE,
+    ),
 }
 
-# If the transcript contains any of these substrings (case-insensitive),
-# it's filtered. Catches variations in punctuation and phrasing.
-NOISE_SUBSTRINGS = [
-    "subtitles by",
-    "transcribed by",
-    "transcription by",
-    "translation by",
-    "captions by",
-    "subtitles made by",
-    "amara.org",
-    "otter.ai",
-    "rev.com",
-    "subscribe",
-    "thanks for watching",
-    "thank you for watching",
-    "don't forget to like",
-    "please like and subscribe",
-    "like and subscribe",
-    "for more information, visit",
-    "sous-titres",
-    "untertitel",
-    "sottotitoli",
-    "legendas pela comunidade",
-]
+
+def match_voice_command(text: str) -> str | None:
+    """Check if text matches a voice command. Returns the command name or None."""
+    for name, pattern in _VOICE_COMMAND_PATTERNS.items():
+        if pattern.match(text):
+            return name
+    return None
+
 
 # Error state auto-recovers to idle after this many seconds.
 ERROR_RECOVERY_S = 5.0
@@ -401,28 +402,28 @@ class SessionRoom:
                 await self._notify_status("error", "Speech-to-text failed. Is Whisper running?")
                 self._schedule_error_recovery()
             return
-        if not text:
-            print(f"[room:{self.room_name}] Transcription empty, skipping")
+
+        # Strip known Whisper hallucination artifacts (bracketed/parenthesized noise)
+        cleaned = strip_noise(text.strip())
+
+        if cleaned != text.strip():
+            print(f"[room:{self.room_name}] Stripped noise: {text.strip()!r} → {cleaned!r}")
+
+        text = cleaned
+
+        # If noise only or empty transcript, set idle mode but send signal to disable auto listen.
+        if not text or len(text) < 2:
+            print(f"[room:{self.room_name}] Noise-only transcription: {text.strip()!r}")
             if session:
-                await self._notify_status("idle")
+                await self._notify_status("idle", disable_auto_listen=True)
             return
 
-        stripped = text.strip()
-        # Normalize for comparison: lowercase, strip punctuation
-        import re
-        normalized = re.sub(r"[^\w\s\u266a\u266b\[\]()>]", "", stripped.lower()).strip()
-        # Check exact match against known hallucinations
-        if normalized in NOISE_EXACT or len(normalized) < 2:
-            print(f"[room:{self.room_name}] Filtered noise transcription: {stripped!r}")
-            if session:
-                await self._notify_status("idle")
-            return
-        # Check substring match
-        lower = stripped.lower()
-        if any(sub in lower for sub in NOISE_SUBSTRINGS):
-            print(f"[room:{self.room_name}] Filtered noise transcription (substring): {stripped!r}")
-            if session:
-                await self._notify_status("idle")
+        # Check for voice commands before forwarding to Claude
+        command = match_voice_command(text)
+        if command:
+            print(f"[room:{self.room_name}] Voice command matched: {command} (from: {text!r})")
+            if command == "disable_auto_listen":
+                await self._notify_status("idle", disable_auto_listen=True)
             return
 
         print(f"[room:{self.room_name}] Transcribed: {text}")
@@ -499,10 +500,10 @@ class SessionRoom:
                 self._schedule_error_recovery()
                 return
 
-            # Wait for remaining playback to finish
+            # Wait for remaining playback to finish (extra buffer for WebRTC jitter/output)
             playback_duration = total_samples / LIVEKIT_SAMPLE_RATE
             elapsed = time.time() - publish_start
-            remaining = playback_duration - elapsed + 1.0
+            remaining = playback_duration - elapsed + 1.5
             if remaining > 0:
                 await asyncio.sleep(remaining)
 
@@ -511,9 +512,9 @@ class SessionRoom:
             self._speaking_ended_at = time.time()
             self._audio_buffer = []
 
-            # If more responses are queued, stay in speaking/thinking — don't go idle
+            # If more responses are queued, stay in speaking/thinking — don't go idle.
+            # Preserve _pending_listening so the last response can transition to idle.
             if not self._response_queue.empty():
-                self._pending_listening = None
                 return
 
             if self._pending_listening and self._last_status_update_at <= self._pending_listening_at:
@@ -532,7 +533,8 @@ class SessionRoom:
 
     async def handle_claude_listening(self):
         """Called when Claude enters relay_standby again — ready for next voice input."""
-        if self._is_speaking:
+        if self._is_speaking or not self._response_queue.empty():
+            # TTS is playing or responses are queued — defer the idle transition
             self._pending_listening = self.session_id
             self._pending_listening_at = time.time()
             return
@@ -582,17 +584,14 @@ class SessionRoom:
 
         return len(samples)
 
-    async def _notify_status(self, state: str, activity: str | None = None):
+    async def _notify_status(self, state: str, activity: str | None = None, *, disable_auto_listen: bool = False):
         """Notify connected client of agent status change."""
         self._current_state = state
         self._current_activity = activity
         if state == "idle":
             self._idle_entered_at = time.time()
         if self.notify_status_fn:
-            try:
-                await self.notify_status_fn(self.session_id, state, activity)
-            except Exception:
-                pass
+            await self.notify_status_fn(self.session_id, state, activity, disable_auto_listen=disable_auto_listen)
 
     def _schedule_error_recovery(self):
         """Schedule auto-recovery from error state to idle."""

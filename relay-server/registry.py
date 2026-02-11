@@ -7,11 +7,14 @@ from dataclasses import dataclass, field
 from config import SESSION_TIMEOUT
 
 
-def make_room_name(session_name: str) -> str:
-    """Derive a LiveKit room name from a session name."""
-    import re
-    sanitized = re.sub(r'[^a-zA-Z0-9_\-]', '_', session_name)
-    return f"vmux_{sanitized}"
+def make_room_name(session_id: str) -> str:
+    """Derive a LiveKit room name from a session ID (hash of CWD).
+
+    Using session_id (a deterministic hash) guarantees each directory
+    gets its own LiveKit room, even when display names collide
+    (e.g. git worktrees of the same repo).
+    """
+    return f"vmux_{session_id}"
 
 
 @dataclass
@@ -27,7 +30,7 @@ class Session:
 
     @property
     def room_name(self) -> str:
-        return make_room_name(self.name)
+        return make_room_name(self.session_id)
 
     @property
     def is_stale(self) -> bool:

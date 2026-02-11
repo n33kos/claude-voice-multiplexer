@@ -6,6 +6,7 @@ import {
   loadPersistedSessions,
   savePersistedSession,
   deletePersistedSession,
+  pruneStaleData,
   type PersistedSession,
 } from './useTranscriptDB'
 
@@ -30,6 +31,7 @@ export interface DisplaySession {
   session_name: string           // default name from MCP server
   display_name: string           // user-set override, falls back to session_name
   dir_name: string
+  cwd: string
   room_name: string
   online: boolean
   last_seen: number
@@ -61,13 +63,14 @@ interface RelayState {
   transcripts: Record<string, TranscriptEntry[]>  // keyed by session_id
   status: 'disconnected' | 'connecting' | 'connected'
   agentStatus: AgentStatus
+  disableAutoListenSeq: number  // increments when server signals noise-only input
 }
 
 const MAX_RECONNECT_DELAY = 10_000
 const BASE_RECONNECT_DELAY = 1_000
 
-function makeRoomName(sessionName: string): string {
-  return `vmux_${sessionName.replace(/[^a-zA-Z0-9_\-]/g, '_')}`
+function makeRoomName(sessionId: string): string {
+  return `vmux_${sessionId}`
 }
 
 /** Find the timestamp (ms) of the last user or claude transcript entry. */
@@ -105,7 +108,8 @@ function mergeDisplaySessions(
         session_name: p.session_name,
         display_name: p.display_name || p.session_name,
         dir_name: p.dir_name,
-        room_name: makeRoomName(p.session_name),
+        cwd: '',
+        room_name: makeRoomName(p.session_id),
         online: false,
         last_seen: p.last_seen,
         last_interaction: getLastInteraction(transcripts, p.session_id),
@@ -121,6 +125,7 @@ function mergeDisplaySessions(
       session_name: s.name,
       display_name: displayNames.get(s.session_id) || s.name,
       dir_name: s.dir_name,
+      cwd: s.cwd,
       room_name: s.room_name,
       online: true,
       last_seen: s.last_heartbeat,
@@ -151,16 +156,19 @@ export function useRelay(authenticated: boolean = true) {
     transcripts: {},
     status: 'disconnected',
     agentStatus: { state: 'idle', activity: null },
+    disableAutoListenSeq: 0,
   })
 
   const stateRef = useRef(state)
   stateRef.current = state
 
-  // Load persisted sessions on mount
+  // Load persisted sessions on mount and prune stale data
   useEffect(() => {
-    loadPersistedSessions().then(sessions => {
-      setState(s => ({ ...s, persistedSessions: sessions }))
-    })
+    pruneStaleData().then(() =>
+      loadPersistedSessions().then(sessions => {
+        setState(s => ({ ...s, persistedSessions: sessions }))
+      })
+    )
   }, [])
 
   // Persist live sessions to IndexedDB as they arrive
@@ -236,7 +244,10 @@ export function useRelay(authenticated: boolean = true) {
         case 'session_connected': {
           const sessionId = data.session_id
           const sessionName = data.session_name || sessionId
-          setState(s => ({ ...s, connectedSessionId: sessionId, connectedSessionName: sessionName, agentStatus: { state: 'idle', activity: null } }))
+          const currentStatus = data.current_status
+            ? { state: data.current_status.state as AgentState, activity: data.current_status.activity ?? null }
+            : { state: 'idle' as AgentState, activity: null }
+          setState(s => ({ ...s, connectedSessionId: sessionId, connectedSessionName: sessionName, agentStatus: currentStatus }))
           // Load persisted transcripts from IndexedDB by session_id
           loadTranscripts(sessionId).then(dbEntries => {
             if (dbEntries.length === 0) return
@@ -327,7 +338,11 @@ export function useRelay(authenticated: boolean = true) {
           const newActivity = data.activity ?? null
           setState(s => {
             const prevActivity = s.agentStatus.activity
-            const updated = { ...s, agentStatus: { state: data.state as AgentState, activity: newActivity } }
+            const updated: RelayState = { ...s, agentStatus: { state: data.state as AgentState, activity: newActivity } }
+            // Increment seq to signal auto-listen should be disabled
+            if (data.disable_auto_listen) {
+              updated.disableAutoListenSeq = s.disableAutoListenSeq + 1
+            }
             // Add activity to transcript if it changed and is non-empty
             if (newActivity && newActivity !== prevActivity && s.connectedSessionId) {
               const sessionId = s.connectedSessionId
@@ -460,6 +475,7 @@ export function useRelay(authenticated: boolean = true) {
     transcripts: state.transcripts,
     status: state.status,
     agentStatus: state.agentStatus,
+    disableAutoListenSeq: state.disableAutoListenSeq,
     connectSession,
     disconnectSession,
     interruptAgent,

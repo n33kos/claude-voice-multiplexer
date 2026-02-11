@@ -70,16 +70,19 @@ def _get_ws_device(ws: WebSocket) -> dict | None:
     return auth.validate_token(token)
 
 
-async def _notify_client_status(session_id: str, state: str, activity: str | None = None):
+async def _notify_client_status(session_id: str, state: str, activity: str | None = None, *, disable_auto_listen: bool = False):
     """Send agent status update to all web clients connected to a session."""
     session = await registry.get(session_id)
     if session and session.connected_clients:
-        msg = json.dumps({
+        payload: dict = {
             "type": "agent_status",
             "state": state,
             "activity": activity,
             "timestamp": time.time(),
-        })
+        }
+        if disable_auto_listen:
+            payload["disable_auto_listen"] = True
+        msg = json.dumps(payload)
         for client_id in list(session.connected_clients):
             client_ws = _clients.get(client_id)
             if client_ws:

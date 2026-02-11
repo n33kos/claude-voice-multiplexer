@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { Connection, Particle } from "./ParticleNetwork.types";
+import type { Particle } from "./ParticleNetwork.types";
 import styles from "./ParticleNetwork.module.scss";
 
 const PARTICLE_COUNT = Math.floor(
@@ -10,9 +10,9 @@ const PARTICLE_SPEED = 0.3;
 const MAX_PARTICLE_SPEED = 0.5;
 const PARTICLE_RADIUS = 1.5;
 const REPULSION_MULTIPLIER = 0.001;
-const BASE_DOT_OPACITY = 0.05;
-const CONNECTION_BOOST = 0.05;
-const LINE_OPACITY = 0.15;
+const BASE_DOT_OPACITY = 0.02;
+const CONNECTION_BOOST = 0.03;
+const LINE_OPACITY = 0.05;
 const HUE_DRIFT = 0.1;
 
 function getParticleLightness(): string {
@@ -27,6 +27,7 @@ export function ParticleNetwork() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const particles = useRef<Particle[]>([]);
   const animRef = useRef<number>(0);
+  const lightnessRef = useRef(getParticleLightness());
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -34,6 +35,12 @@ export function ParticleNetwork() {
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+
+    // Update cached lightness on theme change
+    const observer = new MutationObserver(() => {
+      lightnessRef.current = getParticleLightness();
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
     const resize = () => {
       canvas.width = window.innerWidth;
@@ -70,7 +77,7 @@ export function ParticleNetwork() {
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
 
-      const lightness = getParticleLightness();
+      const lightness = lightnessRef.current;
       const pts = particles.current;
 
       for (const p of pts) {
@@ -79,17 +86,17 @@ export function ParticleNetwork() {
         p.hue = (p.hue + HUE_DRIFT) % 360;
         p.connections = 0;
 
-        if (p.x < 0 - CONNECTION_DISTANCE) p.x = w;
-        if (p.x > w + CONNECTION_DISTANCE) p.x = 0;
-        if (p.y < 0 - CONNECTION_DISTANCE) p.y = h;
-        if (p.y > h + CONNECTION_DISTANCE) p.y = 0;
+        // Bounce off edges
+        if (p.x <= 0) { p.x = 0; p.vx = Math.abs(p.vx); }
+        if (p.x >= w) { p.x = w; p.vx = -Math.abs(p.vx); }
+        if (p.y <= 0) { p.y = 0; p.vy = Math.abs(p.vy); }
+        if (p.y >= h) { p.y = h; p.vy = -Math.abs(p.vy); }
 
         // Apply drag back down to default speed
         if (Math.abs(p.vx) > MAX_PARTICLE_SPEED) p.vx *= 0.99;
         if (Math.abs(p.vy) > MAX_PARTICLE_SPEED) p.vy *= 0.99;
       }
 
-      const connections: Map<string, Connection> = new Map();
       for (let i = 0; i < pts.length; i++) {
         for (let j = i + 1; j < pts.length; j++) {
           const dx = pts[i].x - pts[j].x;
@@ -103,42 +110,36 @@ export function ParticleNetwork() {
             pts[i].connections++;
             pts[j].connections++;
 
-            const connectionName = `${Math.min(i, j)}-${Math.max(i, j)}`;
+            // Push away from each other slightly based on proximity
+            const pushFactor =
+              ((CONNECTION_DISTANCE - dist) / CONNECTION_DISTANCE) *
+              REPULSION_MULTIPLIER;
+            pts[i].vx += (dx / dist) * pushFactor;
+            pts[i].vy += (dy / dist) * pushFactor;
+            pts[j].vx -= (dx / dist) * pushFactor;
+            pts[j].vy -= (dy / dist) * pushFactor;
 
-            if (!connections.has(connectionName)) {
-              // Push away from each other slightly based on proximity
-              const pushFactor =
-                ((CONNECTION_DISTANCE - dist) / CONNECTION_DISTANCE) *
-                REPULSION_MULTIPLIER;
-              pts[i].vx += (dx / dist) * pushFactor;
-              pts[i].vy += (dy / dist) * pushFactor;
-              pts[j].vx -= (dx / dist) * pushFactor;
-              pts[j].vy -= (dy / dist) * pushFactor;
+            const grad = ctx.createLinearGradient(
+              pts[i].x,
+              pts[i].y,
+              pts[j].x,
+              pts[j].y,
+            );
+            grad.addColorStop(
+              0,
+              `hsla(${pts[i].hue}, 80%, ${lightness}, ${opacity})`,
+            );
+            grad.addColorStop(
+              1,
+              `hsla(${pts[j].hue}, 80%, ${lightness}, ${opacity})`,
+            );
 
-              const grad = ctx.createLinearGradient(
-                pts[i].x,
-                pts[i].y,
-                pts[j].x,
-                pts[j].y,
-              );
-              grad.addColorStop(
-                0,
-                `hsla(${pts[i].hue}, 80%, ${lightness}, ${opacity})`,
-              );
-              grad.addColorStop(
-                1,
-                `hsla(${pts[j].hue}, 80%, ${lightness}, ${opacity})`,
-              );
-
-              ctx.beginPath();
-              ctx.moveTo(pts[i].x, pts[i].y);
-              ctx.lineTo(pts[j].x, pts[j].y);
-              ctx.strokeStyle = grad;
-              ctx.lineWidth = PARTICLE_RADIUS * proximity;
-              ctx.stroke();
-
-              connections.set(connectionName, { i, j, distance: dist });
-            }
+            ctx.beginPath();
+            ctx.moveTo(pts[i].x, pts[i].y);
+            ctx.lineTo(pts[j].x, pts[j].y);
+            ctx.strokeStyle = grad;
+            ctx.lineWidth = PARTICLE_RADIUS * proximity;
+            ctx.stroke();
           }
         }
       }
@@ -163,6 +164,7 @@ export function ParticleNetwork() {
       cancelAnimationFrame(animRef.current);
       window.removeEventListener("resize", resize);
       window.removeEventListener("click", onClick);
+      observer.disconnect();
     };
   }, []);
 

@@ -42,13 +42,14 @@ export function MicControls({
 
   const prevAgentState = useRef(agentState);
   useEffect(() => {
-    const prev = prevAgentState.current;
+    const stateChanged = prevAgentState.current !== agentState;
     prevAgentState.current = agentState;
-    if (prev === agentState) return;
 
     if (agentState === "idle") {
+      // Always sync mic with autoListen while idle — handles both
+      // state transitions to idle AND autoListen toggling mid-idle.
       room.localParticipant.setMicrophoneEnabled(autoListen);
-    } else if (agentState === "thinking" || agentState === "speaking") {
+    } else if (stateChanged && (agentState === "thinking" || agentState === "speaking")) {
       room.localParticipant.setMicrophoneEnabled(false);
     }
   }, [agentState, autoListen, room.localParticipant]);
