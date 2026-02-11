@@ -5,6 +5,7 @@ export interface Particle {
   vy: number;
   hue: number;
   connections: number;
+  targetHueOffset: number;
 }
 
 export interface Connection {

@@ -76,6 +76,7 @@ function AgentAudioRenderer({ muted }: { muted: boolean }) {
 export function VoiceControls({
   token,
   serverUrl,
+  sessionId,
   agentStatus,
   autoListen,
   speakerMuted,
@@ -99,6 +100,7 @@ export function VoiceControls({
       >
         <AgentAudioRenderer muted={speakerMuted} />
         <MicControls
+          sessionId={sessionId}
           agentStatus={agentStatus}
           autoListen={autoListen}
           speakerMuted={speakerMuted}

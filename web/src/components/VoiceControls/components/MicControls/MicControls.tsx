@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import classNames from "classnames";
 import {
   useRoomContext,
@@ -7,12 +7,14 @@ import {
 } from "@livekit/components-react";
 import { Track } from "livekit-client";
 import { initAudio } from "../../../../hooks/useChime";
+import { sessionHue } from "../../../../utils/sessionHue";
 import { VoiceBar } from "../../../VoiceBar/VoiceBar";
 import { useTrackAnalyser } from "../../hooks/useTrackAnalyser";
 import type { MicControlsProps } from "../../VoiceControls.types";
 import styles from "./MicControls.module.scss";
 
 export function MicControls({
+  sessionId,
   agentStatus,
   autoListen,
   speakerMuted,
@@ -23,6 +25,49 @@ export function MicControls({
 }: MicControlsProps) {
   const room = useRoomContext();
   const { isMicrophoneEnabled } = useLocalParticipant();
+  const hue = sessionId ? sessionHue(sessionId) : null;
+
+  // Session-colored overrides for thinking/speaking states
+  const sessionPillStyle = useMemo(() => {
+    if (hue === null) return undefined;
+    return {
+      backgroundColor: `hsla(${hue}, 55%, 50%, 0.15)`,
+      borderColor: `hsla(${hue}, 55%, 50%, 0.3)`,
+      color: `hsla(${hue}, 70%, 70%, 1)`,
+    };
+  }, [hue]);
+
+  const sessionButtonStyle = useMemo(() => {
+    if (hue === null) return undefined;
+    return {
+      backgroundColor: `hsla(${hue}, 55%, 50%, 0.2)`,
+      borderColor: `hsla(${hue}, 55%, 50%, 0.4)`,
+    };
+  }, [hue]);
+
+  const sessionIconColor = hue !== null ? `hsla(${hue}, 70%, 70%, 1)` : undefined;
+
+  // Convert session hue to RGB for VoiceBar
+  const sessionRgb = useMemo(() => {
+    if (hue === null) return undefined;
+    // HSL to RGB conversion (s=55%, l=55% for a vivid mid-tone)
+    const s = 0.55, l = 0.55;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+    const m = l - c / 2;
+    let r = 0, g = 0, b = 0;
+    if (hue < 60) { r = c; g = x; }
+    else if (hue < 120) { r = x; g = c; }
+    else if (hue < 180) { g = c; b = x; }
+    else if (hue < 240) { g = x; b = c; }
+    else if (hue < 300) { r = x; b = c; }
+    else { r = c; b = x; }
+    return {
+      r: Math.round((r + m) * 255),
+      g: Math.round((g + m) * 255),
+      b: Math.round((b + m) * 255),
+    };
+  }, [hue]);
 
   const agentState = agentStatus.state;
 
@@ -99,7 +144,10 @@ export function MicControls({
   return (
     <div data-component="VoiceControls" className={styles.Root}>
       {showStatusPill && (
-        <div className={classNames(styles.StatusPill, pillStyle.className)}>
+        <div
+          className={classNames(styles.StatusPill, pillStyle.className)}
+          style={(agentState === "thinking" || agentState === "speaking") ? sessionPillStyle : undefined}
+        >
           <span
             className={classNames(styles.StatusDot, {
               [styles.StatusDotPulse]: agentState === "thinking",
@@ -113,6 +161,7 @@ export function MicControls({
         agentStatus={agentStatus}
         isMicEnabled={isMicActive}
         analyserRef={activeAnalyser}
+        sessionColor={sessionRgb}
       />
       <div className={styles.ButtonRow}>
         <button
@@ -190,6 +239,7 @@ export function MicControls({
               ? styles.SpeakerButtonInactive
               : styles.SpeakerButtonActive,
           )}
+          style={!speakerMuted ? sessionButtonStyle : undefined}
         >
           <svg
             className={classNames(
@@ -198,6 +248,7 @@ export function MicControls({
                 ? styles.SpeakerIconInactive
                 : styles.SpeakerIconActive,
             )}
+            style={!speakerMuted && sessionIconColor ? { color: sessionIconColor } : undefined}
             fill="none"
             viewBox="0 0 24 24"
             strokeWidth={2}

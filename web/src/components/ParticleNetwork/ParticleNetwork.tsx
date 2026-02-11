@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Particle } from "./ParticleNetwork.types";
+import { sessionHue } from "../../utils/sessionHue";
 import styles from "./ParticleNetwork.module.scss";
 
 const PARTICLE_COUNT = Math.floor(
@@ -14,6 +15,8 @@ const BASE_DOT_OPACITY = 0.02;
 const CONNECTION_BOOST = 0.03;
 const LINE_OPACITY = 0.05;
 const HUE_DRIFT = 0.1;
+const HUE_RANGE = 40; // degrees of hue variation when session-locked
+const HUE_LERP_SPEED = 0.02; // how fast particles converge to target hue
 
 function getParticleLightness(): string {
   return (
@@ -23,11 +26,21 @@ function getParticleLightness(): string {
   );
 }
 
-export function ParticleNetwork() {
+interface ParticleNetworkProps {
+  sessionId?: string | null;
+}
+
+export function ParticleNetwork({ sessionId }: ParticleNetworkProps = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const particles = useRef<Particle[]>([]);
   const animRef = useRef<number>(0);
   const lightnessRef = useRef(getParticleLightness());
+  const sessionIdRef = useRef(sessionId);
+
+  // Keep ref in sync so animation loop sees latest value
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -70,6 +83,7 @@ export function ParticleNetwork() {
       vy: (Math.random() - 0.5) * PARTICLE_SPEED * 2,
       hue: Math.random() * 360,
       connections: 0,
+      targetHueOffset: (Math.random() - 0.5) * HUE_RANGE,
     }));
 
     const animate = () => {
@@ -79,11 +93,24 @@ export function ParticleNetwork() {
 
       const lightness = lightnessRef.current;
       const pts = particles.current;
+      const sid = sessionIdRef.current;
+      const baseHue = sid ? sessionHue(sid) : null;
 
       for (const p of pts) {
         p.x += p.vx;
         p.y += p.vy;
-        p.hue = (p.hue + HUE_DRIFT) % 360;
+
+        if (baseHue !== null) {
+          // Lerp toward a target within the session's hue range
+          const target = baseHue + (p.targetHueOffset ?? 0);
+          // Shortest-path hue lerp on the 0-360 circle
+          let delta = ((target - p.hue + 540) % 360) - 180;
+          p.hue = (p.hue + delta * HUE_LERP_SPEED + 360) % 360;
+        } else {
+          // Free drift across full spectrum
+          p.hue = (p.hue + HUE_DRIFT) % 360;
+        }
+
         p.connections = 0;
 
         // Bounce off edges

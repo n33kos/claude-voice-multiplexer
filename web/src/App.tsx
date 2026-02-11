@@ -125,7 +125,7 @@ export default function App() {
 
   return (
     <>
-      <ParticleNetwork />
+      <ParticleNetwork sessionId={relay.connectedSessionId} />
       <div className={styles.Layout}>
         <Header onSettingsOpen={() => setSettingsOpen(true)} />
 
@@ -150,6 +150,7 @@ export default function App() {
                 (s) => s.session_id === relay.connectedSessionId,
               )?.cwd
             }
+            sessionId={relay.connectedSessionId}
             onSendText={relay.sendTextMessage}
           />
         )}
@@ -159,6 +160,7 @@ export default function App() {
             <VoiceControls
               token={livekit.token}
               serverUrl={livekit.url}
+              sessionId={relay.connectedSessionId}
               agentStatus={relay.agentStatus}
               autoListen={settings.autoListen}
               speakerMuted={settings.speakerMuted}

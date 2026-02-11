@@ -77,11 +77,20 @@
 }
 
 .ActivityBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
   font-size: 0.75rem;
-  color: rgba(168, 85, 247, 0.7);
-  background-color: rgba(168, 85, 247, 0.1);
+  color: var(--color-bubble-claude-text);
+  background-color: var(--color-bubble-claude);
   padding: 0.25rem 0.75rem;
   border-radius: 9999px;
+}
+
+.ActivityIcon {
+  width: 0.75rem;
+  height: 0.75rem;
+  flex-shrink: 0;
 }
 
 .CodeBlockRow {

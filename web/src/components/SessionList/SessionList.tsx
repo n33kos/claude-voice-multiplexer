@@ -1,5 +1,6 @@
 import classNames from "classnames";
 import { initAudio } from "../../hooks/useChime";
+import { sessionHue } from "../../utils/sessionHue";
 import type { SessionListProps } from "./SessionList.types";
 import { timeAgo } from "./SessionList.utils";
 import { SessionMenu } from "./components/SessionMenu/SessionMenu";
@@ -34,17 +35,29 @@ export function SessionList({
     (s) => s.session_id === connectedSessionId && !!connectedSessionId,
   );
 
+  // Sort: connected session first, then preserve existing order
+  const sortedSessions = connectedSessionId
+    ? [...sessions].sort((a, b) => {
+        if (a.session_id === connectedSessionId) return -1;
+        if (b.session_id === connectedSessionId) return 1;
+        return 0;
+      })
+    : sessions;
+
   return (
     <div data-component="SessionList" className={classNames(styles.Root, { [styles.RootFull]: !connectedSessionId })}>
-      <button onClick={onToggleExpanded} className={styles.HeaderBar}>
+      <button
+        onClick={onToggleExpanded}
+        className={styles.HeaderBar}
+        style={connectedSession ? {
+          borderLeftColor: `hsla(${sessionHue(connectedSession.session_id)}, 70%, 55%, 0.7)`,
+        } : undefined}
+      >
         <div className={styles.HeaderLeft}>
           {connectedSession ? (
-            <>
-              <div className={styles.GreenDot} />
-              <span className={styles.SessionName}>
-                {connectedSession.display_name}
-              </span>
-            </>
+            <span className={styles.SessionName}>
+              {connectedSession.display_name}
+            </span>
           ) : (
             <span className={styles.PlaceholderText}>Select a session</span>
           )}
@@ -61,10 +74,11 @@ export function SessionList({
 
       {expanded && (
         <div className={classNames(styles.ExpandedList, { [styles.ExpandedListFull]: !connectedSessionId })}>
-          {sessions.map((session) => {
+          {sortedSessions.map((session) => {
             const isConnected =
               session.session_id === connectedSessionId && !!connectedSessionId;
             const canConnect = session.online;
+            const hue = sessionHue(session.session_id);
             return (
               <div
                 key={session.session_id}
@@ -81,12 +95,15 @@ export function SessionList({
                 className={classNames(
                   styles.SessionCard,
                   canConnect ? styles.SessionCardClickable : styles.SessionCardDisabled,
+                  isConnected && styles.SessionCardConnected,
                 )}
+                style={{
+                  borderLeftColor: `hsla(${hue}, 70%, 55%, ${session.online ? 0.7 : 0.3})`,
+                }}
               >
                 <div className={styles.SessionContent}>
                   <div className={styles.SessionInfo}>
                     <div className={styles.SessionNameRow}>
-                      {isConnected && <div className={styles.ConnectedDot} />}
                       <span
                         className={classNames(styles.NameText, {
                           [styles.NameTextOffline]: !session.online,

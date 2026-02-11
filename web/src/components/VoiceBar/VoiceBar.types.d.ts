@@ -5,6 +5,7 @@ export interface VoiceBarProps {
   agentStatus: AgentStatus;
   isMicEnabled: boolean;
   analyserRef: MutableRefObject<AnalyserNode | null>;
+  sessionColor?: RGB;
 }
 
 export interface RGB {
