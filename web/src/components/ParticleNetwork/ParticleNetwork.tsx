@@ -6,14 +6,14 @@ import styles from "./ParticleNetwork.module.scss";
 const PARTICLE_COUNT = Math.floor(
   (window.innerWidth * window.innerHeight) / 5000,
 );
-const CONNECTION_DISTANCE = 200;
+const CONNECTION_DISTANCE = 150;
 const PARTICLE_SPEED = 0.3;
 const MAX_PARTICLE_SPEED = 0.5;
 const PARTICLE_RADIUS = 1.5;
 const REPULSION_MULTIPLIER = 0.001;
 const BASE_DOT_OPACITY = 0.02;
 const CONNECTION_BOOST = 0.03;
-const LINE_OPACITY = 0.05;
+const LINE_OPACITY = 0.12;
 const HUE_DRIFT = 0.1;
 const HUE_RANGE = 40; // degrees of hue variation when session-locked
 const HUE_LERP_SPEED = 0.02; // how fast particles converge to target hue

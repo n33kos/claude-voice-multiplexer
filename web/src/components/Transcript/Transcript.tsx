@@ -141,10 +141,10 @@ export function Transcript({ entries, cwd, sessionId, onSendText }: TranscriptPr
         </div>
         {onSendText && (
           <div className={styles.TextInputBar}>
-            <input
-              type="text"
+            <textarea
               className={styles.TextInput}
               placeholder="Type a message..."
+              rows={1}
               value={textInput}
               onChange={(e) => setTextInput(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -227,10 +227,10 @@ export function Transcript({ entries, cwd, sessionId, onSendText }: TranscriptPr
       </div>
       {onSendText && (
         <div className={styles.TextInputBar}>
-          <input
-            type="text"
+          <textarea
             className={styles.TextInput}
             placeholder="Type a message..."
+            rows={1}
             value={textInput}
             onChange={(e) => setTextInput(e.target.value)}
             onKeyDown={handleKeyDown}

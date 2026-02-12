@@ -187,6 +187,7 @@ a.CodeFilename {
 
 .Paragraph {
   margin: 0;
+  white-space: pre-wrap;
 
   & + & {
     margin-top: 0.5rem;
@@ -196,7 +197,7 @@ a.CodeFilename {
 // Text input bar
 .TextInputBar {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 0.5rem;
   padding: 0.5rem;
   flex-shrink: 0;
@@ -205,13 +206,20 @@ a.CodeFilename {
 .TextInput {
   flex: 1;
   font-size: 0.875rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: 1.5rem;
+  padding: 0.3125rem 0.75rem;
+  border-radius: 1.25rem;
   border: 1px solid var(--color-border);
   background-color: var(--color-surface);
   color: var(--color-text);
   outline: none;
   transition: border-color 0.15s;
+  resize: none;
+  overflow-y: hidden;
+  line-height: 1.4;
+  field-sizing: content;
+  // Max ~3 lines
+  max-height: 4.75rem;
+  font-family: inherit;
 
   &::placeholder {
     color: var(--color-text-muted);
