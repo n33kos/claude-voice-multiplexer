@@ -50,6 +50,8 @@ export KOKORO_URL="${KOKORO_URL:-http://127.0.0.1:${KOKORO_PORT}/v1}"
 
 RELAY_PORT="${RELAY_PORT:-3100}"
 LIVEKIT_PORT="${LIVEKIT_PORT:-7880}"
+LIVEKIT_API_KEY="${LIVEKIT_API_KEY:-devkey}"
+LIVEKIT_API_SECRET="${LIVEKIT_API_SECRET:-secret}"
 WEB_PORT="${WEB_PORT:-5173}"
 
 DEV_MODE="${DEV_MODE:-false}"
@@ -270,13 +272,16 @@ if curl -s "$LIVEKIT_CHECK_URL" > /dev/null 2>&1; then
     log "  LiveKit: already running on :${LIVEKIT_PORT}"
 else
     log "  LiveKit: starting on :${LIVEKIT_PORT}..."
-    livekit-server --dev --bind 0.0.0.0 > /dev/null 2>&1 &
+    livekit-server --bind 0.0.0.0 --keys "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}" > /dev/null 2>&1 &
     PIDS+=($!)
     sleep 2
     log "  LiveKit: running on :${LIVEKIT_PORT}"
 fi
 
 # --- Start relay server ---
+
+# Create dist folder exists for Vite to serve, even if empty (avoids errors in dev mode before first build)
+mkdir -p "$PROJECT_DIR/web/dist" 
 
 log "  Relay server: starting on :${RELAY_PORT}..."
 cd "$PROJECT_DIR/relay-server"
@@ -299,16 +304,20 @@ PIDS+=($!)
 
 if [ "$DEV_MODE" = true ]; then
     log "  Web dev server: starting on :${WEB_PORT}..."
+    
     cd "$PROJECT_DIR/web"
-    npm install --silent > /dev/null 2>&1
+    npm install --silent > /dev/null
     npx vite --port "$WEB_PORT" &
+
     PIDS+=($!)
     log ""
     log "Open http://localhost:${WEB_PORT} in your browser"
 else
     log "  Web app: building for production..."
-    npm install --silent > /dev/null 2>&1
-    npm run build --silent > /dev/null 2>&1
+    
+    cd "$PROJECT_DIR/web"
+    npm install --silent > /dev/null
+    npx vite build > /dev/null
 
     if [ -d "$PROJECT_DIR/web/dist" ]; then
         log "Open http://localhost:${RELAY_PORT} in your browser (serving built web app)"
