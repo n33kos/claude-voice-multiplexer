@@ -306,6 +306,11 @@ else
     DETECTED_DEVICE="auto"
 fi
 
+# Generate LiveKit API keys
+LIVEKIT_KEYS_OUTPUT=$(livekit-server generate-keys)
+LIVEKIT_API_KEY=$(echo "$LIVEKIT_KEYS_OUTPUT" | awk '/API Key:/ {print $3}')
+LIVEKIT_API_SECRET=$(echo "$LIVEKIT_KEYS_OUTPUT" | awk '/API Secret:/ {print $3}')
+
 if [ ! -f "$CONFIG_FILE" ] || [ "$FORCE" = true ]; then
     cat > "$CONFIG_FILE" << EOF
 # Claude Voice Multiplexer Configuration
@@ -340,8 +345,8 @@ VMUX_KOKORO_DEVICE=${DETECTED_DEVICE}
 # --- LiveKit ---
 # Rooms are created automatically per session (vmux_{session_name}).
 # LIVEKIT_URL=ws://localhost:7880
-LIVEKIT_API_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-LIVEKIT_API_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
 
 # --- Session Registry ---
 # SESSION_TIMEOUT=60

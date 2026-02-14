@@ -300,12 +300,16 @@ PIDS+=($!)
 if [ "$DEV_MODE" = true ]; then
     log "  Web dev server: starting on :${WEB_PORT}..."
     cd "$PROJECT_DIR/web"
+    npm install --silent > /dev/null 2>&1
     npx vite --port "$WEB_PORT" &
     PIDS+=($!)
     log ""
     log "Open http://localhost:${WEB_PORT} in your browser"
 else
-    log ""
+    log "  Web app: building for production..."
+    npm install --silent > /dev/null 2>&1
+    npm run build --silent > /dev/null 2>&1
+
     if [ -d "$PROJECT_DIR/web/dist" ]; then
         log "Open http://localhost:${RELAY_PORT} in your browser (serving built web app)"
     else
