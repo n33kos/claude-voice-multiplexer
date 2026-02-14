@@ -54,7 +54,15 @@ if [ "$vmux_running" = false ]; then
 fi
 
 if [ "$QUIET" = true ]; then
-    [ "$vmux_running" = true ] && exit 0 || exit 1
+    # Check that the multiplexer AND critical services are actually responding
+    if [ "$vmux_running" = true ] \
+        && curl -s --max-time 2 "http://127.0.0.1:${WHISPER_PORT}/" > /dev/null 2>&1 \
+        && curl -s --max-time 2 "http://127.0.0.1:${KOKORO_PORT}/health" > /dev/null 2>&1 \
+        && curl -s --max-time 2 "http://127.0.0.1:${RELAY_PORT}/api/auth/status" > /dev/null 2>&1; then
+        exit 0
+    else
+        exit 1
+    fi
 fi
 
 echo "Claude Voice Multiplexer Status"

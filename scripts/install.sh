@@ -218,6 +218,23 @@ else
     log "Kokoro installation complete."
 fi
 
+# --- Install MCP server dependencies ---
+
+log_section "Installing MCP server dependencies"
+
+MCP_VENV="$DATA_DIR/mcp-venv"
+
+if [ -d "$MCP_VENV" ] && [ "$FORCE" = false ]; then
+    log "MCP venv already exists at $MCP_VENV"
+    log "  Use --force to reinstall"
+else
+    log "Creating MCP virtual environment..."
+    uv venv "$MCP_VENV"
+    log "Installing fastmcp and websockets..."
+    uv pip install --python "$MCP_VENV/bin/python" "fastmcp>=2.0" "websockets>=12.0" "python-dotenv>=1.0"
+    log "MCP server dependencies installed."
+fi
+
 # --- Generate config ---
 
 log_section "Generating configuration"
