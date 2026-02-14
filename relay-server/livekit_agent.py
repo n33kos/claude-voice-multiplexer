@@ -25,7 +25,8 @@ from config import (
     LIVEKIT_URL,
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
-    SAMPLE_RATE,
+    STT_SAMPLE_RATE,
+    TTS_SAMPLE_RATE,
     VAD_AGGRESSIVENESS,
     SILENCE_THRESHOLD_MS,
     MIN_SPEECH_DURATION_S,
@@ -40,7 +41,6 @@ NUM_CHANNELS = 1
 
 # VAD internals (not user-configurable)
 VAD_FRAME_MS = 30  # WebRTC VAD frame size (10, 20, or 30ms)
-VAD_SAMPLE_RATE = 16000  # WebRTC VAD only supports 8k, 16k, 32k
 
 # Whisper noise/hallucination filtering.
 #
@@ -321,15 +321,17 @@ class SessionRoom:
             frame = event.frame
             samples = np.frombuffer(frame.data, dtype=np.int16).copy()
 
-            if frame.sample_rate != SAMPLE_RATE:
+            if frame.sample_rate != STT_SAMPLE_RATE:
                 from scipy import signal as scipy_signal
                 samples = scipy_signal.resample(
                     samples,
-                    int(len(samples) * SAMPLE_RATE / frame.sample_rate),
+                    int(len(samples) * STT_SAMPLE_RATE / frame.sample_rate),
                 ).astype(np.int16)
 
             self._audio_buffer.append(samples)
 
+            # Samples are already at STT_SAMPLE_RATE (16kHz) which matches
+            # what WebRTC VAD needs — no second resample required.
             is_speech = self._detect_speech(samples)
 
             if is_speech:
@@ -363,19 +365,16 @@ class SessionRoom:
                     speech_start_time = None
 
     def _detect_speech(self, samples: np.ndarray) -> bool:
-        """Detect speech using WebRTC VAD or energy fallback."""
+        """Detect speech using WebRTC VAD or energy fallback.
+
+        Expects samples at STT_SAMPLE_RATE (16kHz), matching WebRTC VAD requirements.
+        """
         if self._vad:
             try:
-                from scipy import signal as scipy_signal
-                vad_samples = scipy_signal.resample(
-                    samples,
-                    int(len(samples) * VAD_SAMPLE_RATE / SAMPLE_RATE),
-                ).astype(np.int16)
-
-                frame_samples = int(VAD_SAMPLE_RATE * VAD_FRAME_MS / 1000)
-                if len(vad_samples) >= frame_samples:
-                    chunk = vad_samples[:frame_samples]
-                    return self._vad.is_speech(chunk.tobytes(), VAD_SAMPLE_RATE)
+                frame_samples = int(STT_SAMPLE_RATE * VAD_FRAME_MS / 1000)
+                if len(samples) >= frame_samples:
+                    chunk = samples[:frame_samples]
+                    return self._vad.is_speech(chunk.tobytes(), STT_SAMPLE_RATE)
             except Exception:
                 pass
 
@@ -388,7 +387,7 @@ class SessionRoom:
             return
 
         all_audio = np.concatenate(self._audio_buffer)
-        wav_bytes = _to_wav(all_audio, SAMPLE_RATE)
+        wav_bytes = _to_wav(all_audio, STT_SAMPLE_RATE)
 
         session = await self.registry.get(self.session_id)
 
@@ -480,11 +479,13 @@ class SessionRoom:
         await self._notify_status("speaking")
         try:
             total_samples = 0
-            publish_start = time.time()
+            first_frame_at: float | None = None
             got_audio = False
 
             try:
                 async for pcm_chunk in audio_pipeline.synthesize_pcm_stream(text):
+                    if not got_audio:
+                        first_frame_at = time.time()
                     got_audio = True
                     total_samples += await self._publish_audio_chunk(pcm_chunk)
             except Exception as e:
@@ -494,17 +495,27 @@ class SessionRoom:
                     self._schedule_error_recovery()
                     return
 
-            if not got_audio:
+            if not got_audio or first_frame_at is None:
                 print(f"[room:{self.room_name}] TTS stream returned no audio")
                 await self._notify_status("error", "Text-to-speech returned no audio.")
                 self._schedule_error_recovery()
                 return
 
-            # Wait for remaining playback to finish (extra buffer for WebRTC jitter/output)
-            playback_duration = total_samples / LIVEKIT_SAMPLE_RATE
-            elapsed = time.time() - publish_start
-            remaining = playback_duration - elapsed + 1.5
+            # Wait for client to finish playing the audio.
+            #
+            # The earliest the client can finish is:
+            #   first_frame_at + audio_duration + pipeline_latency
+            #
+            # Pipeline latency accounts for: LiveKit server buffering (~100ms),
+            # WebRTC jitter buffer (~200ms), network transit, and device audio
+            # output buffer (~200-500ms on mobile). 2s is conservative.
+            WEBRTC_PIPELINE_LATENCY_S = 1.0
+            audio_duration = total_samples / LIVEKIT_SAMPLE_RATE
+            playback_end = first_frame_at + audio_duration + WEBRTC_PIPELINE_LATENCY_S
+            remaining = playback_end - time.time()
             if remaining > 0:
+                print(f"[room:{self.room_name}] Waiting {remaining:.1f}s for playback to finish "
+                      f"(audio={audio_duration:.1f}s, latency={WEBRTC_PIPELINE_LATENCY_S}s)")
                 await asyncio.sleep(remaining)
 
         finally:
@@ -564,11 +575,11 @@ class SessionRoom:
 
         samples = np.frombuffer(pcm_bytes, dtype=np.int16)
 
-        if SAMPLE_RATE != LIVEKIT_SAMPLE_RATE:
+        if TTS_SAMPLE_RATE != LIVEKIT_SAMPLE_RATE:
             from scipy import signal as scipy_signal
             samples = scipy_signal.resample(
                 samples,
-                int(len(samples) * LIVEKIT_SAMPLE_RATE / SAMPLE_RATE),
+                int(len(samples) * LIVEKIT_SAMPLE_RATE / TTS_SAMPLE_RATE),
             ).astype(np.int16)
 
         frame_size = LIVEKIT_SAMPLE_RATE // 100  # 10ms frames

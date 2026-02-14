@@ -124,6 +124,7 @@ async def _notify_client_transcript(session_id: str, speaker: str, text: str, **
         _transcript_buffers[session_id] = buf[-MAX_TRANSCRIPT_BUFFER:]
 
     msg = json.dumps(entry)
+    print(f"[transcript] {speaker} ({session_id}): {len(text)} chars, msg_len={len(msg)}")
     for client_ws in list(_clients.values()):
         try:
             await client_ws.send_text(msg)

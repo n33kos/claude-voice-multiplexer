@@ -236,6 +236,17 @@ export function useRelay(authenticated: boolean = true) {
       if (typeof event.data !== 'string') return
       const data = JSON.parse(event.data)
 
+      // Debug: log transcript messages to help diagnose truncation issues
+      if (data.type === 'transcript') {
+        console.debug('[relay:transcript]', {
+          speaker: data.speaker,
+          textLength: data.text?.length,
+          textPreview: data.text?.slice(0, 100),
+          fullText: data.text,
+          rawDataLength: event.data.length,
+        })
+      }
+
       switch (data.type) {
         case 'sessions':
           setState(s => ({ ...s, liveSessions: data.sessions }))

@@ -35,7 +35,8 @@ SESSION_TIMEOUT = int(os.environ.get("SESSION_TIMEOUT", "120"))
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "whisper-1")
 KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "af_default")
 KOKORO_MODEL = os.environ.get("KOKORO_MODEL", "tts-1")
-SAMPLE_RATE = int(os.environ.get("SAMPLE_RATE", "24000"))
+STT_SAMPLE_RATE = int(os.environ.get("STT_SAMPLE_RATE", "16000"))  # Incoming audio (capture/VAD/Whisper)
+TTS_SAMPLE_RATE = int(os.environ.get("TTS_SAMPLE_RATE", "24000"))  # Outgoing audio (Kokoro TTS)
 
 # --- Authentication ---
 AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
