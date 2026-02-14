@@ -11,3 +11,4 @@ web/dist/
 web/node_modules/
 .venv/
 venv/
+.playwright/
