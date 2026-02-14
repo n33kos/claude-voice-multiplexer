@@ -117,6 +117,13 @@ if ! check_cmd npm; then
 fi
 log "npm: OK ($(npm --version))"
 
+# LiveKit server
+if ! check_cmd livekit-server; then
+    log "livekit-server: not found, installing via Homebrew..."
+    brew install livekit
+fi
+log "livekit-server: OK"
+
 # --- Create data directory ---
 
 mkdir -p "$DATA_DIR/logs"
@@ -314,7 +321,6 @@ VMUX_WHISPER_THREADS=auto
 
 # --- Kokoro TTS ---
 VMUX_KOKORO_PORT=8101
-VMUX_KOKORO_VOICE=af_sky
 VMUX_KOKORO_DEVICE=${DETECTED_DEVICE}
 
 # --- Server ---
@@ -334,27 +340,28 @@ VMUX_KOKORO_DEVICE=${DETECTED_DEVICE}
 # --- LiveKit ---
 # Rooms are created automatically per session (vmux_{session_name}).
 # LIVEKIT_URL=ws://localhost:7880
-# LIVEKIT_API_KEY=devkey
-# LIVEKIT_API_SECRET=secret
+LIVEKIT_API_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+LIVEKIT_API_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 
 # --- Session Registry ---
 # SESSION_TIMEOUT=60
 
 # --- Audio / TTS ---
-# KOKORO_VOICE=af_default
+# KOKORO_VOICE=af_heart
 # KOKORO_MODEL=tts-1
-# SAMPLE_RATE=24000
+# STT_SAMPLE_RATE=16000
+# TTS_SAMPLE_RATE=24000
 
 # --- VAD (Voice Activity Detection) ---
 # Lower aggressiveness = less sensitive (fewer false positives from background noise)
 # Range: 0 (most permissive) to 3 (most aggressive/sensitive)
-# VAD_AGGRESSIVENESS=1
+VAD_AGGRESSIVENESS=2
 
 # How long silence must last (ms) before an utterance is considered finished
-# SILENCE_THRESHOLD_MS=2000
+SILENCE_THRESHOLD_MS=2500
 
 # Minimum speech duration (seconds) before silence can end an utterance
-# MIN_SPEECH_DURATION_S=0.5
+MIN_SPEECH_DURATION_S=0.5
 
 # Seconds to ignore mic input after TTS finishes (echo suppression)
 # ECHO_COOLDOWN_S=0.8

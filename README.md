@@ -150,7 +150,7 @@ A Python server (FastAPI + Uvicorn) that bridges the web client, Claude sessions
 | ------------------------------- | --------- | ---------------------------------------------------------- |
 | `GET /`                         | HTTP      | Serve the React web app (from `web/dist/`)                 |
 | `GET /api/sessions`             | HTTP      | List all registered Claude sessions (auth required)        |
-| `GET /api/token`                | HTTP      | Generate LiveKit JWT for client connection (auth required)  |
+| `GET /api/token`                | HTTP      | Generate LiveKit JWT for client connection (auth required) |
 | `GET /api/health`               | HTTP      | Service health check (Whisper, Kokoro, LiveKit, relay)     |
 | `WS /livekit/{path}`            | WebSocket | Proxy to local LiveKit server (for remote/tunnel access)   |
 | `GET /livekit/{path}`           | HTTP      | HTTP proxy to local LiveKit server                         |
@@ -212,25 +212,25 @@ A static-built React app served by the relay server. Mobile-first design for pho
 
 **Key files:**
 
-| File                          | Description                                                                |
-| ----------------------------- | -------------------------------------------------------------------------- |
-| `App.tsx`                     | Root component, wires hooks to components                                  |
-| `hooks/useRelay.ts`           | WebSocket state, `AgentStatus`, persistent sessions, transcript management |
-| `hooks/useLiveKit.ts`         | LiveKit token fetching and connection state                                |
-| `hooks/useChime.ts`           | Audio feedback chimes on state transitions                                 |
-| `hooks/useSettings.ts`        | localStorage-backed settings (theme, auto-listen, speaker mute, status pill)  |
-| `hooks/useTheme.ts`           | Theme application (system preference detection, data-theme attribute)         |
-| `hooks/useAuth.ts`            | Auth state, device pairing, device management API                          |
-| `hooks/useTranscriptDB.ts`    | IndexedDB persistence for transcripts and sessions                         |
-| `components/VoiceControls/`   | LiveKit room, mic/speaker/interrupt, Web Audio API routing for iOS        |
-| `components/VoiceBar/`        | Canvas audio visualizer with voice-optimized frequency mapping             |
-| `components/SessionList/`     | Collapsible session drawer with dropdown menus                             |
-| `components/Transcript/`      | Scrolling transcript with activity entries                                 |
-| `components/StatusBar/`       | Connection status indicators (Relay Server / LiveKit / Claude)             |
-| `components/PairScreen/`      | Device pairing code entry screen                                           |
-| `components/Settings/`        | Settings panel (theme, auto-listen, speaker mute, status pill, devices)     |
-| `components/Header/`          | Animated rainbow gradient header with settings button                      |
-| `components/ParticleNetwork/` | Background particle animation canvas                                       |
+| File                          | Description                                                                  |
+| ----------------------------- | ---------------------------------------------------------------------------- |
+| `App.tsx`                     | Root component, wires hooks to components                                    |
+| `hooks/useRelay.ts`           | WebSocket state, `AgentStatus`, persistent sessions, transcript management   |
+| `hooks/useLiveKit.ts`         | LiveKit token fetching and connection state                                  |
+| `hooks/useChime.ts`           | Audio feedback chimes on state transitions                                   |
+| `hooks/useSettings.ts`        | localStorage-backed settings (theme, auto-listen, speaker mute, status pill) |
+| `hooks/useTheme.ts`           | Theme application (system preference detection, data-theme attribute)        |
+| `hooks/useAuth.ts`            | Auth state, device pairing, device management API                            |
+| `hooks/useTranscriptDB.ts`    | IndexedDB persistence for transcripts and sessions                           |
+| `components/VoiceControls/`   | LiveKit room, mic/speaker/interrupt, Web Audio API routing for iOS           |
+| `components/VoiceBar/`        | Canvas audio visualizer with voice-optimized frequency mapping               |
+| `components/SessionList/`     | Collapsible session drawer with dropdown menus                               |
+| `components/Transcript/`      | Scrolling transcript with activity entries                                   |
+| `components/StatusBar/`       | Connection status indicators (Relay Server / LiveKit / Claude)               |
+| `components/PairScreen/`      | Device pairing code entry screen                                             |
+| `components/Settings/`        | Settings panel (theme, auto-listen, speaker mute, status pill, devices)      |
+| `components/Header/`          | Animated rainbow gradient header with settings button                        |
+| `components/ParticleNetwork/` | Background particle animation canvas                                         |
 
 Components use a folder-based architecture with co-located `.module.scss` stylesheets, `.types.d.ts` type definitions, and sub-components in nested `components/` directories.
 
@@ -272,18 +272,18 @@ All settings are configured via `~/.claude/voice-multiplexer/voice-multiplexer.e
 **Key settings:**
 
 | Variable                | Default                    | Description                                                   |
-| ----------------------- | -------------------------- | ------------------------------------------------------------- |
+| ----------------------- | -------------------------- | ------------------------------------------------------------- | --- |
 | `RELAY_HOST`            | `0.0.0.0`                  | Relay server bind address                                     |
 | `RELAY_PORT`            | `3100`                     | Relay server port                                             |
 | `WHISPER_URL`           | `http://127.0.0.1:8100/v1` | Whisper STT endpoint                                          |
 | `KOKORO_URL`            | `http://127.0.0.1:8101/v1` | Kokoro TTS endpoint                                           |
-| `KOKORO_VOICE`          | `af_default`               | TTS voice (supports blends like `am_adam(0.3)+hm_omega(0.7)`) |
+| `KOKORO_VOICE`          | `af_heart`                 | TTS voice (supports blends like `am_adam(0.3)+hm_omega(0.7)`) |
 | `LIVEKIT_URL`           | `ws://localhost:7880`      | LiveKit server URL                                            |
 | `LIVEKIT_API_KEY`       |                            | LiveKit API key                                               |
 | `LIVEKIT_API_SECRET`    |                            | LiveKit API secret                                            |
 | `SESSION_TIMEOUT`       | `120`                      | Session heartbeat timeout (seconds)                           |
-| `VAD_AGGRESSIVENESS`    | `1`                        | VAD sensitivity (0=permissive, 3=strict)                      |
-| `SILENCE_THRESHOLD_MS`  | `2000`                     | Silence duration before utterance ends                        |
+| `VAD_AGGRESSIVENESS`    | `2`                        | VAD sensitivity (0=permissive, 3=strict)                      |
+| `SILENCE_THRESHOLD_MS`  | `2500`                     | Silence duration before utterance ends                        |
 | `MIN_SPEECH_DURATION_S` | `0.5`                      | Minimum speech before silence can end utterance               |
 | `ECHO_COOLDOWN_S`       | `0.8`                      | Seconds to ignore mic after TTS (echo suppression)            |
 | `ENERGY_THRESHOLD`      | `500`                      | Energy threshold for fallback VAD                             |
@@ -292,8 +292,7 @@ All settings are configured via `~/.claude/voice-multiplexer/voice-multiplexer.e
 | `VMUX_WHISPER_PORT`     | `8100`                     | Whisper server listen port                                    |
 | `VMUX_WHISPER_MODEL`    | `base`                     | Whisper model name (base, small, medium, large)               |
 | `VMUX_WHISPER_THREADS`  | `auto`                     | Whisper inference threads (auto = CPU count)                  |
-| `VMUX_KOKORO_PORT`      | `8101`                     | Kokoro server listen port                                     |
-| `VMUX_KOKORO_VOICE`     | `af_sky`                   | Default Kokoro TTS voice                                      |
+| `VMUX_KOKORO_PORT`      | `8101`                     | Kokoro server listen port                                     |     |
 | `VMUX_KOKORO_DEVICE`    | `mps` (macOS)              | PyTorch device (mps, cuda, cpu)                               |
 | `AUTH_SECRET`           | (auto-generated)           | JWT signing secret (if empty, auth is disabled)               |
 | `AUTH_TOKEN_TTL_DAYS`   | `90`                       | How long device authorization tokens last                     |
@@ -545,4 +544,3 @@ The stop script uses a two-pass strategy to find the running instance:
 
 1. **PID file** (`.vmux.pid`): Fast, reliable when the start script exited cleanly
 2. **Process name search**: Falls back to `pgrep -f "claude-voice-multiplexer:start"` if the PID file is stale or missing (e.g., after an unclean shutdown)
-

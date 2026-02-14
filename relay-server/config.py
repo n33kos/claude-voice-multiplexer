@@ -33,7 +33,7 @@ SESSION_TIMEOUT = int(os.environ.get("SESSION_TIMEOUT", "120"))
 
 # --- Audio / TTS ---
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "whisper-1")
-KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "af_default")
+KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
 KOKORO_MODEL = os.environ.get("KOKORO_MODEL", "tts-1")
 STT_SAMPLE_RATE = int(os.environ.get("STT_SAMPLE_RATE", "16000"))  # Incoming audio (capture/VAD/Whisper)
 TTS_SAMPLE_RATE = int(os.environ.get("TTS_SAMPLE_RATE", "24000"))  # Outgoing audio (Kokoro TTS)
@@ -44,7 +44,7 @@ AUTH_TOKEN_TTL_DAYS = int(os.environ.get("AUTH_TOKEN_TTL_DAYS", "90"))
 AUTH_ENABLED = bool(AUTH_SECRET)
 
 # --- VAD (Voice Activity Detection) ---
-VAD_AGGRESSIVENESS = int(os.environ.get("VAD_AGGRESSIVENESS", "1"))  # 0=permissive, 3=strict
+VAD_AGGRESSIVENESS = int(os.environ.get("VAD_AGGRESSIVENESS", "2"))  # 0=permissive, 3=strict
 SILENCE_THRESHOLD_MS = int(os.environ.get("SILENCE_THRESHOLD_MS", "2500"))
 MIN_SPEECH_DURATION_S = float(os.environ.get("MIN_SPEECH_DURATION_S", "0.5"))
 ECHO_COOLDOWN_S = float(os.environ.get("ECHO_COOLDOWN_S", "0.8"))
