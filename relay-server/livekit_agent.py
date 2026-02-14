@@ -16,6 +16,7 @@ import io
 import re
 import struct
 import time
+from typing import Optional
 
 import numpy as np
 from livekit import api, rtc
@@ -143,7 +144,7 @@ _VOICE_COMMAND_PATTERNS = {
 }
 
 
-def match_voice_command(text: str) -> str | None:
+def match_voice_command(text: str) -> Optional[str]:
     """Check if text matches a voice command. Returns the command name or None."""
     for name, pattern in _VOICE_COMMAND_PATTERNS.items():
         if pattern.match(text):
@@ -168,8 +169,8 @@ class SessionRoom:
         self.notify_status_fn = notify_status_fn
         self.notify_transcript_fn = notify_transcript_fn
 
-        self.room: rtc.Room | None = None
-        self.audio_source: rtc.AudioSource | None = None
+        self.room: rtc.Optional[Room] = None
+        self.audio_source: rtc.Optional[AudioSource] = None
         self._running = False
 
         # Audio/VAD state
@@ -181,9 +182,9 @@ class SessionRoom:
 
         # Status state machine
         self._current_state: str = "idle"
-        self._current_activity: str | None = None
-        self._error_timer: asyncio.Task | None = None
-        self._pending_listening: str | None = None
+        self._current_activity: Optional[str] = None
+        self._error_timer: asyncio.Optional[Task] = None
+        self._pending_listening: Optional[str] = None
         self._pending_listening_at: float = 0.0
         self._idle_entered_at: float = 0.0
         self._last_status_update_at: float = 0.0
@@ -193,7 +194,7 @@ class SessionRoom:
 
         # Queue to serialize TTS responses (prevents concurrent playback conflicts)
         self._response_queue: asyncio.Queue[str] = asyncio.Queue()
-        self._response_worker_task: asyncio.Task | None = None
+        self._response_worker_task: asyncio.Optional[Task] = None
 
     async def start(self):
         """Connect to this session's LiveKit room."""
@@ -479,7 +480,7 @@ class SessionRoom:
         await self._notify_status("speaking")
         try:
             total_samples = 0
-            first_frame_at: float | None = None
+            first_frame_at: Optional[float] = None
             got_audio = False
 
             try:
@@ -595,7 +596,7 @@ class SessionRoom:
 
         return len(samples)
 
-    async def _notify_status(self, state: str, activity: str | None = None, *, disable_auto_listen: bool = False):
+    async def _notify_status(self, state: str, activity: Optional[str] = None, *, disable_auto_listen: bool = False):
         """Notify connected client of agent status change."""
         self._current_state = state
         self._current_activity = activity
@@ -655,7 +656,7 @@ class RelayAgent:
             await room.stop()
             print(f"[agent] Removed session room: {room.room_name}")
 
-    def get_room(self, session_id: str) -> SessionRoom | None:
+    def get_room(self, session_id: str) -> Optional[SessionRoom]:
         """Get the room for a session."""
         return self._rooms.get(session_id)
 

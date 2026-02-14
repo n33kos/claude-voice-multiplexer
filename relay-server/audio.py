@@ -2,13 +2,14 @@
 
 import io
 from collections.abc import AsyncGenerator
+from typing import Optional
 
 import httpx
 
 from config import WHISPER_URL, KOKORO_URL, WHISPER_MODEL, KOKORO_VOICE, KOKORO_MODEL
 
 
-async def transcribe(audio_data: bytes, audio_format: str = "webm") -> str | None:
+async def transcribe(audio_data: bytes, audio_format: str = "webm") -> Optional[str]:
     """Transcribe audio using Whisper via OpenAI-compatible API.
 
     Args:
@@ -38,7 +39,7 @@ async def transcribe(audio_data: bytes, audio_format: str = "webm") -> str | Non
             return None
 
 
-async def synthesize(text: str, voice: str | None = None, response_format: str = "opus") -> bytes | None:
+async def synthesize(text: str, voice: Optional[str] = None, response_format: str = "opus") -> Optional[bytes]:
     """Synthesize speech using Kokoro via OpenAI-compatible API.
 
     Args:
@@ -68,13 +69,13 @@ async def synthesize(text: str, voice: str | None = None, response_format: str =
             return None
 
 
-async def synthesize_pcm(text: str, voice: str | None = None) -> bytes | None:
+async def synthesize_pcm(text: str, voice: Optional[str] = None) -> Optional[bytes]:
     """Synthesize speech as raw PCM (16-bit mono, 24kHz) for LiveKit publishing."""
     return await synthesize(text, voice, response_format="pcm")
 
 
 async def synthesize_pcm_stream(
-    text: str, voice: str | None = None, chunk_size: int = 4800
+    text: str, voice: Optional[str] = None, chunk_size: int = 4800
 ) -> AsyncGenerator[bytes, None]:
     """Stream PCM audio chunks from Kokoro as they're generated.
 

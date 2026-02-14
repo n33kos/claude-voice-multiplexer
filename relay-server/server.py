@@ -14,6 +14,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, Cookie, HTTPException
 from fastapi.responses import JSONResponse
@@ -30,7 +31,7 @@ registry = SessionRegistry()
 _clients: dict[str, WebSocket] = {}
 
 # LiveKit agent (initialized on startup)
-_agent: RelayAgent | None = None
+_agent: Optional[RelayAgent] = None
 
 # Transcript buffer per session (keyed by session_id)
 # Holds the last N entries so reconnecting clients can catch up.
@@ -41,7 +42,7 @@ _transcript_seq: dict[str, int] = {}  # session_id → next sequence number
 
 # --- Auth helpers ---
 
-def _get_device(request: Request) -> dict | None:
+def _get_device(request: Request) -> Optional[dict]:
     """Extract and validate device from JWT cookie. Returns payload or None."""
     if not AUTH_ENABLED:
         return {"device_id": "anonymous", "device_name": "anonymous"}
@@ -60,7 +61,7 @@ def _require_auth(request: Request) -> dict:
     return device
 
 
-def _get_ws_device(ws: WebSocket) -> dict | None:
+def _get_ws_device(ws: WebSocket) -> Optional[dict]:
     """Extract device from WebSocket upgrade cookies."""
     if not AUTH_ENABLED:
         return {"device_id": "anonymous", "device_name": "anonymous"}
@@ -70,7 +71,7 @@ def _get_ws_device(ws: WebSocket) -> dict | None:
     return auth.validate_token(token)
 
 
-async def _notify_client_status(session_id: str, state: str, activity: str | None = None, *, disable_auto_listen: bool = False):
+async def _notify_client_status(session_id: str, state: str, activity: Optional[str] = None, *, disable_auto_listen: bool = False):
     """Send agent status update to all web clients connected to a session."""
     session = await registry.get(session_id)
     if session and session.connected_clients:

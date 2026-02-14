@@ -5,6 +5,7 @@ import random
 import time
 import uuid
 from pathlib import Path
+from typing import Optional
 
 import jwt
 
@@ -89,7 +90,7 @@ def issue_token(device_id: str, device_name: str) -> str:
     return jwt.encode(payload, AUTH_SECRET, algorithm="HS256")
 
 
-def validate_token(token: str) -> dict | None:
+def validate_token(token: str) -> Optional[dict]:
     """Decode and validate a JWT. Returns payload dict or None."""
     if not AUTH_ENABLED:
         return None

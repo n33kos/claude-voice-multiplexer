@@ -3,6 +3,7 @@
 import asyncio
 import time
 from dataclasses import dataclass, field
+from typing import Optional
 
 from config import SESSION_TIMEOUT
 
@@ -96,7 +97,7 @@ class SessionRegistry:
             if session_id in self._sessions:
                 self._sessions[session_id].last_heartbeat = time.time()
 
-    async def get(self, session_id: str) -> Session | None:
+    async def get(self, session_id: str) -> Optional[Session]:
         return self._sessions.get(session_id)
 
     async def list_sessions(self) -> list[dict]:
@@ -111,7 +112,7 @@ class SessionRegistry:
                 return True
             return False
 
-    async def disconnect_client(self, session_id: str, client_id: str | None = None):
+    async def disconnect_client(self, session_id: str, client_id: Optional[str] = None):
         async with self._lock:
             session = self._sessions.get(session_id)
             if session:
