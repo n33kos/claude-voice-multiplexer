@@ -104,6 +104,19 @@ if ! check_cmd git; then
 fi
 log "git: OK"
 
+# Node.js and npm
+if ! check_cmd node; then
+    log "Node.js: not found, installing via Homebrew..."
+    brew install node
+fi
+log "Node.js: OK ($(node --version))"
+
+if ! check_cmd npm; then
+    echo "ERROR: npm not found despite Node.js installation."
+    exit 1
+fi
+log "npm: OK ($(npm --version))"
+
 # --- Create data directory ---
 
 mkdir -p "$DATA_DIR/logs"
@@ -235,6 +248,44 @@ else
     log "MCP server dependencies installed."
 fi
 
+# --- Build web app ---
+
+log_section "Building web app"
+
+WEB_DIR="$PROJECT_DIR/web"
+WEB_DIST="$WEB_DIR/dist"
+
+if [ -d "$WEB_DIST" ] && [ "$FORCE" = false ]; then
+    log "Web app already built at $WEB_DIST"
+    log "  Use --force to rebuild"
+else
+    if [ ! -d "$WEB_DIR" ]; then
+        echo "ERROR: Web directory not found at $WEB_DIR"
+        exit 1
+    fi
+
+    cd "$WEB_DIR"
+
+    if [ ! -f "package.json" ]; then
+        echo "ERROR: package.json not found in $WEB_DIR"
+        exit 1
+    fi
+
+    log "Installing npm dependencies..."
+    npm install
+
+    log "Building web app..."
+    npm run build
+
+    if [ ! -d "$WEB_DIST" ]; then
+        echo "ERROR: Web app build failed — dist directory not created."
+        exit 1
+    fi
+
+    WEB_SIZE=$(du -sh "$WEB_DIST" | cut -f1)
+    log "Web app built successfully: $WEB_DIST ($WEB_SIZE)"
+fi
+
 # --- Generate config ---
 
 log_section "Generating configuration"
@@ -342,12 +393,15 @@ log_section "Installation complete"
 
 WHISPER_SIZE=$(du -sh "$WHISPER_DIR" 2>/dev/null | cut -f1)
 KOKORO_SIZE=$(du -sh "$KOKORO_DIR" 2>/dev/null | cut -f1)
+WEB_SIZE=$(du -sh "$WEB_DIST" 2>/dev/null | cut -f1)
 TOTAL_SIZE=$(du -sh "$DATA_DIR" 2>/dev/null | cut -f1)
 
 log "Data directory: $DATA_DIR"
 log "  Whisper: $WHISPER_SIZE (model: ggml-${WHISPER_MODEL}.bin)"
 log "  Kokoro:  $KOKORO_SIZE"
 log "  Total:   $TOTAL_SIZE"
+log ""
+log "Web app: $WEB_SIZE (built in $WEB_DIR/dist)"
 echo ""
 log "Next steps:"
 log "  1. Start services: ./scripts/start.sh"
