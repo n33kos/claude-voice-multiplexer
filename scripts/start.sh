@@ -70,7 +70,7 @@ is_vmux_running() {
         fi
         rm -f "$PID_FILE"
     fi
-    if pgrep -f "claude-voice-multiplexer:start" | grep -v "$$" > /dev/null 2>&1; then
+    if pgrep -f "scripts/start.sh" | grep -v "$$" > /dev/null 2>&1; then
         return 0
     fi
     return 1
@@ -206,7 +206,6 @@ else
         --model "$WHISPER_MODEL_PATH" \
         --inference-path /v1/audio/transcriptions \
         --threads "$WHISPER_THREADS" \
-        --convert \
         >> "$LOG_DIR/whisper.log" 2>&1 &
     PIDS+=($!)
 
