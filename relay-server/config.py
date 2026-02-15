@@ -35,6 +35,7 @@ SESSION_TIMEOUT = int(os.environ.get("SESSION_TIMEOUT", "120"))
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "whisper-1")
 KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
 KOKORO_MODEL = os.environ.get("KOKORO_MODEL", "tts-1")
+KOKORO_SPEED = float(os.environ.get("KOKORO_SPEED", "1.0"))
 STT_SAMPLE_RATE = int(os.environ.get("STT_SAMPLE_RATE", "16000"))  # Incoming audio (capture/VAD/Whisper)
 TTS_SAMPLE_RATE = int(os.environ.get("TTS_SAMPLE_RATE", "24000"))  # Outgoing audio (Kokoro TTS)
 

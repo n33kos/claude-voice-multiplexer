@@ -6,7 +6,7 @@ from typing import Optional
 
 import httpx
 
-from config import WHISPER_URL, KOKORO_URL, WHISPER_MODEL, KOKORO_VOICE, KOKORO_MODEL
+from config import WHISPER_URL, KOKORO_URL, WHISPER_MODEL, KOKORO_VOICE, KOKORO_MODEL, KOKORO_SPEED
 
 
 async def transcribe(audio_data: bytes, audio_format: str = "webm") -> Optional[str]:
@@ -58,6 +58,7 @@ async def synthesize(text: str, voice: Optional[str] = None, response_format: st
             "input": text,
             "voice": voice or KOKORO_VOICE,
             "response_format": response_format,
+            "speed": KOKORO_SPEED,
         }
 
         try:
@@ -93,6 +94,7 @@ async def synthesize_pcm_stream(
         "input": text,
         "voice": voice or KOKORO_VOICE,
         "response_format": "pcm",
+        "speed": KOKORO_SPEED,
         "stream": True,
     }
 
