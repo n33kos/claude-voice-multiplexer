@@ -54,6 +54,7 @@ When invoked, use the `relay_standby` MCP tool to register this session with the
 - If `relay_standby` returns a `[System]` error or disconnect message, inform the user and stop the loop.
 - Keep responses short and spoken-word friendly. Avoid markdown, bullet lists, or code blocks in your `relay_respond` text.
 - You can still use all your normal tools while in standby (read files, run commands, etc.) — just relay the results conversationally.
+- **Use `relay_file` to send large files directly to the web app without token cost.** This bypasses Claude entirely — the file goes straight to the relay server. Good for logs, reports, generated output, or anything large you want to show without burning tokens. Call with `read_aloud=True` to have it read aloud as well.
 - **NEVER use `AskUserQuestion` or `EnterPlanMode` while in standby.** These tools block the CLI waiting for terminal input, which freezes the voice relay — the user won't hear a response and messages will pile up. Instead:
   - If you need to clarify something, ask the question conversationally via `relay_respond` and wait for the answer on the next `relay_standby` call.
   - If a task would normally warrant planning, describe your approach via `relay_respond` and ask for verbal confirmation before proceeding.
@@ -72,9 +73,31 @@ short description so the remote user can see what you're doing:
 
 This updates the web client UI in real time so the user knows what's happening.
 
+## Relaying Files Without Token Cost
+
+While in standby, you can relay files directly to the web app without passing through Claude:
+
+```python
+# Display file in web app (no voice, no tokens)
+await relay_file("path/to/file.txt")
+
+# Display file AND read it aloud
+await relay_file("path/to/output.json", read_aloud=True)
+```
+
+Use this for:
+
+- Large files (logs, reports, generated output)
+- Code you want to show visually (with syntax highlighting)
+- Any content where displaying > discussing
+- Reading documents aloud while keeping them visible
+
+The file bypasses Claude entirely — zero token cost for relay-only, TTS cost only if `read_aloud=True`.
+
 ## Behavior While in Standby
 
 - Respond as if you are speaking out loud — be conversational, concise, and natural
 - Summarize technical details rather than reading raw output
 - Remember the full context of your current session and work
 - When asked about your work, describe what you've been doing in plain language
+- Use `relay_file()` for large files you don't want to burn tokens on

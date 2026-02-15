@@ -425,6 +425,23 @@ async def session_ws(ws: WebSocket):
                 if sid and _agent and activity:
                     asyncio.create_task(_agent.handle_status_update(sid, activity))
 
+            elif msg_type == "relay_file":
+                # Claude relaying a file directly
+                sid = data.get("session_id", session_id)
+                content = data.get("content", "")
+                read_aloud = data.get("read_aloud", False)
+                
+                if content and sid and read_aloud and _agent:
+                    asyncio.create_task(_agent.handle_claude_response(sid, content))
+
+                # Route through LiveKit agent if available (publishes audio to room)
+                if content and sid:
+                    await _notify_client_transcript(
+                        sid, "file", content,
+                        filename=data.get("filename", ""),
+                        language=data.get("language", ""),
+                    )
+
             elif msg_type == "generate_code":
                 # MCP plugin requesting a pairing code
                 if AUTH_ENABLED:

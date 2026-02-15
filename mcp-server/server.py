@@ -511,6 +511,85 @@ async def relay_status() -> str:
 
 
 @mcp.tool()
+async def relay_file(file_path: str, read_aloud: bool = False) -> str:
+    """Relay a file directly to the web app without passing through Claude.
+
+    Reads a file and sends its contents directly to the relay server,
+    bypassing Claude entirely. This saves tokens when you want to show
+    large files to the web client.
+
+    Args:
+        file_path: Path to the file to relay (relative or absolute)
+        read_aloud: Whether to read the file aloud as well (default: false).
+
+    Returns:
+        Confirmation message or error
+    """
+    if not _relay_state["connected"] or not _relay_state["ws"]:
+        return "Not connected to relay. Use relay_standby first."
+
+    # Resolve path
+    try:
+        from pathlib import Path
+        p = Path(file_path).expanduser().resolve()
+        if not p.exists():
+            return f"File not found: {file_path}"
+        if not p.is_file():
+            return f"Not a file: {file_path}"
+    except Exception as e:
+        return f"Invalid path: {e}"
+
+    # Read file
+    try:
+        content = p.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return f"Failed to read file: {e}"
+
+    # Detect language for syntax highlighting
+    suffix = p.suffix.lower()
+    language_map = {
+        ".py": "python",
+        ".js": "javascript",
+        ".ts": "typescript",
+        ".tsx": "typescript",
+        ".jsx": "javascript",
+        ".json": "json",
+        ".md": "markdown",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+        ".xml": "xml",
+        ".html": "html",
+        ".css": "css",
+        ".java": "java",
+        ".go": "go",
+        ".rs": "rust",
+        ".rb": "ruby",
+        ".php": "php",
+        ".sh": "bash",
+        ".c": "c",
+        ".cpp": "cpp",
+        ".sql": "sql",
+    }
+    language = language_map.get(suffix, "")
+
+    # Send to relay server
+    try:
+        await _relay_state["ws"].send(json.dumps({
+            "type": "relay_file",
+            "session_id": SESSION_ID,
+            "filename": p.name,
+            "filepath": str(p),
+            "content": content,
+            "read_aloud": read_aloud,
+            "language": language,
+            "timestamp": time.time(),
+        }))
+        return f"File relayed: {p.name} ({len(content)} chars)"
+    except Exception as e:
+        return f"Failed to relay file: {e}"
+
+
+@mcp.tool()
 async def generate_auth_code() -> str:
     """Generate a one-time pairing code for authorizing a new device.
 
