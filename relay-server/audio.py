@@ -99,8 +99,10 @@ async def synthesize_pcm_stream(
     }
 
     async with httpx.AsyncClient(timeout=60.0) as client:
+        response = None
         try:
-            async with client.stream("POST", url, json=payload) as response:
+            response = await client.stream("POST", url, json=payload)
+            async with response:
                 response.raise_for_status()
                 buffer = bytearray()
                 async for raw_chunk in response.aiter_bytes():
@@ -113,4 +115,6 @@ async def synthesize_pcm_stream(
                     yield bytes(buffer)
         except Exception as e:
             print(f"TTS stream error: {e}")
-            return
+            if response:
+                await response.aclose()
+            raise

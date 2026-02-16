@@ -633,6 +633,7 @@ async def livekit_ws_proxy(ws: WebSocket, path: str):
     if query:
         target += f"?{query}"
 
+    lk_ws = None
     try:
         async with websockets.connect(target) as lk_ws:
             async def client_to_lk():
@@ -656,9 +657,17 @@ async def livekit_ws_proxy(ws: WebSocket, path: str):
                 except Exception:
                     pass
 
-            await asyncio.gather(client_to_lk(), lk_to_client())
+            try:
+                await asyncio.gather(client_to_lk(), lk_to_client())
+            except Exception:
+                pass
     except Exception:
         pass
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
 
 
 @app.api_route("/livekit/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
@@ -671,21 +680,39 @@ async def livekit_http_proxy(request: Request, path: str):
     if query:
         target += f"?{query}"
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.request(
-            method=request.method,
-            url=target,
-            content=await request.body(),
-            headers={k: v for k, v in request.headers.items() if k.lower() not in ("host", "transfer-encoding")},
-        )
-        return Response(content=resp.content, status_code=resp.status_code, headers=dict(resp.headers))
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            async with client.stream(
+                method=request.method,
+                url=target,
+                content=await request.body(),
+                headers={k: v for k, v in request.headers.items() if k.lower() not in ("host", "transfer-encoding")},
+            ) as resp:
+                return Response(
+                    content=resp.content,
+                    status_code=resp.status_code,
+                    headers=dict(resp.headers),
+                    media_type=resp.headers.get("content-type")
+                )
+    except Exception as e:
+        return Response(content=str(e), status_code=502)
 
 
 # --- Static file serving (React web app) ---
 
+# Semaphore to limit concurrent static file requests and prevent FD exhaustion
+_static_file_semaphore = asyncio.Semaphore(16)
+
+class LimitedStaticFiles(StaticFiles):
+    """StaticFiles with concurrency limiting to prevent file descriptor exhaustion."""
+
+    async def __call__(self, scope, receive, send):
+        async with _static_file_semaphore:
+            await super().__call__(scope, receive, send)
+
 web_dist = Path(__file__).parent.parent / "web" / "dist"
 if web_dist.exists():
-    app.mount("/", StaticFiles(directory=str(web_dist), html=True), name="web")
+    app.mount("/", LimitedStaticFiles(directory=str(web_dist), html=True), name="web")
 else:
     @app.get("/")
     async def index():
