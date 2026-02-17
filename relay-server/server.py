@@ -559,21 +559,40 @@ async def client_ws(ws: WebSocket):
                 text = data.get("text", "").strip()
                 if text and connected_session_id:
                     session = await registry.get(connected_session_id)
-                    if session and session.ws:
-                        try:
-                            await session.ws.send_text(json.dumps({
-                                "type": "voice_message",
-                                "text": text,
-                                "caller": client_id,
-                                "timestamp": time.time(),
+                    if session:
+                        # Check if session is stale (Claude Code disconnected)
+                        if session.is_stale:
+                            # Session has gone stale — Claude Code must reconnect
+                            await ws.send_text(json.dumps({
+                                "type": "session_disconnected",
+                                "session_id": connected_session_id,
+                                "reason": "Claude Code session idle timeout",
                             }))
-                        except Exception:
-                            pass
-                    # Set agent to thinking state
-                    if _agent:
-                        asyncio.create_task(_agent.handle_text_message(connected_session_id, text, client_id))
-                    # Broadcast transcript
-                    await _notify_client_transcript(connected_session_id, "user", text)
+                            await registry.disconnect_client(connected_session_id, client_id)
+                            connected_session_id = None
+                        elif session.ws:
+                            try:
+                                await session.ws.send_text(json.dumps({
+                                    "type": "voice_message",
+                                    "text": text,
+                                    "caller": client_id,
+                                    "timestamp": time.time(),
+                                }))
+                                # Set agent to thinking state
+                                if _agent:
+                                    asyncio.create_task(_agent.handle_text_message(connected_session_id, text, client_id))
+                                # Broadcast transcript
+                                await _notify_client_transcript(connected_session_id, "user", text)
+                            except Exception as e:
+                                # Failed to send — session WebSocket is dead
+                                print(f"Failed to send message to session {connected_session_id}: {e}")
+                                await ws.send_text(json.dumps({
+                                    "type": "session_disconnected",
+                                    "session_id": connected_session_id,
+                                    "reason": "Failed to send message",
+                                }))
+                                await registry.disconnect_client(connected_session_id, client_id)
+                                connected_session_id = None
 
             elif msg_type == "interrupt":
                 # User pressed interrupt — force agent to idle
