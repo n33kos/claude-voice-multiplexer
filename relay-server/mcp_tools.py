@@ -58,6 +58,8 @@ def _file_uri_to_path(uri: str) -> str:
 _connection_map: dict[str, str] = {}
 # Maps FastMCP session_id → working directory path (for display)
 _connection_cwd: dict[str, str] = {}
+# Maps relay session_id → persistent heartbeat task (runs for entire MCP connection lifetime)
+_session_heartbeats: dict[str, "asyncio.Task[None]"] = {}
 
 
 async def _resolve_session(ctx: Context) -> tuple[Optional[str], Optional[str]]:
@@ -69,9 +71,21 @@ async def _resolve_session(ctx: Context) -> tuple[Optional[str], Optional[str]]:
     mcp_sid = ctx.session_id
     session_id = _connection_map.get(mcp_sid)
     if session_id:
-        return session_id, None
+        # Fast path — verify session still exists in registry.
+        # If it was pruned while Claude was processing, we must re-register
+        # rather than silently returning a dead session_id.
+        registry = _app["registry"]
+        if registry and await registry.get(session_id):
+            # Session is alive — ensure the persistent heartbeat is still running.
+            hb = _session_heartbeats.get(session_id)
+            if not hb or hb.done():
+                _session_heartbeats[session_id] = asyncio.create_task(_heartbeat_loop(session_id))
+            return session_id, None
+        # Session was pruned — clear stale mapping and fall through to re-registration.
+        _connection_map.pop(mcp_sid, None)
+        _connection_cwd.pop(mcp_sid, None)
 
-    # First call from this connection — detect cwd via MCP roots
+    # First call from this connection (or session was pruned) — detect cwd via MCP roots
     cwd = await _detect_cwd(ctx)
     if not cwd:
         return None, "Could not detect working directory from MCP roots."
@@ -95,6 +109,15 @@ async def _resolve_session(ctx: Context) -> tuple[Optional[str], Optional[str]]:
     # Cache the mapping only after successful registration
     _connection_map[mcp_sid] = session_id
     _connection_cwd[mcp_sid] = cwd
+
+    # Start (or restart) a persistent per-session heartbeat that keeps the session
+    # alive for the entire MCP connection lifetime — including while Claude is
+    # actively processing between relay_standby calls (bash commands, file reads,
+    # etc.) when no relay tools are being called.
+    old_hb = _session_heartbeats.get(session_id)
+    if old_hb and not old_hb.done():
+        old_hb.cancel()
+    _session_heartbeats[session_id] = asyncio.create_task(_heartbeat_loop(session_id))
 
     # Manage LiveKit room
     agent = _app["get_agent"]()
@@ -176,15 +199,13 @@ async def relay_standby(ctx: Context, session_name: str = "") -> str:
     if agent:
         asyncio.create_task(agent.handle_claude_listening(session_id))
 
-    # Block waiting for a voice message
+    # Block waiting for a voice message.
+    # The persistent per-session heartbeat (started in _resolve_session) keeps
+    # the session alive during both this wait AND during Claude's processing
+    # between standby calls — no separate per-standby heartbeat needed.
     session = await registry.get(session_id)
     if not session:
         return "Session not found in registry."
-
-    # Start a background heartbeat to keep the session alive during the
-    # potentially long blocking wait on voice_queue.get(). Without this,
-    # the session would be pruned after SESSION_TIMEOUT with no tool calls.
-    heartbeat_task = asyncio.create_task(_heartbeat_loop(session_id))
 
     try:
         msg = await asyncio.wait_for(
@@ -197,11 +218,16 @@ async def relay_standby(ctx: Context, session_name: str = "") -> str:
         return "[Standby]: No voice input received. Still listening."
     except asyncio.CancelledError:
         print(f"[mcp] Session cancelled (SSE disconnect): {session_id}")
+        # Clean up the stale MCP connection mapping so the next SSE connection
+        # from Claude Code starts fresh and re-registers properly.
+        mcp_sid = ctx.session_id
+        _connection_map.pop(mcp_sid, None)
+        _connection_cwd.pop(mcp_sid, None)
+        # Keep the per-session heartbeat running — it holds the session alive
+        # in the registry during the reconnect window.
         raise
     except Exception as e:
         return f"[Standby error]: {e}"
-    finally:
-        heartbeat_task.cancel()
 
 
 @mcp.tool()
@@ -320,6 +346,11 @@ async def relay_disconnect(ctx: Context) -> str:
     session_id, err = await _resolve_session(ctx)
     if err:
         return err
+
+    # Cancel the persistent per-session heartbeat
+    hb = _session_heartbeats.pop(session_id, None)
+    if hb and not hb.done():
+        hb.cancel()
 
     registry = _app["registry"]
     agent = _app["get_agent"]()
