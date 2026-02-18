@@ -15,6 +15,7 @@ Before entering standby, verify services are installed and running:
 2. Run `"${CLAUDE_PLUGIN_ROOT}/scripts/status.sh" --quiet`
 3. If exit code is non-zero (services not running), run `nohup "${CLAUDE_PLUGIN_ROOT}/scripts/start.sh" > /tmp/vmux-start.log 2>&1 &` and wait up to 90 seconds for Kokoro to finish loading.
 4. If the relay server still isn't responding after starting, inform the user and stop.
+5. **Verify MCP tools are reachable**: Call `relay_status` as a connectivity check. If it fails with a tool error (not a content error), the MCP connection hasn't been established yet. Wait 5 seconds and retry up to 3 times. If still failing after retries, print: `"MCP connection not established. Run /mcp in the terminal to connect, then try /voice-multiplexer:standby again."` and stop.
 
 ## Show Connection URL and Pairing Code
 
@@ -50,12 +51,25 @@ Then enter a continuous conversation loop:
 
 **Note:** No session identifiers or working directory paths need to be passed to any tool. The server auto-detects your session from the MCP connection.
 
+### MCP Reconnection During Standby
+
+If `relay_standby` fails with a **tool error** (the MCP connection dropped, not a content-level `[System]` message), follow this recovery loop:
+
+1. Wait 5 seconds
+2. Try calling `relay_status` to test if the MCP connection is back
+3. If `relay_status` succeeds, immediately call `relay_standby` again — the connection recovered
+4. If `relay_status` also fails, wait another 10 seconds and try again (repeat up to 5 times total)
+5. If the MCP connection does not recover after ~60 seconds of retries, print to terminal: `"MCP connection lost. Run /mcp in the terminal to reconnect."` and stop the loop
+
+This handles the case where the relay server restarts and the MCP SSE connection drops temporarily.
+
 ## Critical Rules
 
 - **Do NOT output any text to the terminal between voice exchanges.** No "listening", no "standby active", no status messages. The user is on a phone — they cannot see your terminal output. Every unnecessary message wastes time.
 - **Do NOT announce that you are re-entering standby.** Just silently call `relay_standby` again.
 - If `relay_standby` returns a `[Standby]` timeout message, silently call it again — do not output anything.
-- If `relay_standby` returns a `[System]` error or disconnect message, inform the user and stop the loop.
+- If `relay_standby` returns a `[System]` message containing "error" or "disconnect", try `relay_respond` with a brief spoken acknowledgment if possible, then attempt to re-enter standby. Only stop the loop if the error is unrecoverable (e.g., explicit shutdown).
+- If `relay_standby` **throws a tool error** (MCP disconnected), follow the **MCP Reconnection During Standby** steps above — do NOT stop the loop immediately.
 - Keep responses short and spoken-word friendly. Avoid markdown, bullet lists, or code blocks in your `relay_respond` text.
 - You can still use all your normal tools while in standby (read files, run commands, etc.) — just relay the results conversationally.
 - **Use `relay_file` to send large files directly to the web app without token cost.** This bypasses Claude entirely — the file goes straight to the relay server. Good for logs, reports, generated output, or anything large you want to show without burning tokens. Call with `read_aloud=True` to have it read aloud as well.
