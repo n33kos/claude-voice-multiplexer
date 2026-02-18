@@ -24,6 +24,22 @@ from config import AUTH_ENABLED
 mcp = FastMCP("voice-multiplexer")
 
 STANDBY_LISTEN_TIMEOUT = 86400  # 24 hours
+HEARTBEAT_INTERVAL = 30  # seconds — keep session alive during long standby waits
+
+
+async def _heartbeat_loop(session_id: str):
+    """Background task that sends periodic heartbeats to prevent session pruning.
+
+    Runs while relay_standby is blocking on voice_queue.get(). Without this,
+    the session would be pruned after SESSION_TIMEOUT (120s) of no tool calls.
+    """
+    registry = _app["registry"]
+    while registry:
+        await asyncio.sleep(HEARTBEAT_INTERVAL)
+        session = await registry.get(session_id)
+        if not session:
+            break
+        await registry.heartbeat(session_id)
 
 
 def _make_session_id(cwd: str) -> str:
@@ -61,33 +77,37 @@ async def _resolve_session(ctx: Context) -> tuple[Optional[str], Optional[str]]:
         return None, "Could not detect working directory from MCP roots."
 
     session_id = _make_session_id(cwd)
-    _connection_map[mcp_sid] = session_id
-    _connection_cwd[mcp_sid] = cwd
 
     # Register the session in the relay registry
     registry = _app["registry"]
-    if registry:
-        session, is_reconnect = await registry.register(
-            session_id=session_id,
-            name=cwd,
-            cwd=cwd,
-            dir_name=Path(cwd).name,
-        )
-        label = "reconnected" if is_reconnect else "registered"
-        print(f"[mcp] Session {label}: {cwd} ({session_id}) → room {session.room_name}")
+    if not registry:
+        return None, "Relay server not initialized. Registry unavailable."
 
-        # Manage LiveKit room
-        agent = _app["get_agent"]()
-        if agent:
-            try:
-                if is_reconnect:
-                    await agent.remove_session(session_id)
-                await agent.add_session(session_id, session.room_name)
-            except Exception as e:
-                print(f"[mcp] Failed to manage room for session: {e}")
+    session, is_reconnect = await registry.register(
+        session_id=session_id,
+        name=cwd,
+        cwd=cwd,
+        dir_name=Path(cwd).name,
+    )
+    label = "reconnected" if is_reconnect else "registered"
+    print(f"[mcp] Session {label}: {cwd} ({session_id}) → room {session.room_name}")
 
-        if _app["broadcast_sessions"]:
-            await _app["broadcast_sessions"]()
+    # Cache the mapping only after successful registration
+    _connection_map[mcp_sid] = session_id
+    _connection_cwd[mcp_sid] = cwd
+
+    # Manage LiveKit room
+    agent = _app["get_agent"]()
+    if agent:
+        try:
+            if is_reconnect:
+                await agent.remove_session(session_id)
+            await agent.add_session(session_id, session.room_name)
+        except Exception as e:
+            print(f"[mcp] Failed to manage room for session: {e}")
+
+    if _app["broadcast_sessions"]:
+        await _app["broadcast_sessions"]()
 
     return session_id, None
 
@@ -161,6 +181,11 @@ async def relay_standby(ctx: Context, session_name: str = "") -> str:
     if not session:
         return "Session not found in registry."
 
+    # Start a background heartbeat to keep the session alive during the
+    # potentially long blocking wait on voice_queue.get(). Without this,
+    # the session would be pruned after SESSION_TIMEOUT with no tool calls.
+    heartbeat_task = asyncio.create_task(_heartbeat_loop(session_id))
+
     try:
         msg = await asyncio.wait_for(
             session.voice_queue.get(),
@@ -175,6 +200,8 @@ async def relay_standby(ctx: Context, session_name: str = "") -> str:
         raise
     except Exception as e:
         return f"[Standby error]: {e}"
+    finally:
+        heartbeat_task.cancel()
 
 
 @mcp.tool()
@@ -308,8 +335,8 @@ async def relay_status(ctx: Context) -> str:
     if not registry:
         return "Relay server not initialized."
 
-    session_id = _connection_map.get(ctx.session_id)
-    if session_id:
+    session_id, err = await _resolve_session(ctx)
+    if not err and session_id:
         session = await registry.get(session_id)
         if session:
             queued = session.voice_queue.qsize()
@@ -320,7 +347,7 @@ async def relay_status(ctx: Context) -> str:
                 f"  Queued messages: {queued}"
             )
 
-    # Not connected or session pruned — list all sessions
+    # Not connected or session resolution failed — list all sessions
     sessions = await registry.list_sessions()
     if not sessions:
         return "Not connected. No active sessions."
