@@ -145,6 +145,7 @@ rotate_log() {
 
 rotate_log "$LOG_DIR/whisper.log"
 rotate_log "$LOG_DIR/kokoro.log"
+rotate_log "$LOG_DIR/relay.log"
 rotate_log "$LOG_DIR/start.log"
 
 # Log helper — prints to terminal and appends to start.log
@@ -299,7 +300,8 @@ uv run \
     --with "setuptools" \
     --with "fastmcp>=2.0" \
     --with "PyJWT>=2.8" \
-    server.py &
+    server.py \
+    >> "$LOG_DIR/relay.log" 2>&1 &
 PIDS+=($!)
 
 # --- Start web dev server (dev mode only) ---

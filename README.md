@@ -108,9 +108,9 @@ The web UI shows all registered Claude sessions. The user taps to switch. The re
 
 ## Components
 
-### 1. MCP Plugin (`mcp-server/`)
+### 1. MCP Tools (`relay-server/mcp_tools.py`)
 
-A lightweight MCP server (FastMCP) that adds voice relay tools to any Claude Code session.
+FastMCP tools embedded in the relay server and served over SSE at `/mcp/sse`. Claude Code connects via `.mcp.json` — no separate process needed.
 
 **Tools:**
 
@@ -123,11 +123,7 @@ A lightweight MCP server (FastMCP) that adds voice relay tools to any Claude Cod
 | `relay_status`       | Show current relay connection status.                                           |
 | `generate_auth_code` | Generate a 6-digit pairing code for authorizing a new device.                   |
 
-The MCP plugin only deals in text. All audio processing happens in the relay server.
-
-**Key files:**
-
-- `mcp-server/server.py` — FastMCP server with all tools, WebSocket connection management, heartbeat, and message queue
+The MCP tools only deal in text. All audio processing happens in the relay server.
 
 ### 2. Relay Server (`relay-server/`)
 
@@ -140,7 +136,8 @@ A Python server (FastAPI + Uvicorn) that bridges the web client, Claude sessions
 - **Audio pipeline** (`audio.py`): HTTP clients for Whisper (STT) and Kokoro (TTS) with PCM support
 - **Configuration** (`config.py`): All env-var-driven settings with sensible defaults
 - **Authentication** (`auth.py`): Device pairing with JWT tokens, pairing codes, and device management
-- **WebSocket hub** (`server.py`): Manages connections to both MCP plugins and web clients
+- **MCP tools** (`mcp_tools.py`): FastMCP tools served over SSE at `/mcp/sse` — session auto-detected via MCP roots
+- **WebSocket hub** (`server.py`): Manages connections to web clients
 - **Token generation**: Issues LiveKit JWTs for client authentication
 - **LiveKit proxy**: Proxies WebSocket and HTTP traffic to the local LiveKit server, enabling single-port remote access
 
@@ -260,7 +257,7 @@ All services are self-contained and managed by `scripts/start.sh`:
 | **Kokoro server**   | `:8101` | Local TTS (kokoro-fastapi, PyTorch with MPS acceleration)    |
 | **LiveKit server**  | `:7880` | WebRTC media server for audio transport                      |
 | **Relay server**    | `:3100` | The core hub (FastAPI + WebSocket)                           |
-| **MCP server**      | —       | Started automatically by Claude Code via the plugin system   |
+| **MCP tools**       | `/mcp`  | Embedded in relay server, served over SSE at `/mcp/sse`      |
 | **Vite dev server** | `:5173` | Optional, started when `DEV_MODE=true`                       |
 
 Whisper and Kokoro are installed to `~/.claude/voice-multiplexer/` by the install script and started/stopped alongside the other services.
@@ -456,11 +453,9 @@ claude-voice-multiplexer/
 │   ├── stop-services/SKILL.md           # Stop all services
 │   ├── service-status/SKILL.md          # Check service status
 │   └── auth-code/SKILL.md              # Generate device pairing code
-├── mcp-server/
-│   ├── server.py                        # FastMCP server with relay tools
-│   └── requirements.txt
 ├── relay-server/
 │   ├── server.py                        # Main server (FastAPI + WebSocket hub)
+│   ├── mcp_tools.py                     # FastMCP tools served over SSE at /mcp/sse
 │   ├── livekit_agent.py                 # LiveKit agent (VAD, audio I/O, status)
 │   ├── audio.py                         # Whisper/Kokoro HTTP clients
 │   ├── registry.py                      # Session registry with heartbeat timeout
