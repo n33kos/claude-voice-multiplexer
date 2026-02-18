@@ -205,8 +205,14 @@ export function MicControls({
         </button>
         {showInterrupt && (
           <button
-            onClick={() => {
+            onClick={async () => {
               initAudio();
+              // Immediately enable mic (don't wait for React state/effect cycle)
+              if (autoListen) {
+                await room.localParticipant.setMicrophoneEnabled(true);
+              }
+              // Mute speaker so user gets feedback and can unmute when ready to hear response
+              onSpeakerMutedChange(true);
               onInterrupt();
             }}
             className={classNames(styles.CircleButton, styles.InterruptButton)}
