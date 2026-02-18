@@ -145,8 +145,9 @@ function mergeDisplaySessions(
 
 // If we haven't received any message from the server in this many ms, assume the
 // connection is a zombie (iOS PWA backgrounded) and force-reconnect on focus.
-// Set to 1.5× the server's 30s ping interval.
-const STALE_CONNECTION_MS = 45_000
+// A healthy connection always has traffic within the server's 30s ping interval,
+// so matching that threshold catches any real suspension without false positives.
+const STALE_CONNECTION_MS = 30_000
 
 export function useRelay(authenticated: boolean = true) {
   const wsRef = useRef<WebSocket | null>(null)
