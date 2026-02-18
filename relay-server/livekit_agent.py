@@ -439,22 +439,15 @@ class SessionRoom:
             except Exception:
                 pass
 
-        # Forward transcription to Claude session
-        if session.ws:
-            import json
-            try:
-                await session.ws.send_text(json.dumps({
-                    "type": "voice_message",
-                    "text": text,
-                    "caller": participant.identity,
-                    "timestamp": time.time(),
-                }))
-                print(f"[room:{self.room_name}] Forwarded to session '{session.name}'")
-                self._waiting_for_response = True
-                await self._notify_status("thinking", "Waiting for Claude...")
-            except Exception as e:
-                print(f"[room:{self.room_name}] Session WebSocket disconnected: {e}")
-                await self.registry.unregister(self.session_id)
+        # Forward transcription to Claude session via voice queue
+        try:
+            msg = f"[Voice from {participant.identity}]: {text}"
+            await session.voice_queue.put(msg)
+            print(f"[room:{self.room_name}] Forwarded to session '{session.name}'")
+            self._waiting_for_response = True
+            await self._notify_status("thinking", "Waiting for Claude...")
+        except Exception as e:
+            print(f"[room:{self.room_name}] Failed to queue message: {e}")
 
     async def handle_claude_response(self, text: str):
         """Queue a text response for serialized TTS playback."""

@@ -37,7 +37,9 @@ If the auth code tool returns an error (e.g. auth not enabled), skip the pairing
 
 ## Instructions
 
-When invoked, use the `relay_standby` MCP tool to register this session with the relay server. Then enter a continuous conversation loop:
+When invoked, use the `relay_standby` MCP tool to register this session with the relay server. The server automatically detects your working directory via MCP roots — no parameters needed.
+
+Then enter a continuous conversation loop:
 
 1. Call `relay_standby` — it blocks until a voice message arrives
 2. Read the transcribed voice message
@@ -45,6 +47,8 @@ When invoked, use the `relay_standby` MCP tool to register this session with the
 4. Call `relay_respond` with your response text
 5. Immediately call `relay_standby` again to listen for the next message
 6. Repeat steps 2-5 until the user says goodbye or asks you to disconnect
+
+**Note:** No session identifiers or working directory paths need to be passed to any tool. The server auto-detects your session from the MCP connection.
 
 ## Critical Rules
 

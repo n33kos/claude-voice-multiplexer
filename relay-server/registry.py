@@ -24,10 +24,11 @@ class Session:
     name: str
     cwd: str
     dir_name: str
-    ws: object  # WebSocket connection
+    ws: Optional[object] = None  # WebSocket connection (legacy, None for SSE MCP sessions)
     created_at: float = field(default_factory=time.time)
     last_heartbeat: float = field(default_factory=time.time)
     connected_clients: dict[str, str] = field(default_factory=dict)  # client_id → device_name
+    voice_queue: asyncio.Queue = field(default_factory=asyncio.Queue)  # voice messages for MCP relay_standby
 
     @property
     def room_name(self) -> str:
@@ -58,7 +59,7 @@ class SessionRegistry:
         self._sessions: dict[str, Session] = {}
         self._lock = asyncio.Lock()
 
-    async def register(self, session_id: str, name: str, cwd: str, dir_name: str, ws) -> tuple[Session, bool]:
+    async def register(self, session_id: str, name: str, cwd: str, dir_name: str, ws=None) -> tuple[Session, bool]:
         """Register a session. Returns (session, is_reconnect).
 
         If a session with this ID already exists, the old WebSocket is replaced
@@ -82,9 +83,10 @@ class SessionRegistry:
                 dir_name=dir_name,
                 ws=ws,
             )
-            # Preserve connected clients on reconnect
+            # Preserve connected clients and voice queue on reconnect
             if old:
                 session.connected_clients = old.connected_clients
+                session.voice_queue = old.voice_queue
             self._sessions[session_id] = session
             return session, is_reconnect
 

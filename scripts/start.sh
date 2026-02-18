@@ -285,6 +285,7 @@ mkdir -p "$PROJECT_DIR/web/dist"
 log "  Relay server: starting on :${RELAY_PORT}..."
 cd "$PROJECT_DIR/relay-server"
 uv run \
+    --python 3.12 \
     --with "fastapi>=0.110" \
     --with "uvicorn>=0.27" \
     --with "websockets>=12.0" \
@@ -296,6 +297,8 @@ uv run \
     --with "scipy>=1.10" \
     --with "webrtcvad>=2.0.10" \
     --with "setuptools" \
+    --with "fastmcp>=2.0" \
+    --with "PyJWT>=2.8" \
     server.py &
 PIDS+=($!)
 

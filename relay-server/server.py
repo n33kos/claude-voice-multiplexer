@@ -24,6 +24,7 @@ from config import RELAY_HOST, RELAY_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT
 import auth
 from registry import SessionRegistry
 from livekit_agent import RelayAgent
+import mcp_tools
 
 registry = SessionRegistry()
 
@@ -148,6 +149,17 @@ async def lifespan(app: FastAPI):
     global _agent
     _agent = RelayAgent(registry, _broadcast_sessions, _notify_client_status, _notify_client_transcript)
     print("[server] Agent manager initialized (rooms created per session)")
+
+    # Initialize MCP tools with relay server dependencies
+    mcp_tools.init(
+        registry=registry,
+        get_agent=lambda: _agent,
+        notify_transcript=_notify_client_transcript,
+        notify_status=_notify_client_status,
+        broadcast_sessions=_broadcast_sessions,
+    )
+    print("[server] MCP tools initialized (SSE endpoint at /mcp)")
+
     if AUTH_ENABLED:
         print("[server] Authentication enabled")
     else:
@@ -160,6 +172,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Claude Voice Multiplexer", lifespan=lifespan)
+
+# Mount MCP SSE app for Claude Code sessions
+app.mount("/mcp", mcp_tools.create_mcp_app())
 
 
 # --- Auth API ---
@@ -555,7 +570,7 @@ async def client_ws(ws: WebSocket):
                 await _broadcast_sessions()
 
             elif msg_type == "text_message":
-                # User typed a text message — forward directly to session
+                # User typed a text message — forward to session via voice queue
                 text = data.get("text", "").strip()
                 if text and connected_session_id:
                     session = await registry.get(connected_session_id)
@@ -570,22 +585,17 @@ async def client_ws(ws: WebSocket):
                             }))
                             await registry.disconnect_client(connected_session_id, client_id)
                             connected_session_id = None
-                        elif session.ws:
+                        else:
                             try:
-                                await session.ws.send_text(json.dumps({
-                                    "type": "voice_message",
-                                    "text": text,
-                                    "caller": client_id,
-                                    "timestamp": time.time(),
-                                }))
+                                msg = f"[Voice from {client_id}]: {text}"
+                                await session.voice_queue.put(msg)
                                 # Set agent to thinking state
                                 if _agent:
                                     asyncio.create_task(_agent.handle_text_message(connected_session_id, text, client_id))
                                 # Broadcast transcript
                                 await _notify_client_transcript(connected_session_id, "user", text)
                             except Exception as e:
-                                # Failed to send — session WebSocket is dead
-                                print(f"Failed to send message to session {connected_session_id}: {e}")
+                                print(f"Failed to queue message for session {connected_session_id}: {e}")
                                 await ws.send_text(json.dumps({
                                     "type": "session_disconnected",
                                     "session_id": connected_session_id,
