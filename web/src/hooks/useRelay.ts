@@ -143,12 +143,18 @@ function mergeDisplaySessions(
   })
 }
 
+// If we haven't received any message from the server in this many ms, assume the
+// connection is a zombie (iOS PWA backgrounded) and force-reconnect on focus.
+// Set to 1.5× the server's 30s ping interval.
+const STALE_CONNECTION_MS = 45_000
+
 export function useRelay(authenticated: boolean = true) {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectAttempt = useRef(0)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const lastSessionRef = useRef<string | null>(null)
+  const lastMessageTime = useRef(Date.now())
   const [state, setState] = useState<RelayState>({
     liveSessions: [],
     persistedSessions: [],
@@ -239,6 +245,7 @@ export function useRelay(authenticated: boolean = true) {
 
     ws.onmessage = (event) => {
       if (typeof event.data !== 'string') return
+      lastMessageTime.current = Date.now()
       const data = JSON.parse(event.data)
 
       // Debug: log transcript messages to help diagnose truncation issues
@@ -422,7 +429,21 @@ export function useRelay(authenticated: boolean = true) {
   useEffect(() => {
     if (!authenticated) return
     connect()
+
+    // When the PWA resumes from background on iOS, the WebSocket can appear OPEN
+    // to JS but be dead (server dropped it during suspend). Force-reconnect if
+    // we haven't received anything since before the stale threshold.
+    const handleVisibilityChange = () => {
+      if (document.hidden) return
+      const stale = Date.now() - lastMessageTime.current > STALE_CONNECTION_MS
+      if (stale && wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.close()  // triggers onclose → exponential-backoff reconnect
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
       clearTimeout(reconnectTimer.current)
       clearTimeout(saveTimer.current)
       wsRef.current?.close()
