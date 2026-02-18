@@ -219,6 +219,11 @@ async def relay_activity(ctx: Context, activity: str) -> str:
     if err:
         return err
 
+    # Keep session alive during processing between relay_standby calls
+    registry = _app["registry"]
+    if registry:
+        await registry.heartbeat(session_id)
+
     agent = _app["get_agent"]()
     if agent and activity:
         asyncio.create_task(agent.handle_status_update(session_id, activity))
@@ -240,6 +245,11 @@ async def relay_respond(ctx: Context, text: str) -> str:
     session_id, err = await _resolve_session(ctx)
     if err:
         return err
+
+    # Keep session alive during processing between relay_standby calls
+    registry = _app["registry"]
+    if registry:
+        await registry.heartbeat(session_id)
 
     if not text:
         return "No text provided."
@@ -285,6 +295,11 @@ async def relay_code_block(ctx: Context, code: str, filename: str = "", language
     session_id, err = await _resolve_session(ctx)
     if err:
         return err
+
+    # Keep session alive during processing between relay_standby calls
+    registry = _app["registry"]
+    if registry:
+        await registry.heartbeat(session_id)
 
     if not code:
         return "No code provided."
@@ -376,6 +391,11 @@ async def relay_file(ctx: Context, file_path: str, read_aloud: bool = False) -> 
     session_id, err = await _resolve_session(ctx)
     if err:
         return err
+
+    # Keep session alive during processing between relay_standby calls
+    registry = _app["registry"]
+    if registry:
+        await registry.heartbeat(session_id)
 
     # Resolve path
     try:

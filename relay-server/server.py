@@ -526,9 +526,22 @@ async def client_ws(ws: WebSocket):
         await ws.send_text(json.dumps({"type": "sessions", "sessions": sessions}))
 
         while True:
-            raw = await ws.receive_text()
+            try:
+                raw = await asyncio.wait_for(ws.receive_text(), timeout=30.0)
+            except asyncio.TimeoutError:
+                # No message for 30s — send keepalive ping to prevent
+                # NAT/mobile idle timeout from silently killing connection
+                try:
+                    await ws.send_text(json.dumps({"type": "ping"}))
+                except Exception:
+                    break  # Connection dead
+                continue
+
             data = json.loads(raw)
             msg_type = data.get("type")
+
+            if msg_type == "pong":
+                continue  # Keepalive response from client
 
             if msg_type == "connect_session":
                 # Disconnect this client from its current session if any

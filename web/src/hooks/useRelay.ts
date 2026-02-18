@@ -148,6 +148,7 @@ export function useRelay(authenticated: boolean = true) {
   const reconnectAttempt = useRef(0)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const lastSessionRef = useRef<string | null>(null)
   const [state, setState] = useState<RelayState>({
     liveSessions: [],
     persistedSessions: [],
@@ -230,6 +231,10 @@ export function useRelay(authenticated: boolean = true) {
     ws.onopen = () => {
       reconnectAttempt.current = 0
       setState(s => ({ ...s, status: 'connected' }))
+      // Auto-rejoin previous session after reconnect
+      if (lastSessionRef.current) {
+        ws.send(JSON.stringify({ type: 'connect_session', session_id: lastSessionRef.current }))
+      }
     }
 
     ws.onmessage = (event) => {
@@ -379,6 +384,17 @@ export function useRelay(authenticated: boolean = true) {
           // Backward compat: flat state without activity
           setState(s => ({ ...s, agentStatus: { state: data.state, activity: null } }))
           break
+        case 'ping':
+          ws.send(JSON.stringify({ type: 'pong' }))
+          break
+        case 'session_disconnected':
+          setState(s => ({
+            ...s,
+            connectedSessionId: null,
+            connectedSessionName: null,
+            agentStatus: { state: 'idle', activity: null },
+          }))
+          break
         case 'error':
           console.error('[relay]', data.message)
           break
@@ -386,6 +402,9 @@ export function useRelay(authenticated: boolean = true) {
     }
 
     ws.onclose = (event) => {
+      // Save connected session for auto-rejoin on reconnect
+      const prev = stateRef.current.connectedSessionId
+      if (prev) lastSessionRef.current = prev
       setState(s => ({ ...s, status: 'disconnected', liveSessions: [], connectedSessionId: null, connectedSessionName: null, agentStatus: { state: 'idle', activity: null } }))
       // Don't reconnect on auth failure (4001)
       if (event.code === 4001) return
