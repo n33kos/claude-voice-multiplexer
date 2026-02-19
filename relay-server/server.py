@@ -120,10 +120,13 @@ async def _notify_client_transcript(session_id: str, speaker: str, text: str, **
         **extra,
     }
 
-    buf = _transcript_buffers.setdefault(session_id, [])
-    buf.append(entry)
-    if len(buf) > MAX_TRANSCRIPT_BUFFER:
-        _transcript_buffers[session_id] = buf[-MAX_TRANSCRIPT_BUFFER:]
+    # Don't buffer image entries — base64 data is large and images
+    # don't need to be replayed to reconnecting clients.
+    if speaker != "image":
+        buf = _transcript_buffers.setdefault(session_id, [])
+        buf.append(entry)
+        if len(buf) > MAX_TRANSCRIPT_BUFFER:
+            _transcript_buffers[session_id] = buf[-MAX_TRANSCRIPT_BUFFER:]
 
     msg = json.dumps(entry)
     print(f"[transcript] {speaker} ({session_id}): {len(text)} chars, msg_len={len(msg)}")

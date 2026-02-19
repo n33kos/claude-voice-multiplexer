@@ -226,6 +226,15 @@ export function Transcript({ entries, cwd, sessionId, onSendText }: TranscriptPr
           if (entry.speaker === "code") {
             return <CodeBlock key={i} code={entry.text} filename={entry.filename} language={entry.language} cwd={cwd} />;
           }
+          if (entry.speaker === "image") {
+            const dataUrl = `data:${entry.mimeType || 'image/jpeg'};base64,${entry.text}`;
+            return (
+              <div key={i} className={styles.ImageRow}>
+                {entry.filename && <span className={styles.ImageFilename}>{entry.filename}</span>}
+                <img src={dataUrl} alt={entry.filename || 'image'} className={styles.InlineImage} />
+              </div>
+            );
+          }
           // Split long responses into paragraphs (~2-3 sentences each)
           const paragraphs = entry.speaker === "claude"
             ? splitIntoParagraphs(entry.text)

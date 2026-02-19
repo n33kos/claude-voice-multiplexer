@@ -405,6 +405,71 @@ async def relay_status(ctx: Context) -> str:
 
 
 @mcp.tool()
+async def relay_image(ctx: Context, file_path: str) -> str:
+    """Relay an image directly to the web app without passing through Claude.
+
+    Reads a local image file and sends its contents directly to the relay server,
+    bypassing Claude entirely. The image is displayed inline in the transcript.
+
+    Supported formats: JPEG, PNG, GIF, WebP, SVG, BMP.
+
+    Args:
+        file_path: Path to the image file to relay (relative or absolute)
+
+    Returns:
+        Confirmation message or error
+    """
+    session_id, err = await _resolve_session(ctx)
+    if err:
+        return err
+
+    # Keep session alive during processing between relay_standby calls
+    registry = _app["registry"]
+    if registry:
+        await registry.heartbeat(session_id)
+
+    # Resolve path
+    try:
+        p = Path(file_path).expanduser().resolve()
+        if not p.exists():
+            return f"File not found: {file_path}"
+        if not p.is_file():
+            return f"Not a file: {file_path}"
+    except Exception as e:
+        return f"Invalid path: {e}"
+
+    # Detect MIME type from extension
+    suffix = p.suffix.lower()
+    mime_map = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".png": "image/png", ".gif": "image/gif",
+        ".webp": "image/webp", ".svg": "image/svg+xml",
+        ".bmp": "image/bmp", ".ico": "image/x-icon",
+    }
+    mime_type = mime_map.get(suffix)
+    if not mime_type:
+        return f"Unsupported image format: {suffix}. Supported: jpg, png, gif, webp, svg, bmp"
+
+    # Read and base64 encode
+    try:
+        import base64
+        data = p.read_bytes()
+        b64 = base64.b64encode(data).decode("ascii")
+    except Exception as e:
+        return f"Failed to read image: {e}"
+
+    # Send to transcript as image type (not buffered server-side to avoid memory bloat)
+    if _app["notify_transcript"]:
+        await _app["notify_transcript"](
+            session_id, "image", b64,
+            filename=p.name,
+            mime_type=mime_type,
+        )
+
+    return f"Image relayed: {p.name} ({len(data):,} bytes)"
+
+
+@mcp.tool()
 async def relay_file(ctx: Context, file_path: str, read_aloud: bool = False) -> str:
     """Relay a file directly to the web app without passing through Claude.
 

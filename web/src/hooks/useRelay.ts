@@ -40,12 +40,13 @@ export interface DisplaySession {
 }
 
 export interface TranscriptEntry {
-  speaker: 'user' | 'claude' | 'system' | 'activity' | 'code'
+  speaker: 'user' | 'claude' | 'system' | 'activity' | 'code' | 'image'
   text: string
   session_id: string
   timestamp: number
   filename?: string
   language?: string
+  mimeType?: string
 }
 
 export type AgentState = 'idle' | 'thinking' | 'speaking' | 'error'
@@ -221,7 +222,8 @@ export function useRelay(authenticated: boolean = true) {
     saveTimer.current = setTimeout(() => {
       const entries = stateRef.current.transcripts[sessionId]
       if (entries) {
-        saveTranscripts(sessionId, entries)
+        // Exclude image entries — base64 data is large and doesn't need persistence
+        saveTranscripts(sessionId, entries.filter(e => e.speaker !== 'image'))
       }
     }, 500)
   }, [])
@@ -310,6 +312,7 @@ export function useRelay(authenticated: boolean = true) {
               timestamp: data.ts ? data.ts * 1000 : Date.now(),
               ...(data.filename ? { filename: data.filename } : {}),
               ...(data.language ? { language: data.language } : {}),
+              ...(data.mime_type ? { mimeType: data.mime_type } : {}),
             }
             return {
               ...s,
