@@ -108,6 +108,11 @@ NOISE_STRIP_PATTERNS = [
     # Generic bracketed/parenthesized content that looks like stage directions
     r"\[[\w\s]+(?:playing|music|noise|sound)\]",
     r"\([\w\s]+(?:playing|music|noise|sound)\)",
+    # Generic: ANY bracketed or parenthesized content — Whisper uses these
+    # exclusively for non-speech sounds (e.g. [BLANK_AUDIO], (keyboard clicking)).
+    # Real speech is never wrapped in brackets or parentheses.
+    r"\[[^\]]*\]",
+    r"\([^)]*\)",
     # Music symbols
     r"[♪♫]+",
     # Attribution artifacts (always hallucinated, never real speech)
