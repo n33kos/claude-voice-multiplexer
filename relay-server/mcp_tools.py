@@ -231,7 +231,41 @@ async def relay_standby(ctx: Context, session_name: str = "") -> str:
 
 
 @mcp.tool()
-async def relay_activity(ctx: Context, activity: str) -> str:
+async def relay_notify(ctx: Context, message: str, source: str = "") -> str:
+    """Inject a notification message into the relay session's voice queue.
+
+    Use this from a background agent to wake up the parent Claude session's
+    relay_standby call when work is complete. The parent Claude will receive
+    this message as if it were a voice input, so it can summarize results
+    and respond to the user.
+
+    This is event-driven — no polling needed. relay_standby wakes up exactly
+    once when you call this.
+
+    Args:
+        message: The notification message, e.g. "Background task complete: <summary>"
+        source: Optional label identifying the background agent, e.g. "code-search-agent"
+    """
+    session_id, err = await _resolve_session(ctx)
+    if err:
+        return err
+
+    registry = _app["registry"]
+    if not registry:
+        return "Relay server not initialized."
+
+    session = await registry.get(session_id)
+    if not session:
+        return "Session not found."
+
+    prefix = f"[Background agent{': ' + source if source else ''}]"
+    full_message = f"{prefix} {message}"
+    await session.voice_queue.put(full_message)
+    return "Notification sent to parent session."
+
+
+@mcp.tool()
+async def relay_activity(ctx: Context, activity: str, source: str = "") -> str:
     """Update the voice relay with Claude's current activity.
 
     Call this before significant operations so the remote user
@@ -240,6 +274,7 @@ async def relay_activity(ctx: Context, activity: str) -> str:
 
     Args:
         activity: Short description of current activity
+        source: Optional label for background agents, e.g. "code-search-agent"
     """
     session_id, err = await _resolve_session(ctx)
     if err:
@@ -250,9 +285,10 @@ async def relay_activity(ctx: Context, activity: str) -> str:
     if registry:
         await registry.heartbeat(session_id)
 
+    labeled = f"[{source}] {activity}" if source else activity
     agent = _app["get_agent"]()
-    if agent and activity:
-        asyncio.create_task(agent.handle_status_update(session_id, activity))
+    if agent and labeled:
+        asyncio.create_task(agent.handle_status_update(session_id, labeled))
 
     return "Status updated."
 

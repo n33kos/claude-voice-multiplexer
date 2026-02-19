@@ -51,6 +51,23 @@ Then enter a continuous conversation loop:
 
 **Note:** No session identifiers or working directory paths need to be passed to any tool. The server auto-detects your session from the MCP connection.
 
+### Background Agent Tasks
+
+When you need to do long-running work while staying in standby (e.g. searching a large codebase, running tests, spawning a research agent), use this pattern:
+
+1. Tell the user what you're starting via `relay_respond`
+2. Launch the background task with `Task(run_in_background=True, ...)`
+3. **In your Task prompt, instruct the agent to call `relay_notify` when finished**, e.g.:
+   > "When your work is complete, call the `relay_notify` MCP tool with a concise summary of what you found. Pass `source='<task-name>'` so the notification is labeled."
+4. Immediately call `relay_standby` — it will block until either a voice message OR the background agent's `relay_notify` call arrives
+5. When `relay_standby` returns a message starting with `[Background agent`:
+   - It's a completion notification from the background task
+   - Call `relay_respond` with a spoken summary of the results
+   - Then re-enter `relay_standby` as normal
+6. If a voice message arrives before the background task finishes, handle it conversationally — the background agent will still notify when done
+
+Background agents can also call `relay_activity(activity="...", source="task-name")` during their work to show progress in the UI.
+
 ### MCP Reconnection During Standby
 
 If `relay_standby` fails with a **tool error** (the MCP connection dropped, not a content-level `[System]` message), follow this recovery loop:
