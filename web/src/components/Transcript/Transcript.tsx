@@ -223,7 +223,7 @@ export function Transcript({ entries, cwd, sessionId, onSendText }: TranscriptPr
               </div>
             );
           }
-          if (entry.speaker === "code") {
+          if (entry.speaker === "code" || entry.speaker === "file") {
             return <CodeBlock key={i} code={entry.text} filename={entry.filename} language={entry.language} cwd={cwd} />;
           }
           if (entry.speaker === "image") {

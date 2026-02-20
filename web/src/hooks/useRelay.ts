@@ -40,7 +40,7 @@ export interface DisplaySession {
 }
 
 export interface TranscriptEntry {
-  speaker: 'user' | 'claude' | 'system' | 'activity' | 'code' | 'image'
+  speaker: 'user' | 'claude' | 'system' | 'activity' | 'code' | 'file' | 'image'
   text: string
   session_id: string
   timestamp: number
