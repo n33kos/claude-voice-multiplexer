@@ -5,6 +5,7 @@ export interface VoiceControlsProps {
   token: string;
   serverUrl: string;
   sessionId?: string | null;
+  hueOverride?: number;
   agentStatus: AgentStatus;
   autoListen: boolean;
   speakerMuted: boolean;
@@ -19,6 +20,7 @@ export interface VoiceControlsProps {
 
 export interface MicControlsProps {
   sessionId?: string | null;
+  hueOverride?: number;
   agentStatus: AgentStatus;
   autoListen: boolean;
   speakerMuted: boolean;

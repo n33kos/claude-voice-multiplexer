@@ -15,6 +15,7 @@ import styles from "./MicControls.module.scss";
 
 export function MicControls({
   sessionId,
+  hueOverride,
   agentStatus,
   autoListen,
   speakerMuted,
@@ -26,7 +27,7 @@ export function MicControls({
 }: MicControlsProps) {
   const room = useRoomContext();
   const { isMicrophoneEnabled } = useLocalParticipant();
-  const hue = sessionId ? sessionHue(sessionId) : null;
+  const hue = hueOverride != null ? hueOverride : (sessionId ? sessionHue(sessionId) : null);
 
   // Session-colored overrides for thinking/speaking states
   const sessionPillStyle = useMemo(() => {

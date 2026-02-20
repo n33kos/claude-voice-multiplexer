@@ -19,8 +19,8 @@ const HUE_DRIFT = 0.1;
 const HUE_RANGE = 40; // degrees of hue variation when session-locked
 const HUE_LERP_SPEED = 0.02; // how fast particles converge to target hue
 const AUDIO_SPEED_MAX = 5.0; // max speed multiplier at full amplitude
-const AUDIO_LERP_UP = 0.4;   // how fast multiplier rises with audio
-const AUDIO_LERP_DOWN = 0.05; // how fast multiplier decays back to 1
+const AUDIO_LERP_UP = 0.7;   // how fast multiplier rises with audio
+const AUDIO_LERP_DOWN = 0.12; // how fast multiplier decays back to 1
 
 function getParticleLightness(): string {
   return (

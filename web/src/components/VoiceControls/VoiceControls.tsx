@@ -77,6 +77,7 @@ export function VoiceControls({
   token,
   serverUrl,
   sessionId,
+  hueOverride,
   agentStatus,
   autoListen,
   speakerMuted,
@@ -102,6 +103,7 @@ export function VoiceControls({
         <AgentAudioRenderer muted={speakerMuted} />
         <MicControls
           sessionId={sessionId}
+          hueOverride={hueOverride}
           agentStatus={agentStatus}
           autoListen={autoListen}
           speakerMuted={speakerMuted}

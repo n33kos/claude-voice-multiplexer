@@ -173,6 +173,7 @@ export default function App() {
               token={livekit.token}
               serverUrl={livekit.url}
               sessionId={relay.connectedSessionId}
+              hueOverride={relay.sessions.find(s => s.session_id === relay.connectedSessionId)?.hue_override}
               agentStatus={relay.agentStatus}
               autoListen={settings.autoListen}
               speakerMuted={settings.speakerMuted}
