@@ -31,6 +31,7 @@ export default function App() {
   const livekit = useLiveKit();
   const { settings, updateSettings } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const particleAnalyserRef = useRef<AnalyserNode | null>(null);
   const [sessionsExpanded, setSessionsExpanded] = useState(
     !relay.connectedSessionId,
   );
@@ -128,6 +129,8 @@ export default function App() {
       <ParticleNetwork
         sessionId={relay.connectedSessionId}
         hueOverride={relay.sessions.find(s => s.session_id === relay.connectedSessionId)?.hue_override}
+        analyserRef={particleAnalyserRef}
+        audioReactive={settings.audioReactiveParticles}
       />
       <div className={styles.Layout}>
         <Header onSettingsOpen={() => setSettingsOpen(true)} />
@@ -179,6 +182,7 @@ export default function App() {
               onConnected={() => livekit.setConnected(true)}
               onDisconnected={() => livekit.setConnected(false)}
               onInterrupt={relay.interruptAgent}
+              particleAnalyserRef={particleAnalyserRef}
             />
           </Suspense>
         )}

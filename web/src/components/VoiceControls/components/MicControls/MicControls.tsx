@@ -22,6 +22,7 @@ export function MicControls({
   onAutoListenChange,
   onSpeakerMutedChange,
   onInterrupt,
+  particleAnalyserRef,
 }: MicControlsProps) {
   const room = useRoomContext();
   const { isMicrophoneEnabled } = useLocalParticipant();
@@ -84,6 +85,16 @@ export function MicControls({
   const isMicActive = !!isMicrophoneEnabled && agentState === "idle";
   const activeAnalyser =
     agentState === "speaking" ? remoteAnalyser : localAnalyser;
+
+  // Keep particleAnalyserRef in sync with the active analyser
+  useEffect(() => {
+    if (!particleAnalyserRef) return;
+    particleAnalyserRef.current = activeAnalyser.current;
+    const id = setInterval(() => {
+      if (particleAnalyserRef) particleAnalyserRef.current = activeAnalyser.current;
+    }, 100);
+    return () => clearInterval(id);
+  }, [activeAnalyser, particleAnalyserRef]);
 
   const prevAgentState = useRef(agentState);
   useEffect(() => {

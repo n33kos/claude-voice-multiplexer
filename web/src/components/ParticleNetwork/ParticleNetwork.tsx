@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type React from "react";
 import type { Particle } from "./ParticleNetwork.types";
 import { sessionHue } from "../../utils/sessionHue";
 import styles from "./ParticleNetwork.module.scss";
@@ -17,6 +18,9 @@ const LINE_OPACITY = 0.12;
 const HUE_DRIFT = 0.1;
 const HUE_RANGE = 40; // degrees of hue variation when session-locked
 const HUE_LERP_SPEED = 0.02; // how fast particles converge to target hue
+const AUDIO_SPEED_MAX = 5.0; // max speed multiplier at full amplitude
+const AUDIO_LERP_UP = 0.4;   // how fast multiplier rises with audio
+const AUDIO_LERP_DOWN = 0.05; // how fast multiplier decays back to 1
 
 function getParticleLightness(): string {
   return (
@@ -29,15 +33,21 @@ function getParticleLightness(): string {
 interface ParticleNetworkProps {
   sessionId?: string | null;
   hueOverride?: number;
+  analyserRef?: React.MutableRefObject<AnalyserNode | null>;
+  audioReactive?: boolean;
 }
 
-export function ParticleNetwork({ sessionId, hueOverride }: ParticleNetworkProps = {}) {
+export function ParticleNetwork({ sessionId, hueOverride, analyserRef, audioReactive }: ParticleNetworkProps = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const particles = useRef<Particle[]>([]);
   const animRef = useRef<number>(0);
   const lightnessRef = useRef(getParticleLightness());
   const sessionIdRef = useRef(sessionId);
   const hueOverrideRef = useRef(hueOverride);
+  const analyserRefRef = useRef(analyserRef);
+  const audioReactiveRef = useRef(audioReactive);
+  const speedMultiplierRef = useRef(1.0);
+  const freqDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
 
   // Keep refs in sync so animation loop sees latest value
   useEffect(() => {
@@ -47,6 +57,14 @@ export function ParticleNetwork({ sessionId, hueOverride }: ParticleNetworkProps
   useEffect(() => {
     hueOverrideRef.current = hueOverride;
   }, [hueOverride]);
+
+  useEffect(() => {
+    analyserRefRef.current = analyserRef;
+  }, [analyserRef]);
+
+  useEffect(() => {
+    audioReactiveRef.current = audioReactive;
+  }, [audioReactive]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -104,9 +122,32 @@ export function ParticleNetwork({ sessionId, hueOverride }: ParticleNetworkProps
         ? hueOverrideRef.current
         : (sid ? sessionHue(sid) : null);
 
+      // Audio-reactive speed multiplier
+      if (audioReactiveRef.current) {
+        const analyser = analyserRefRef.current?.current;
+        if (analyser) {
+          if (!freqDataRef.current || freqDataRef.current.length !== analyser.frequencyBinCount) {
+            freqDataRef.current = new Uint8Array(analyser.frequencyBinCount);
+          }
+          analyser.getByteFrequencyData(freqDataRef.current);
+          let sum = 0;
+          for (let k = 0; k < freqDataRef.current.length; k++) sum += freqDataRef.current[k];
+          const amplitude = sum / (freqDataRef.current.length * 255);
+          const target = 1 + amplitude * (AUDIO_SPEED_MAX - 1);
+          const lerpRate = target > speedMultiplierRef.current ? AUDIO_LERP_UP : AUDIO_LERP_DOWN;
+          speedMultiplierRef.current += (target - speedMultiplierRef.current) * lerpRate;
+        } else {
+          // No analyser — decay back to 1
+          speedMultiplierRef.current += (1 - speedMultiplierRef.current) * AUDIO_LERP_DOWN;
+        }
+      } else {
+        speedMultiplierRef.current = 1.0;
+      }
+      const speedMult = speedMultiplierRef.current;
+
       for (const p of pts) {
-        p.x += p.vx;
-        p.y += p.vy;
+        p.x += p.vx * speedMult;
+        p.y += p.vy * speedMult;
 
         if (baseHue !== null) {
           // Lerp toward a target within the session's hue range

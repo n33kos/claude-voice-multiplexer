@@ -7,6 +7,7 @@ export interface Settings {
   speakerMuted: boolean
   showStatusPill: boolean
   theme: ThemeMode
+  audioReactiveParticles: boolean
 }
 
 const STORAGE_KEY = 'voice-multiplexer-settings'
@@ -16,6 +17,7 @@ const DEFAULTS: Settings = {
   speakerMuted: false,
   showStatusPill: true,
   theme: 'system',
+  audioReactiveParticles: false,
 }
 
 function loadSettings(): Settings {

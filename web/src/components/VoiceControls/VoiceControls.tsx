@@ -86,6 +86,7 @@ export function VoiceControls({
   onConnected,
   onDisconnected,
   onInterrupt,
+  particleAnalyserRef,
 }: VoiceControlsProps) {
   return (
     <div className={styles.Root}>
@@ -108,6 +109,7 @@ export function VoiceControls({
           onAutoListenChange={onAutoListenChange}
           onSpeakerMutedChange={onSpeakerMutedChange}
           onInterrupt={onInterrupt}
+          particleAnalyserRef={particleAnalyserRef}
         />
       </LiveKitRoom>
     </div>

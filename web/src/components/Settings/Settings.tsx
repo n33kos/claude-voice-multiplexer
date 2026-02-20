@@ -177,6 +177,23 @@ export function Settings({
             </button>
           </label>
 
+          <label className={styles.SettingRow}>
+            <div className={styles.SettingLabel}>
+              <span className={styles.SettingTitle}>Audio-reactive particles</span>
+              <span className={styles.SettingDescription}>
+                Particle network pulses with voice amplitude
+              </span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.audioReactiveParticles}
+              onClick={() => onUpdate({ audioReactiveParticles: !settings.audioReactiveParticles })}
+              className={classNames(styles.Toggle, { [styles.ToggleActive]: settings.audioReactiveParticles })}
+            >
+              <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.audioReactiveParticles })} />
+            </button>
+          </label>
+
           <div className={styles.Divider} />
 
           <div className={styles.SectionHeader}>
