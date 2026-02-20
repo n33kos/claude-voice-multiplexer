@@ -37,7 +37,7 @@ from config import (
 )
 
 AGENT_IDENTITY_PREFIX = "relay-agent"
-LIVEKIT_SAMPLE_RATE = 48000  # LiveKit operates at 48kHz
+LIVEKIT_SAMPLE_RATE = TTS_SAMPLE_RATE  # Publish at Kokoro's native rate to avoid resampling artifacts
 NUM_CHANNELS = 1
 
 # VAD internals (not user-configurable)
@@ -573,13 +573,6 @@ class SessionRoom:
             return 0
 
         samples = np.frombuffer(pcm_bytes, dtype=np.int16)
-
-        if TTS_SAMPLE_RATE != LIVEKIT_SAMPLE_RATE:
-            from scipy import signal as scipy_signal
-            samples = scipy_signal.resample(
-                samples,
-                int(len(samples) * LIVEKIT_SAMPLE_RATE / TTS_SAMPLE_RATE),
-            ).astype(np.int16)
 
         frame_size = LIVEKIT_SAMPLE_RATE // 100  # 10ms frames
         for i in range(0, len(samples), frame_size):
