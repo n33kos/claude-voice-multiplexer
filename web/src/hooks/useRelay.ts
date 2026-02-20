@@ -189,18 +189,20 @@ export function useRelay(authenticated: boolean = true) {
   // Persist live sessions to IndexedDB as they arrive
   const persistLiveSessions = useCallback((sessions: Session[]) => {
     const currentPersisted = stateRef.current.persistedSessions
-    // Preserve existing display_name when updating
-    const existingDisplayNames = new Map(
-      currentPersisted.filter(p => p.display_name).map(p => [p.session_id, p.display_name!])
+    // Preserve existing user overrides (display_name, hue_override) when updating
+    const existingOverrides = new Map(
+      currentPersisted.map(p => [p.session_id, { display_name: p.display_name, hue_override: p.hue_override }])
     )
 
     for (const s of sessions) {
+      const overrides = existingOverrides.get(s.session_id)
       savePersistedSession({
         session_id: s.session_id,
         session_name: s.name,
         dir_name: s.dir_name,
         last_seen: s.last_heartbeat,
-        display_name: existingDisplayNames.get(s.session_id),
+        display_name: overrides?.display_name,
+        hue_override: overrides?.hue_override,
       })
     }
     // Also update local persisted state so merge is correct
@@ -216,6 +218,7 @@ export function useRelay(authenticated: boolean = true) {
           dir_name: s.dir_name,
           last_seen: s.last_heartbeat,
           display_name: existing?.display_name,
+          hue_override: existing?.hue_override,
         })
       }
       return { ...prev, persistedSessions: Array.from(persistedMap.values()) }
