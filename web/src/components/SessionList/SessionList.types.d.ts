@@ -11,4 +11,5 @@ export interface SessionListProps {
   onClearTranscript: (sessionId: string) => void;
   onRemoveSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, displayName: string) => void;
+  onRecolorSession: (sessionId: string, hue: number | null) => void;
 }

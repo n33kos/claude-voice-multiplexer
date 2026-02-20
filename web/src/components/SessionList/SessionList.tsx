@@ -17,6 +17,7 @@ export function SessionList({
   onClearTranscript,
   onRemoveSession,
   onRenameSession,
+  onRecolorSession,
 }: SessionListProps) {
   if (sessions.length === 0) {
     return (
@@ -50,7 +51,7 @@ export function SessionList({
         onClick={onToggleExpanded}
         className={styles.HeaderBar}
         style={connectedSession ? {
-          borderLeftColor: `hsla(${sessionHue(connectedSession.session_id)}, 70%, 55%, 0.7)`,
+          borderLeftColor: `hsla(${connectedSession.hue_override ?? sessionHue(connectedSession.session_id)}, 70%, 55%, 0.7)`,
         } : undefined}
       >
         <div className={styles.HeaderLeft}>
@@ -78,7 +79,7 @@ export function SessionList({
             const isConnected =
               session.session_id === connectedSessionId && !!connectedSessionId;
             const canConnect = session.online;
-            const hue = sessionHue(session.session_id);
+            const hue = session.hue_override ?? sessionHue(session.session_id);
             return (
               <div
                 key={session.session_id}
@@ -128,6 +129,7 @@ export function SessionList({
                       onClearTranscript={onClearTranscript}
                       onRemoveSession={onRemoveSession}
                       onRenameSession={onRenameSession}
+                      onRecolorSession={onRecolorSession}
                     />
                   </div>
                 </div>

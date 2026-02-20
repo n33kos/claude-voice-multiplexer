@@ -28,19 +28,25 @@ function getParticleLightness(): string {
 
 interface ParticleNetworkProps {
   sessionId?: string | null;
+  hueOverride?: number;
 }
 
-export function ParticleNetwork({ sessionId }: ParticleNetworkProps = {}) {
+export function ParticleNetwork({ sessionId, hueOverride }: ParticleNetworkProps = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const particles = useRef<Particle[]>([]);
   const animRef = useRef<number>(0);
   const lightnessRef = useRef(getParticleLightness());
   const sessionIdRef = useRef(sessionId);
+  const hueOverrideRef = useRef(hueOverride);
 
-  // Keep ref in sync so animation loop sees latest value
+  // Keep refs in sync so animation loop sees latest value
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
+
+  useEffect(() => {
+    hueOverrideRef.current = hueOverride;
+  }, [hueOverride]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -94,7 +100,9 @@ export function ParticleNetwork({ sessionId }: ParticleNetworkProps = {}) {
       const lightness = lightnessRef.current;
       const pts = particles.current;
       const sid = sessionIdRef.current;
-      const baseHue = sid ? sessionHue(sid) : null;
+      const baseHue = hueOverrideRef.current != null
+        ? hueOverrideRef.current
+        : (sid ? sessionHue(sid) : null);
 
       for (const p of pts) {
         p.x += p.vx;

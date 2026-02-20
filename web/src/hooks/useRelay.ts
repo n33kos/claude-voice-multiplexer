@@ -37,6 +37,7 @@ export interface DisplaySession {
   last_seen: number
   last_interaction: number | null  // ms timestamp of last user/claude transcript entry
   connected_clients: ConnectedClient[]
+  hue_override?: number          // user-set color hue (0-360)
 }
 
 export interface TranscriptEntry {
@@ -93,9 +94,12 @@ function mergeDisplaySessions(
 ): DisplaySession[] {
   const result = new Map<string, DisplaySession>()
 
-  // Build a lookup for persisted display names (keyed by session_id)
+  // Build lookups for persisted overrides (keyed by session_id)
   const displayNames = new Map(
     persisted.filter(p => p.display_name).map(p => [p.session_id, p.display_name!])
+  )
+  const hueOverrides = new Map(
+    persisted.filter(p => p.hue_override != null).map(p => [p.session_id, p.hue_override!])
   )
 
   // Track which session_ids are live
@@ -115,6 +119,7 @@ function mergeDisplaySessions(
         last_seen: p.last_seen,
         last_interaction: getLastInteraction(transcripts, p.session_id),
         connected_clients: [],
+        hue_override: p.hue_override,
       })
     }
   }
@@ -132,6 +137,7 @@ function mergeDisplaySessions(
       last_seen: s.last_heartbeat,
       last_interaction: getLastInteraction(transcripts, s.session_id),
       connected_clients: s.connected_clients || [],
+      hue_override: hueOverrides.get(s.session_id),
     })
   }
 
@@ -514,6 +520,20 @@ export function useRelay(authenticated: boolean = true) {
     }
   }, [])
 
+  const recolorSession = useCallback((sessionId: string, hue: number | null) => {
+    setState(s => ({
+      ...s,
+      persistedSessions: s.persistedSessions.map(p =>
+        p.session_id === sessionId ? { ...p, hue_override: hue ?? undefined } : p
+      ),
+    }))
+    // Persist to IndexedDB
+    const existing = stateRef.current.persistedSessions.find(p => p.session_id === sessionId)
+    if (existing) {
+      savePersistedSession({ ...existing, hue_override: hue ?? undefined })
+    }
+  }, [])
+
   // Merge live + persisted for display
   const displaySessions = mergeDisplaySessions(state.liveSessions, state.persistedSessions, state.transcripts)
 
@@ -538,5 +558,6 @@ export function useRelay(authenticated: boolean = true) {
     clearTranscript,
     removeSession,
     renameSession,
+    recolorSession,
   }
 }

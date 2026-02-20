@@ -141,10 +141,10 @@ function CodeBlock({ code, filename, language, cwd }: { code: string; filename?:
   );
 }
 
-export function Transcript({ entries, cwd, sessionId, onSendText }: TranscriptProps) {
+export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText }: TranscriptProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const [textInput, setTextInput] = useState("");
-  const hue = sessionId ? sessionHue(sessionId) : null;
+  const hue = hueOverride != null ? hueOverride : (sessionId ? sessionHue(sessionId) : null);
   const sendButtonStyle = hue !== null ? { backgroundColor: `hsla(${hue}, 55%, 40%, 0.9)` } : undefined;
 
   useEffect(() => {

@@ -11,6 +11,7 @@ export interface PersistedSession {
   dir_name: string
   last_seen: number
   display_name?: string    // user-set override
+  hue_override?: number    // user-set color hue (0-360), overrides deterministic hue
 }
 
 function openDB(): Promise<IDBDatabase> {

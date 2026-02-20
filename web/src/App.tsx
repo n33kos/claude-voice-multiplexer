@@ -125,7 +125,10 @@ export default function App() {
 
   return (
     <>
-      <ParticleNetwork sessionId={relay.connectedSessionId} />
+      <ParticleNetwork
+        sessionId={relay.connectedSessionId}
+        hueOverride={relay.sessions.find(s => s.session_id === relay.connectedSessionId)?.hue_override}
+      />
       <div className={styles.Layout}>
         <Header onSettingsOpen={() => setSettingsOpen(true)} />
 
@@ -140,6 +143,7 @@ export default function App() {
           onClearTranscript={relay.clearTranscript}
           onRemoveSession={relay.removeSession}
           onRenameSession={relay.renameSession}
+          onRecolorSession={relay.recolorSession}
         />
 
         {relay.connectedSessionId && (
@@ -151,6 +155,11 @@ export default function App() {
               )?.cwd
             }
             sessionId={relay.connectedSessionId}
+            hueOverride={
+              relay.sessions.find(
+                (s) => s.session_id === relay.connectedSessionId,
+              )?.hue_override
+            }
             onSendText={relay.sendTextMessage}
           />
         )}

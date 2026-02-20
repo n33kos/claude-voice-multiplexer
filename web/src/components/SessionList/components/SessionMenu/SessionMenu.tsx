@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { sessionHue } from "../../../../utils/sessionHue";
 import type { DisplaySession } from "../../../../hooks/useRelay";
 import styles from "./SessionMenu.module.scss";
 
@@ -7,6 +8,7 @@ interface SessionMenuProps {
   onClearTranscript: (sessionId: string) => void;
   onRemoveSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, displayName: string) => void;
+  onRecolorSession: (sessionId: string, hue: number | null) => void;
 }
 
 export function SessionMenu({
@@ -14,10 +16,13 @@ export function SessionMenu({
   onClearTranscript,
   onRemoveSession,
   onRenameSession,
+  onRecolorSession,
 }: SessionMenuProps) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [recoloring, setRecoloring] = useState(false);
   const [renameValue, setRenameValue] = useState("");
+  const [hueValue, setHueValue] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -70,6 +75,44 @@ export function SessionMenu({
                 autoFocus
               />
             </div>
+          ) : recoloring ? (
+            <div className={styles.ColorRow} onClick={(e) => e.stopPropagation()}>
+              <div className={styles.ColorPreview} style={{ backgroundColor: `hsl(${hueValue}, 70%, 55%)` }} />
+              <input
+                type="range"
+                min={0}
+                max={359}
+                value={hueValue}
+                onChange={(e) => setHueValue(Number(e.target.value))}
+                className={styles.HueSlider}
+              />
+              <div className={styles.ColorActions}>
+                <button
+                  className={styles.ColorApply}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRecolorSession(session.session_id, hueValue);
+                    setRecoloring(false);
+                    setOpen(false);
+                  }}
+                >
+                  Apply
+                </button>
+                {session.hue_override != null && (
+                  <button
+                    className={styles.ColorReset}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRecolorSession(session.session_id, null);
+                      setRecoloring(false);
+                      setOpen(false);
+                    }}
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+            </div>
           ) : (
             <>
               <button
@@ -82,6 +125,16 @@ export function SessionMenu({
                 className={styles.MenuItem}
               >
                 Rename
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setHueValue(session.hue_override ?? sessionHue(session.session_id));
+                  setRecoloring(true);
+                }}
+                className={styles.MenuItem}
+              >
+                Change color
               </button>
               <button
                 onClick={(e) => {
