@@ -20,7 +20,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, 
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import RELAY_HOST, RELAY_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AUTH_ENABLED, WHISPER_URL, KOKORO_URL
+from config import RELAY_HOST, RELAY_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AUTH_ENABLED, WHISPER_URL, KOKORO_URL, TLS_ENABLED, SSL_CERT_FILE, SSL_KEY_FILE
 import auth
 from registry import SessionRegistry
 from livekit_agent import RelayAgent
@@ -769,4 +769,8 @@ else:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=RELAY_HOST, port=RELAY_PORT)
+    kwargs: dict = {"host": RELAY_HOST, "port": RELAY_PORT}
+    if TLS_ENABLED:
+        kwargs["ssl_keyfile"] = SSL_KEY_FILE
+        kwargs["ssl_certfile"] = SSL_CERT_FILE
+    uvicorn.run(app, **kwargs)

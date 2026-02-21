@@ -33,6 +33,15 @@ KOKORO_PORT="${VMUX_KOKORO_PORT:-8101}"
 RELAY_PORT="${RELAY_PORT:-3100}"
 LIVEKIT_PORT="${LIVEKIT_PORT:-7880}"
 
+TLS_ENABLED="${TLS_ENABLED:-false}"
+if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
+    RELAY_SCHEME="https"
+    RELAY_CURL_FLAGS="-k"
+else
+    RELAY_SCHEME="http"
+    RELAY_CURL_FLAGS=""
+fi
+
 # Check if the main start script is running
 vmux_running=false
 vmux_pid=""
@@ -58,7 +67,7 @@ if [ "$QUIET" = true ]; then
     if [ "$vmux_running" = true ] \
         && curl -s --max-time 2 "http://127.0.0.1:${WHISPER_PORT}/" > /dev/null 2>&1 \
         && curl -s --max-time 2 "http://127.0.0.1:${KOKORO_PORT}/health" > /dev/null 2>&1 \
-        && curl -s --max-time 2 "http://127.0.0.1:${RELAY_PORT}/api/auth/status" > /dev/null 2>&1; then
+        && curl -s $RELAY_CURL_FLAGS --max-time 2 "${RELAY_SCHEME}://127.0.0.1:${RELAY_PORT}/api/auth/status" > /dev/null 2>&1; then
         exit 0
     else
         exit 1
@@ -109,8 +118,8 @@ else
     echo "  LiveKit: not responding"
 fi
 
-if curl -s "http://127.0.0.1:${RELAY_PORT}/api/sessions" > /dev/null 2>&1; then
-    echo "  Relay server: running on :${RELAY_PORT}"
+if curl -s $RELAY_CURL_FLAGS "${RELAY_SCHEME}://127.0.0.1:${RELAY_PORT}/api/sessions" > /dev/null 2>&1; then
+    echo "  Relay server: running on :${RELAY_PORT} (${RELAY_SCHEME})"
 else
     echo "  Relay server: not responding"
 fi

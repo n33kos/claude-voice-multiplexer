@@ -22,19 +22,23 @@ Before entering standby, verify services are installed and running:
 After services are confirmed running, print the web app URL and a fresh pairing code so the user can connect immediately.
 
 1. Get the local network IP by running: `ipconfig getifaddr en0 2>/dev/null || echo localhost`
-2. Call the `generate_auth_code` MCP tool to get a one-time pairing code
-3. Print everything together in a single block like:
+2. Detect the URL scheme: run `grep -q "TLS_ENABLED=true\|TLS_ENABLED=1" ~/.claude/voice-multiplexer/voice-multiplexer.env 2>/dev/null && echo https || echo http` to determine if TLS is enabled. Use `https` if so, otherwise `http`.
+3. Call the `generate_auth_code` MCP tool to get a one-time pairing code
+4. Print everything together in a single block like:
 
 ```
 Voice Multiplexer ready — open on your phone:
-  http://<local-ip>:3100
-  (or http://localhost:3100 from this machine)
+  https://<local-ip>:3100
+  (or https://localhost:3100 from this machine)
 
 Pairing code: <CODE>  (expires in 60s)
+
+Note: your browser will warn about the self-signed certificate — click Advanced → Proceed to continue.
 ```
 
 Use the `RELAY_PORT` from the config (default 3100). If `DEV_MODE=true`, show `:5173` for the Vite dev server instead.
 If the auth code tool returns an error (e.g. auth not enabled), skip the pairing code line silently — just show the URL.
+Only show the self-signed certificate note when TLS is enabled.
 
 ## Instructions
 

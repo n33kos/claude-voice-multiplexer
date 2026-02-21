@@ -39,6 +39,11 @@ KOKORO_SPEED = float(os.environ.get("KOKORO_SPEED", "1.0"))
 STT_SAMPLE_RATE = int(os.environ.get("STT_SAMPLE_RATE", "16000"))  # Incoming audio (capture/VAD/Whisper)
 TTS_SAMPLE_RATE = int(os.environ.get("TTS_SAMPLE_RATE", "24000"))  # Outgoing audio (Kokoro TTS)
 
+# --- TLS ---
+TLS_ENABLED = os.environ.get("TLS_ENABLED", "").lower() in ("1", "true", "yes")
+SSL_CERT_FILE = os.environ.get("SSL_CERT_FILE", str(Path.home() / ".claude" / "voice-multiplexer" / "certs" / "cert.pem"))
+SSL_KEY_FILE = os.environ.get("SSL_KEY_FILE", str(Path.home() / ".claude" / "voice-multiplexer" / "certs" / "key.pem"))
+
 # --- Authentication ---
 AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
 AUTH_TOKEN_TTL_DAYS = int(os.environ.get("AUTH_TOKEN_TTL_DAYS", "90"))

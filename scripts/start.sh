@@ -283,6 +283,55 @@ fi
 # Create dist folder exists for Vite to serve, even if empty (avoids errors in dev mode before first build)
 mkdir -p "$PROJECT_DIR/web/dist" 
 
+# --- TLS certificate ---
+
+TLS_ENABLED="${TLS_ENABLED:-false}"
+RELAY_SCHEME="http"
+
+if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
+    CERT_DIR="$DATA_DIR/certs"
+    mkdir -p "$CERT_DIR"
+    SSL_CERT_FILE="${SSL_CERT_FILE:-$CERT_DIR/cert.pem}"
+    SSL_KEY_FILE="${SSL_KEY_FILE:-$CERT_DIR/key.pem}"
+
+    # Check if cert exists and is valid for at least 30 more days
+    cert_ok=false
+    if [ -f "$SSL_CERT_FILE" ] && [ -f "$SSL_KEY_FILE" ]; then
+        if openssl x509 -checkend $((30 * 86400)) -noout -in "$SSL_CERT_FILE" 2>/dev/null; then
+            cert_ok=true
+            log "  TLS: using existing certificate"
+        else
+            log "  TLS: certificate expiring soon, regenerating..."
+        fi
+    fi
+
+    if [ "$cert_ok" = false ]; then
+        LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "127.0.0.1")
+        SAN="IP:127.0.0.1,DNS:localhost"
+        if [ "$LOCAL_IP" != "127.0.0.1" ] && [ "$LOCAL_IP" != "localhost" ]; then
+            SAN="${SAN},IP:${LOCAL_IP}"
+        fi
+        log "  TLS: generating self-signed certificate (SAN: ${SAN})..."
+        if openssl req -x509 -newkey rsa:2048 \
+            -keyout "$SSL_KEY_FILE" \
+            -out "$SSL_CERT_FILE" \
+            -sha256 -days 365 -nodes \
+            -subj "/CN=voice-multiplexer" \
+            -addext "subjectAltName=${SAN}" \
+            2>/dev/null; then
+            log "  TLS: certificate generated (valid 365 days)"
+        else
+            log "  TLS: WARNING: Failed to generate certificate, falling back to HTTP"
+            TLS_ENABLED=false
+        fi
+    fi
+
+    if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
+        export TLS_ENABLED SSL_CERT_FILE SSL_KEY_FILE
+        RELAY_SCHEME="https"
+    fi
+fi
+
 log "  Relay server: starting on :${RELAY_PORT}..."
 cd "$PROJECT_DIR/relay-server"
 uv run \
@@ -315,19 +364,19 @@ if [ "$DEV_MODE" = true ]; then
 
     PIDS+=($!)
     log ""
-    log "Open http://localhost:${WEB_PORT} in your browser"
+    log "Open ${RELAY_SCHEME}://localhost:${WEB_PORT} in your browser"
 else
     log "  Web app: building for production..."
-    
+
     cd "$PROJECT_DIR/web"
     npm install --silent > /dev/null
     npx vite build > /dev/null
 
     if [ -d "$PROJECT_DIR/web/dist" ]; then
-        log "Open http://localhost:${RELAY_PORT} in your browser (serving built web app)"
+        log "Open ${RELAY_SCHEME}://localhost:${RELAY_PORT} in your browser (serving built web app)"
     else
         log "Web app not built. Run 'npm run build' in web/ or use --dev for dev mode."
-        log "API available at http://localhost:${RELAY_PORT}/api/sessions"
+        log "API available at ${RELAY_SCHEME}://localhost:${RELAY_PORT}/api/sessions"
     fi
 fi
 
