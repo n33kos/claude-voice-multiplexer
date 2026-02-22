@@ -385,18 +385,6 @@ AUTH_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 
 # How long device authorization tokens last (in days)
 # AUTH_TOKEN_TTL_DAYS=90
-
-# --- TLS / HTTPS ---
-# Enable HTTPS for phone/tablet access (getUserMedia requires HTTPS over the network).
-# When enabled, a second HTTPS server starts on RELAY_TLS_PORT alongside the main
-# HTTP server on RELAY_PORT. MCP and localhost browser access continue to use HTTP.
-# A self-signed certificate is auto-generated at startup:
-#   ~/.claude/voice-multiplexer/certs/
-# Users must accept the certificate warning once in their browser.
-# TLS_ENABLED=false
-# RELAY_TLS_PORT=3443
-# VMUX_SSL_CERT_FILE=~/.claude/voice-multiplexer/certs/cert.pem
-# VMUX_SSL_KEY_FILE=~/.claude/voice-multiplexer/certs/key.pem
 EOF
     log "Config written to $CONFIG_FILE"
 else

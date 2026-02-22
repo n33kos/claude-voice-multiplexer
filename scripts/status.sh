@@ -33,12 +33,6 @@ KOKORO_PORT="${VMUX_KOKORO_PORT:-8101}"
 RELAY_PORT="${RELAY_PORT:-3100}"
 LIVEKIT_PORT="${LIVEKIT_PORT:-7880}"
 
-TLS_ENABLED="${TLS_ENABLED:-false}"
-RELAY_TLS_PORT="${RELAY_TLS_PORT:-3443}"
-# HTTP is always available on RELAY_PORT for MCP and local access
-RELAY_SCHEME="http"
-RELAY_CURL_FLAGS=""
-
 # Check if the main start script is running
 vmux_running=false
 vmux_pid=""
@@ -116,11 +110,7 @@ else
 fi
 
 if curl -s "http://127.0.0.1:${RELAY_PORT}/api/sessions" > /dev/null 2>&1; then
-    if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
-        echo "  Relay server: running on :${RELAY_PORT} (http/local) and :${RELAY_TLS_PORT} (https/external)"
-    else
-        echo "  Relay server: running on :${RELAY_PORT} (http)"
-    fi
+    echo "  Relay server: running on :${RELAY_PORT}"
 else
     echo "  Relay server: not responding"
 fi

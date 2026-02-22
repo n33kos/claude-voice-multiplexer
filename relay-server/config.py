@@ -39,15 +39,6 @@ KOKORO_SPEED = float(os.environ.get("KOKORO_SPEED", "1.0"))
 STT_SAMPLE_RATE = int(os.environ.get("STT_SAMPLE_RATE", "16000"))  # Incoming audio (capture/VAD/Whisper)
 TTS_SAMPLE_RATE = int(os.environ.get("TTS_SAMPLE_RATE", "24000"))  # Outgoing audio (Kokoro TTS)
 
-# --- TLS ---
-# When enabled, a second HTTPS server starts on RELAY_TLS_PORT (default 3443) for browser/phone access.
-# The main HTTP server on RELAY_PORT (3100) remains for MCP and localhost browser access.
-# Note: VMUX_ prefix avoids collision with the reserved SSL_CERT_FILE/SSL_KEY_FILE OpenSSL env vars.
-TLS_ENABLED = os.environ.get("TLS_ENABLED", "").lower() in ("1", "true", "yes")
-RELAY_TLS_PORT = int(os.environ.get("RELAY_TLS_PORT", "3443"))
-SSL_CERT_FILE = os.environ.get("VMUX_SSL_CERT_FILE", str(Path.home() / ".claude" / "voice-multiplexer" / "certs" / "cert.pem"))
-SSL_KEY_FILE = os.environ.get("VMUX_SSL_KEY_FILE", str(Path.home() / ".claude" / "voice-multiplexer" / "certs" / "key.pem"))
-
 # --- Authentication ---
 AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
 AUTH_TOKEN_TTL_DAYS = int(os.environ.get("AUTH_TOKEN_TTL_DAYS", "90"))

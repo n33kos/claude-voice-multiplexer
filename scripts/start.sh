@@ -283,61 +283,7 @@ fi
 # Create dist folder exists for Vite to serve, even if empty (avoids errors in dev mode before first build)
 mkdir -p "$PROJECT_DIR/web/dist" 
 
-# --- TLS certificate ---
-
-TLS_ENABLED="${TLS_ENABLED:-false}"
-RELAY_TLS_PORT="${RELAY_TLS_PORT:-3443}"
-RELAY_EXTERNAL_SCHEME="http"
-RELAY_EXTERNAL_PORT="$RELAY_PORT"
-
-if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
-    CERT_DIR="$DATA_DIR/certs"
-    mkdir -p "$CERT_DIR"
-    # Use VMUX_ prefix to avoid collision with the OpenSSL-reserved SSL_CERT_FILE/SSL_KEY_FILE env vars
-    VMUX_SSL_CERT_FILE="${VMUX_SSL_CERT_FILE:-$CERT_DIR/cert.pem}"
-    VMUX_SSL_KEY_FILE="${VMUX_SSL_KEY_FILE:-$CERT_DIR/key.pem}"
-
-    # Check if cert exists and is valid for at least 30 more days
-    cert_ok=false
-    if [ -f "$VMUX_SSL_CERT_FILE" ] && [ -f "$VMUX_SSL_KEY_FILE" ]; then
-        if openssl x509 -checkend $((30 * 86400)) -noout -in "$VMUX_SSL_CERT_FILE" 2>/dev/null; then
-            cert_ok=true
-            log "  TLS: using existing certificate"
-        else
-            log "  TLS: certificate expiring soon, regenerating..."
-        fi
-    fi
-
-    if [ "$cert_ok" = false ]; then
-        LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "127.0.0.1")
-        SAN="IP:127.0.0.1,DNS:localhost"
-        if [ "$LOCAL_IP" != "127.0.0.1" ] && [ "$LOCAL_IP" != "localhost" ]; then
-            SAN="${SAN},IP:${LOCAL_IP}"
-        fi
-        log "  TLS: generating self-signed certificate (SAN: ${SAN})..."
-        if openssl req -x509 -newkey rsa:2048 \
-            -keyout "$VMUX_SSL_KEY_FILE" \
-            -out "$VMUX_SSL_CERT_FILE" \
-            -sha256 -days 365 -nodes \
-            -subj "/CN=voice-multiplexer" \
-            -addext "subjectAltName=${SAN}" \
-            2>/dev/null; then
-            log "  TLS: certificate generated (valid 365 days)"
-        else
-            log "  TLS: WARNING: Failed to generate certificate, falling back to HTTP"
-            TLS_ENABLED=false
-        fi
-    fi
-
-    if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
-        export TLS_ENABLED RELAY_TLS_PORT VMUX_SSL_CERT_FILE VMUX_SSL_KEY_FILE
-        # HTTP stays on RELAY_PORT for localhost/MCP; HTTPS on RELAY_TLS_PORT for phone access
-        RELAY_EXTERNAL_SCHEME="https"
-        RELAY_EXTERNAL_PORT="$RELAY_TLS_PORT"
-    fi
-fi
-
-log "  Relay server: starting on :${RELAY_PORT} (HTTP/local) ${TLS_ENABLED:+and :${RELAY_TLS_PORT} (HTTPS/external)}..."
+log "  Relay server: starting on :${RELAY_PORT}..."
 cd "$PROJECT_DIR/relay-server"
 uv run \
     --python 3.12 \
@@ -370,10 +316,6 @@ if [ "$DEV_MODE" = true ]; then
     PIDS+=($!)
     log ""
     log "Open http://localhost:${WEB_PORT} in your browser"
-    if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
-        LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "your-local-ip")
-        log "Open https://${LOCAL_IP}:${RELAY_TLS_PORT} from your phone (accept the cert warning once)"
-    fi
 else
     log "  Web app: building for production..."
 
@@ -383,10 +325,6 @@ else
 
     if [ -d "$PROJECT_DIR/web/dist" ]; then
         log "Open http://localhost:${RELAY_PORT} in your browser (serving built web app)"
-        if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
-            LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "your-local-ip")
-            log "Open https://${LOCAL_IP}:${RELAY_TLS_PORT} from your phone (accept the cert warning once)"
-        fi
     else
         log "Web app not built. Run 'npm run build' in web/ or use --dev for dev mode."
         log "API available at http://localhost:${RELAY_PORT}/api/sessions"
