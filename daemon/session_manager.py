@@ -13,7 +13,7 @@ import httpx
 logger = logging.getLogger("vmuxd.sessions")
 
 SPAWN_POLL_INTERVAL = 2.0   # seconds between relay polling attempts
-SPAWN_TIMEOUT = 60.0        # max seconds to wait for session to register
+SPAWN_TIMEOUT = 120.0        # max seconds to wait for session to register
 HEALTH_CHECK_INTERVAL = 30  # seconds between health checks
 ZOMBIE_THRESHOLD = 90.0     # seconds without heartbeat = zombie
 
@@ -198,6 +198,22 @@ class SessionManager:
             if not session:
                 return None
             return {"tmux_session": session.tmux_session, "cwd": session.cwd}
+
+    async def capture_terminal(self, session_id: str, lines: int = 50) -> Optional[str]:
+        """Capture recent terminal output from a session's tmux pane."""
+        async with self._lock:
+            session = self._find_session(session_id)
+            if not session:
+                return None
+            tmux_session = session.tmux_session
+        try:
+            output = await self._run_output([
+                "tmux", "capture-pane", "-t", tmux_session, "-p", "-S", f"-{lines}"
+            ])
+            return output
+        except Exception as e:
+            logger.error(f"[sessions] capture_terminal failed: {e}")
+            return None
 
     async def list_sessions(self) -> list[dict]:
         async with self._lock:

@@ -735,6 +735,31 @@ async def client_ws(ws: WebSocket):
                 if connected_session_id and _agent:
                     asyncio.create_task(_agent.handle_claude_listening(connected_session_id))
 
+            elif msg_type == "capture_terminal":
+                # Capture terminal snapshot from daemon — bypasses Claude entirely
+                if connected_session_id:
+                    lines = int(data.get("lines", 50))
+                    result = await _daemon_ipc({
+                        "cmd": "capture-terminal",
+                        "session_id": connected_session_id,
+                        "lines": lines,
+                    })
+                    if result.get("ok"):
+                        await ws.send_text(json.dumps({
+                            "type": "terminal_snapshot",
+                            "session_id": connected_session_id,
+                            "content": result["output"],
+                            "timestamp": time.time(),
+                        }))
+                    else:
+                        await ws.send_text(json.dumps({
+                            "type": "terminal_snapshot",
+                            "session_id": connected_session_id,
+                            "content": None,
+                            "error": result.get("error", "Capture failed"),
+                            "timestamp": time.time(),
+                        }))
+
             elif msg_type == "disconnect_session":
                 if connected_session_id:
                     await registry.disconnect_client(connected_session_id, client_id)

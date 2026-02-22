@@ -85,6 +85,23 @@
   background-color: var(--color-bubble-claude);
   padding: 0.25rem 0.75rem;
   border-radius: 9999px;
+  cursor: default;
+  border: none;
+  font-family: inherit;
+}
+
+.ActivityBadgeClickable {
+  cursor: pointer;
+  transition: background-color 0.15s, opacity 0.15s;
+
+  &:hover {
+    opacity: 0.85;
+    background-color: var(--color-surface-secondary);
+  }
+
+  &:active {
+    opacity: 0.7;
+  }
 }
 
 .ActivityIcon {

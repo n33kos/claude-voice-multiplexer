@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { sessionHue } from "../../../../utils/sessionHue";
 import type { DisplaySession } from "../../../../hooks/useRelay";
 import styles from "./SessionMenu.module.scss";
@@ -31,18 +32,14 @@ export function SessionMenu({
   const [hueValue, setHueValue] = useState(0);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    function handleClick(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+  function handleOpenChange(nextOpen: boolean) {
+    setOpen(nextOpen);
+    if (!nextOpen) {
+      setRenaming(false);
+      setRecoloring(false);
     }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [open]);
+  }
 
   async function runAction(action: () => Promise<boolean>) {
     setBusy(true);
@@ -55,22 +52,22 @@ export function SessionMenu({
   }
 
   return (
-    <div ref={menuRef} className={styles.Root}>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen(!open);
-        }}
-        className={styles.MenuButton}
-        disabled={busy}
-      >
-        <svg className={styles.MenuIcon} fill="currentColor" viewBox="0 0 20 20">
-          <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
-        </svg>
-      </button>
+    <DropdownMenu.Root open={open} onOpenChange={handleOpenChange}>
+      <DropdownMenu.Trigger asChild>
+        <button className={styles.MenuButton} disabled={busy}>
+          <svg className={styles.MenuIcon} fill="currentColor" viewBox="0 0 20 20">
+            <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+          </svg>
+        </button>
+      </DropdownMenu.Trigger>
 
-      {open && (
-        <div className={styles.Dropdown}>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          className={styles.Dropdown}
+          align="end"
+          sideOffset={4}
+          onCloseAutoFocus={(e) => e.preventDefault()}
+        >
           {renaming ? (
             <div className={styles.RenameRow}>
               <input
@@ -133,88 +130,76 @@ export function SessionMenu({
             </div>
           ) : (
             <>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
+              <DropdownMenu.Item
+                className={styles.MenuItem}
+                onSelect={(e) => {
+                  e.preventDefault();
                   setRenameValue(session.display_name);
                   setRenaming(true);
                   setTimeout(() => inputRef.current?.select(), 0);
                 }}
-                className={styles.MenuItem}
               >
                 Rename
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                className={styles.MenuItem}
+                onSelect={(e) => {
+                  e.preventDefault();
                   setHueValue(session.hue_override ?? sessionHue(session.session_id));
                   setRecoloring(true);
                 }}
-                className={styles.MenuItem}
               >
                 Change color
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                className={styles.MenuItem}
+                onSelect={() => {
                   onClearTranscript(session.session_id);
                   setOpen(false);
                 }}
-                className={styles.MenuItem}
               >
                 Clear transcripts
-              </button>
+              </DropdownMenu.Item>
 
-              {/* Daemon session controls — always visible */}
               {session.daemon_managed && session.online && (
                 <>
-                  <div className={styles.Divider} />
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      runAction(() => onHardInterrupt(session.session_id));
-                    }}
+                  <DropdownMenu.Separator className={styles.Divider} />
+                  <DropdownMenu.Item
                     className={styles.MenuItem}
+                    onSelect={() => runAction(() => onHardInterrupt(session.session_id))}
                   >
                     Hard interrupt
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      runAction(() => onRestartSession(session.session_id));
-                    }}
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
                     className={styles.MenuItem}
+                    onSelect={() => runAction(() => onRestartSession(session.session_id))}
                   >
                     Restart session
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      runAction(() => onKillSession(session.session_id));
-                    }}
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
                     className={styles.DeleteItem}
+                    onSelect={() => runAction(() => onKillSession(session.session_id))}
                   >
                     Kill session
-                  </button>
+                  </DropdownMenu.Item>
                 </>
               )}
 
               {!session.online && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
+                <DropdownMenu.Item
+                  className={styles.DeleteItem}
+                  onSelect={() => {
                     onRemoveSession(session.session_id);
                     setOpen(false);
                   }}
-                  className={styles.DeleteItem}
                 >
                   Delete session
-                </button>
+                </DropdownMenu.Item>
               )}
             </>
           )}
-        </div>
-      )}
-    </div>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }

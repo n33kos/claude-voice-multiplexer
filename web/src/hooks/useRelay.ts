@@ -64,6 +64,13 @@ export interface AgentStatus {
   activity: string | null
 }
 
+export interface TerminalSnapshot {
+  sessionId: string
+  content: string | null
+  error?: string
+  timestamp: number
+}
+
 interface RelayState {
   liveSessions: Session[]
   persistedSessions: PersistedSession[]
@@ -73,6 +80,8 @@ interface RelayState {
   status: 'disconnected' | 'connecting' | 'connected'
   agentStatus: AgentStatus
   disableAutoListenSeq: number  // increments when server signals noise-only input
+  terminalSnapshot: TerminalSnapshot | null
+  terminalSnapshotLoading: boolean
 }
 
 const MAX_RECONNECT_DELAY = 10_000
@@ -181,6 +190,8 @@ export function useRelay(authenticated: boolean = true) {
     status: 'disconnected',
     agentStatus: { state: 'idle', activity: null },
     disableAutoListenSeq: 0,
+    terminalSnapshot: null,
+    terminalSnapshotLoading: false,
   })
 
   const stateRef = useRef(state)
@@ -409,6 +420,18 @@ export function useRelay(authenticated: boolean = true) {
           if (sid && data.activity) scheduleSave(sid)
           break
         }
+        case 'terminal_snapshot':
+          setState(s => ({
+            ...s,
+            terminalSnapshotLoading: false,
+            terminalSnapshot: {
+              sessionId: data.session_id,
+              content: data.content ?? null,
+              error: data.error,
+              timestamp: data.timestamp ? data.timestamp * 1000 : Date.now(),
+            },
+          }))
+          break
         case 'agent_state':
           // Backward compat: flat state without activity
           setState(s => ({ ...s, agentStatus: { state: data.state, activity: null } }))
@@ -576,6 +599,15 @@ export function useRelay(authenticated: boolean = true) {
     }
   }, [])
 
+  const requestTerminalCapture = useCallback((lines = 50) => {
+    setState(s => ({ ...s, terminalSnapshotLoading: true }))
+    wsRef.current?.send(JSON.stringify({ type: 'capture_terminal', lines }))
+  }, [])
+
+  const dismissTerminalSnapshot = useCallback(() => {
+    setState(s => ({ ...s, terminalSnapshot: null, terminalSnapshotLoading: false }))
+  }, [])
+
   const recolorSession = useCallback((sessionId: string, hue: number | null) => {
     setState(s => ({
       ...s,
@@ -607,6 +639,8 @@ export function useRelay(authenticated: boolean = true) {
     status: state.status,
     agentStatus: state.agentStatus,
     disableAutoListenSeq: state.disableAutoListenSeq,
+    terminalSnapshot: state.terminalSnapshot,
+    terminalSnapshotLoading: state.terminalSnapshotLoading,
     connectSession,
     disconnectSession,
     interruptAgent,
@@ -619,5 +653,7 @@ export function useRelay(authenticated: boolean = true) {
     killSession,
     restartSession,
     hardInterruptSession,
+    requestTerminalCapture,
+    dismissTerminalSnapshot,
   }
 }

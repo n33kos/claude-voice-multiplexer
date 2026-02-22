@@ -10,9 +10,19 @@ import { ChevronIcon } from "./components/ChevronIcon/ChevronIcon";
 import styles from "./SessionList.module.scss";
 
 function HealthBadge({ health }: { health: SessionHealth }) {
-  const label = health === "zombie" ? "zombie" : health === "dead" ? "dead" : null;
+  const label =
+    health === "zombie" ? "zombie" : health === "dead" ? "dead" : null;
   if (!label) return null;
-  return <span className={classNames(styles.HealthBadge, styles[`HealthBadge_${health}`])}>{label}</span>;
+  return (
+    <span
+      className={classNames(
+        styles.HealthBadge,
+        styles[`HealthBadge_${health}`],
+      )}
+    >
+      {label}
+    </span>
+  );
 }
 
 function NewSessionDialog({
@@ -42,7 +52,12 @@ function NewSessionDialog({
   }
 
   return (
-    <div className={styles.NewSessionOverlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div
+      className={styles.NewSessionOverlay}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className={styles.NewSessionDialog}>
         <div className={styles.NewSessionTitle}>New Session</div>
         <form onSubmit={handleSubmit}>
@@ -57,10 +72,19 @@ function NewSessionDialog({
           />
           {error && <div className={styles.NewSessionError}>{error}</div>}
           <div className={styles.NewSessionActions}>
-            <button type="button" className={styles.NewSessionCancel} onClick={onClose} disabled={spawning}>
+            <button
+              type="button"
+              className={styles.NewSessionCancel}
+              onClick={onClose}
+              disabled={spawning}
+            >
               Cancel
             </button>
-            <button type="submit" className={styles.NewSessionSubmit} disabled={!cwd.trim() || spawning}>
+            <button
+              type="submit"
+              className={styles.NewSessionSubmit}
+              disabled={!cwd.trim() || spawning}
+            >
               {spawning ? "Spawning…" : "Spawn"}
             </button>
           </div>
@@ -93,13 +117,20 @@ export function SessionList({
       <div data-component="SessionList" className={styles.EmptyState}>
         <p className={styles.EmptyTitle}>No Claude sessions</p>
         <p className={styles.EmptyHint}>
-          Use{" "}
-          <code className={styles.Code}>/voice-multiplexer:standby</code>{" "}
-          in a Claude session, or{" "}
-          <button className={styles.SpawnLink} onClick={() => setShowNewSession(true)}>spawn one</button>
+          Use <code className={styles.Code}>/voice-multiplexer:standby</code> in
+          a Claude session, or{" "}
+          <button
+            className={styles.SpawnLink}
+            onClick={() => setShowNewSession(true)}
+          >
+            spawn one
+          </button>
         </p>
         {showNewSession && (
-          <NewSessionDialog onSpawn={onSpawnSession} onClose={() => setShowNewSession(false)} />
+          <NewSessionDialog
+            onSpawn={onSpawnSession}
+            onClose={() => setShowNewSession(false)}
+          />
         )}
       </div>
     );
@@ -119,14 +150,23 @@ export function SessionList({
     : sessions;
 
   return (
-    <div data-component="SessionList" className={classNames(styles.Root, { [styles.RootFull]: !connectedSessionId })}>
+    <div
+      data-component="SessionList"
+      className={classNames(styles.Root, {
+        [styles.RootFull]: !connectedSessionId,
+      })}
+    >
       <div className={styles.HeaderRow}>
         <button
           onClick={onToggleExpanded}
           className={styles.HeaderBar}
-          style={connectedSession ? {
-            borderLeftColor: `hsla(${connectedSession.hue_override ?? sessionHue(connectedSession.session_id)}, 70%, 55%, 0.7)`,
-          } : undefined}
+          style={
+            connectedSession
+              ? {
+                  borderLeftColor: `hsla(${connectedSession.hue_override ?? sessionHue(connectedSession.session_id)}, 70%, 55%, 0.7)`,
+                }
+              : undefined
+          }
         >
           <div className={styles.HeaderLeft}>
             {connectedSession ? (
@@ -148,7 +188,10 @@ export function SessionList({
         </button>
         <button
           className={styles.NewSessionButton}
-          onClick={(e) => { e.stopPropagation(); setShowNewSession(true); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowNewSession(true);
+          }}
           title="Spawn new Claude session"
         >
           +
@@ -156,11 +199,18 @@ export function SessionList({
       </div>
 
       {showNewSession && (
-        <NewSessionDialog onSpawn={onSpawnSession} onClose={() => setShowNewSession(false)} />
+        <NewSessionDialog
+          onSpawn={onSpawnSession}
+          onClose={() => setShowNewSession(false)}
+        />
       )}
 
       {expanded && (
-        <div className={classNames(styles.ExpandedList, { [styles.ExpandedListFull]: !connectedSessionId })}>
+        <div
+          className={classNames(styles.ExpandedList, {
+            [styles.ExpandedListFull]: !connectedSessionId,
+          })}
+        >
           {sortedSessions.map((session) => {
             const isConnected =
               session.session_id === connectedSessionId && !!connectedSessionId;
@@ -181,7 +231,9 @@ export function SessionList({
                 }}
                 className={classNames(
                   styles.SessionCard,
-                  canConnect ? styles.SessionCardClickable : styles.SessionCardDisabled,
+                  canConnect
+                    ? styles.SessionCardClickable
+                    : styles.SessionCardDisabled,
                   isConnected && styles.SessionCardConnected,
                   session.health === "zombie" && styles.SessionCardZombie,
                   session.health === "dead" && styles.SessionCardDead,
@@ -203,9 +255,11 @@ export function SessionList({
                       {!session.online && (
                         <span className={styles.OfflineBadge}>offline</span>
                       )}
-                      {session.health && (session.health === "zombie" || session.health === "dead") && (
-                        <HealthBadge health={session.health} />
-                      )}
+                      {session.health &&
+                        (session.health === "zombie" ||
+                          session.health === "dead") && (
+                          <HealthBadge health={session.health} />
+                        )}
                     </div>
                     <div className={styles.DirName}>{session.dir_name}</div>
                   </div>

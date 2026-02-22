@@ -335,6 +335,13 @@ class VmuxDaemon:
                 if info:
                     return {"ok": True, **info}
                 return {"ok": False, "error": "Session not found"}
+            elif cmd == "capture-terminal":
+                session_id = request.get("session_id", "")
+                lines = int(request.get("lines", 50))
+                output = await self._session_manager.capture_terminal(session_id, lines)
+                if output is None:
+                    return {"ok": False, "error": "Session not found or tmux capture failed"}
+                return {"ok": True, "output": output}
             elif cmd == "auth-code":
                 return await self._cmd_auth_code()
             elif cmd == "update-if-newer":

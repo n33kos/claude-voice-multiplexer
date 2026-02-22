@@ -16,6 +16,7 @@ import { Settings } from "./components/Settings/Settings";
 import { ParticleNetwork } from "./components/ParticleNetwork/ParticleNetwork";
 import { Header } from "./components/Header/Header";
 import { PairScreen } from "./components/PairScreen/PairScreen";
+import { TerminalOverlay } from "./components/TerminalOverlay/TerminalOverlay";
 import styles from "./App.module.scss";
 
 // Lazy-load VoiceControls (pulls in heavy livekit-client bundle)
@@ -220,8 +221,16 @@ export default function App() {
               )?.hue_override
             }
             onSendText={relay.sendTextMessage}
+            onCaptureTerminal={relay.requestTerminalCapture}
           />
         )}
+
+        <TerminalOverlay
+          snapshot={relay.terminalSnapshot}
+          loading={relay.terminalSnapshotLoading}
+          onRefresh={relay.requestTerminalCapture}
+          onClose={relay.dismissTerminalSnapshot}
+        />
 
         {relay.connectedSessionId && !navigator.mediaDevices && (
           <InsecureContextBanner />
