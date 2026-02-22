@@ -168,10 +168,12 @@ class SessionManager:
             await self.interrupt(session_id)
             await asyncio.sleep(1.0)
             await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "/mcp reconnect plugin:voice-multiplexer:voice-multiplexer", "Enter"])
+                             "/mcp reconnect plugin:voice-multiplexer:voice-multiplexer"])
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             await asyncio.sleep(2.0)
             await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "/voice-multiplexer:standby", "Enter"])
+                             "/voice-multiplexer:standby"])
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             return True
         except Exception as e:
             logger.error(f"[sessions] hard_interrupt failed: {e}")
@@ -301,6 +303,8 @@ class SessionManager:
         except Exception:
             return
 
+        relay_by_dir = {s.get("dir_name", ""): sid for sid, s in relay_sessions.items()}
+
         for session in sessions:
             if session.status in ("spawn_failed", "dead"):
                 continue
@@ -311,6 +315,14 @@ class SessionManager:
                 async with self._lock:
                     session.status = "dead"
                 continue
+
+            # Try to resolve a pending relay_session_id
+            if session.relay_session_id is None and relay_by_dir:
+                dir_name = os.path.basename(session.cwd) if session.cwd else ""
+                if dir_name in relay_by_dir:
+                    async with self._lock:
+                        session.relay_session_id = relay_by_dir[dir_name]
+                    logger.info(f"[sessions] resolved pending relay_session_id: {session.tmux_session} -> {session.relay_session_id}")
 
             # Check relay heartbeat for zombie detection
             if session.relay_session_id:

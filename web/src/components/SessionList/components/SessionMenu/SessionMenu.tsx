@@ -185,6 +185,25 @@ export function SessionMenu({
                 </>
               )}
 
+              {session.daemon_managed && !session.online && (
+                <>
+                  <DropdownMenu.Separator className={styles.Divider} />
+                  <DropdownMenu.Item
+                    className={styles.MenuItem}
+                    onSelect={() => {
+                      const h = session.health;
+                      if (h === 'alive' || h === 'zombie') {
+                        runAction(() => onHardInterrupt(session.session_id));
+                      } else {
+                        runAction(() => onRestartSession(session.session_id));
+                      }
+                    }}
+                  >
+                    Reconnect
+                  </DropdownMenu.Item>
+                </>
+              )}
+
               {!session.online && (
                 <DropdownMenu.Item
                   className={styles.DeleteItem}

@@ -41,7 +41,7 @@ export function TerminalOverlay({ snapshot, loading, onRefresh, onClose }: Termi
             <div className={styles.Actions}>
               <button
                 className={styles.RefreshButton}
-                onClick={onRefresh}
+                onClick={() => onRefresh()}
                 disabled={loading}
                 title="Refresh snapshot"
               >

@@ -136,6 +136,7 @@ function mergeDisplaySessions(
         last_interaction: getLastInteraction(transcripts, p.session_id),
         connected_clients: [],
         hue_override: p.hue_override,
+        daemon_managed: p.daemon_managed,
       })
     }
   }
@@ -223,6 +224,7 @@ export function useRelay(authenticated: boolean = true) {
         last_seen: s.last_heartbeat,
         display_name: overrides?.display_name,
         hue_override: overrides?.hue_override,
+        daemon_managed: s.daemon_managed,
       })
     }
     // Also update local persisted state so merge is correct

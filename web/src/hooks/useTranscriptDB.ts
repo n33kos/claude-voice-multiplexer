@@ -12,6 +12,7 @@ export interface PersistedSession {
   last_seen: number
   display_name?: string    // user-set override
   hue_override?: number    // user-set color hue (0-360), overrides deterministic hue
+  daemon_managed?: boolean // true if managed by vmuxd
 }
 
 function openDB(): Promise<IDBDatabase> {

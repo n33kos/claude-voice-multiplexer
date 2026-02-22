@@ -215,7 +215,7 @@ export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, o
               <div key={i} className={styles.ActivityMessage}>
                 <button
                   className={classNames(styles.ActivityBadge, { [styles.ActivityBadgeClickable]: !!onCaptureTerminal })}
-                  onClick={onCaptureTerminal}
+                  onClick={() => onCaptureTerminal?.()}
                   title={onCaptureTerminal ? "Click to view terminal" : undefined}
                 >
                   <svg className={classNames(styles.ActivityIcon, { [styles.ActivityIconSpin]: isLatest })} viewBox="0 0 24 24" fill="none" strokeWidth={2} stroke="currentColor">
