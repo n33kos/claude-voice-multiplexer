@@ -269,9 +269,8 @@ log_section "Building web app"
 WEB_DIR="$PROJECT_DIR/web"
 WEB_DIST="$WEB_DIR/dist"
 
-if [ -d "$WEB_DIST" ] && [ "$FORCE" = false ]; then
-    log "Web app already built at $WEB_DIST"
-    log "  Use --force to rebuild"
+if false; then
+    : # web app is always rebuilt to pick up latest UI changes
 else
     if [ ! -d "$WEB_DIR" ]; then
         echo "ERROR: Web directory not found at $WEB_DIR"
@@ -299,6 +298,12 @@ else
     WEB_SIZE=$(du -sh "$WEB_DIST" | cut -f1)
     log "Web app built successfully: $WEB_DIST ($WEB_SIZE)"
 fi
+
+# Copy web dist into DATA_DIR so the daemon can serve it from a managed path
+# (and so auto-updates can replace it without touching the plugin source dir).
+mkdir -p "$DATA_DIR/web"
+cp -r "$WEB_DIST/." "$DATA_DIR/web/dist/"
+log "Web dist copied to $DATA_DIR/web/dist"
 
 # --- Generate config ---
 
@@ -429,11 +434,23 @@ ln -sf "$DAEMON_INSTALL_DIR/vmux" "$VMUX_LINK"
 log "vmux CLI installed at $VMUX_LINK"
 
 # Resolve absolute paths for launchd (launchd does not support ~ expansion)
-PYTHON3_PATH=$(python3 -c "import sys; print(sys.executable)")
+UV_PATH=$(command -v uv || echo "$HOME/.local/bin/uv")
 VMUXD_PATH="$DAEMON_INSTALL_DIR/vmuxd.py"
+VMUXD_WRAPPER="$DAEMON_INSTALL_DIR/vmuxd"
 LOG_PATH="$DATA_DIR/logs/daemon.log"
 LOG_ERR_PATH="$DATA_DIR/logs/daemon-error.log"
 PLUGIN_DIR="$PROJECT_DIR"
+
+# Generate a named wrapper script so macOS shows "vmuxd" (not "python3") in
+# the Background Items notification. Uses uv run so Python version and deps
+# are managed by uv/pyproject.toml regardless of the system Python.
+cat > "$VMUXD_WRAPPER" << WRAPPER_EOF
+#!/bin/bash
+cd "${DAEMON_INSTALL_DIR}"
+exec "${UV_PATH}" run "${VMUXD_PATH}" "\$@"
+WRAPPER_EOF
+chmod +x "$VMUXD_WRAPPER"
+log "vmuxd wrapper generated at $VMUXD_WRAPPER (using uv run)"
 
 # Write launchd plist
 cat > "$LAUNCHD_PLIST" << PLIST_EOF
@@ -445,8 +462,7 @@ cat > "$LAUNCHD_PLIST" << PLIST_EOF
     <string>com.vmux.daemon</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${PYTHON3_PATH}</string>
-        <string>${VMUXD_PATH}</string>
+        <string>${VMUXD_WRAPPER}</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>

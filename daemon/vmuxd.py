@@ -147,8 +147,9 @@ def _build_service_configs():
         ServiceConfig(
             name="kokoro",
             cmd=[
-                str(kokoro_repo / ".venv" / "bin" / "uvicorn"),
-                "api.src.main:app",
+                "uv", "run",
+                "--no-sync",  # use the existing venv created by install.sh
+                "uvicorn", "api.src.main:app",
                 "--host", "127.0.0.1",
                 "--port", str(kokoro_port),
             ],
@@ -199,6 +200,8 @@ def _build_service_configs():
                 "WHISPER_URL": f"http://127.0.0.1:{whisper_port}/v1",
                 "KOKORO_URL": f"http://127.0.0.1:{kokoro_port}/v1",
                 "VMUX_DAEMON_SECRET": _load_or_create_daemon_secret(),
+                # Point relay server to the managed web dist so auto-updates take effect.
+                "VMUX_WEB_DIST": str(DATA_DIR / "web" / "dist"),
             },
             cwd=str(relay_server_dir),
             health_url=f"http://127.0.0.1:{relay_port}/api/health",
@@ -214,11 +217,14 @@ class VmuxDaemon:
         self._session_manager = None
         self._ipc_server = None
         self._daemon_secret: str = ""
-        self._shutdown_event = asyncio.Event()
+        self._shutdown_event: Optional[asyncio.Event] = None  # created in run() on the correct loop
         self._update_task: Optional[asyncio.Task] = None
         self._state_task: Optional[asyncio.Task] = None
 
     async def run(self):
+        # Create Event inside the coroutine so it binds to asyncio.run()'s loop.
+        # Creating it in __init__ causes "Future attached to a different loop" on Python 3.9.
+        self._shutdown_event = asyncio.Event()
         logger.info(f"vmuxd starting (pid={os.getpid()})")
         _load_env()
         self._daemon_secret = _load_or_create_daemon_secret()
@@ -424,10 +430,44 @@ class VmuxDaemon:
 
         try:
             import shutil
+            # 1. Copy daemon files
             shutil.copytree(str(src_daemon_dir), str(DAEMON_DIR), dirs_exist_ok=True)
-            # Write new version
             VERSION_FILE.write_text(latest_version)
-            logger.info(f"Daemon updated to {latest_version}")
+            logger.info(f"Daemon files updated to {latest_version}")
+
+            # 2. Copy relay-server files
+            src_relay = latest_dir / "relay-server"
+            dst_relay = DATA_DIR / "relay-server"
+            if src_relay.exists():
+                shutil.copytree(str(src_relay), str(dst_relay), dirs_exist_ok=True)
+                logger.info("relay-server files updated")
+
+            # 3. Update web dist — prefer pre-built dist in cache, fall back to npm build
+            src_web_dist = latest_dir / "web" / "dist"
+            dst_web_dist = DATA_DIR / "web" / "dist"
+            dst_web_dist.parent.mkdir(parents=True, exist_ok=True)
+            if src_web_dist.exists():
+                shutil.copytree(str(src_web_dist), str(dst_web_dist), dirs_exist_ok=True)
+                logger.info("web dist updated from cache")
+            else:
+                # No pre-built dist — try to build from source
+                src_web = latest_dir / "web"
+                if src_web.exists() and (src_web / "package.json").exists():
+                    import subprocess
+                    logger.info("Building web app from source...")
+                    r = subprocess.run(
+                        ["npm", "run", "build"],
+                        cwd=str(src_web),
+                        capture_output=True,
+                        timeout=120,
+                    )
+                    if r.returncode == 0 and (src_web / "dist").exists():
+                        shutil.copytree(str(src_web / "dist"), str(dst_web_dist), dirs_exist_ok=True)
+                        logger.info("web app rebuilt and updated")
+                    else:
+                        logger.warning(f"web app build failed: {r.stderr.decode()[:200]}")
+
+            logger.info(f"Update complete: {installed_version} → {latest_version}")
             return {"ok": True, "updated": True, "version": latest_version}
         except Exception as e:
             return {"ok": False, "error": str(e)}

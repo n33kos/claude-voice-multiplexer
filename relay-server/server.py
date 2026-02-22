@@ -10,6 +10,7 @@ Bridges web clients (phone/browser) with Claude Code sessions via:
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -890,7 +891,10 @@ class LimitedStaticFiles(StaticFiles):
         async with _static_file_semaphore:
             await super().__call__(scope, receive, send)
 
-web_dist = Path(__file__).parent.parent / "web" / "dist"
+# VMUX_WEB_DIST lets the daemon point to a managed path that auto-updates can replace.
+# Falls back to the path relative to this file (dev / source-tree installs).
+_web_dist_env = os.environ.get("VMUX_WEB_DIST", "")
+web_dist = Path(_web_dist_env) if _web_dist_env else Path(__file__).parent.parent / "web" / "dist"
 if web_dist.exists():
     app.mount("/", LimitedStaticFiles(directory=str(web_dist), html=True), name="web")
 else:
