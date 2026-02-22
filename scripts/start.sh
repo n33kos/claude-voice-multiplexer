@@ -286,7 +286,9 @@ mkdir -p "$PROJECT_DIR/web/dist"
 # --- TLS certificate ---
 
 TLS_ENABLED="${TLS_ENABLED:-false}"
-RELAY_SCHEME="http"
+RELAY_TLS_PORT="${RELAY_TLS_PORT:-3443}"
+RELAY_EXTERNAL_SCHEME="http"
+RELAY_EXTERNAL_PORT="$RELAY_PORT"
 
 if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
     CERT_DIR="$DATA_DIR/certs"
@@ -328,12 +330,14 @@ if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
     fi
 
     if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
-        export TLS_ENABLED VMUX_SSL_CERT_FILE VMUX_SSL_KEY_FILE
-        RELAY_SCHEME="https"
+        export TLS_ENABLED RELAY_TLS_PORT VMUX_SSL_CERT_FILE VMUX_SSL_KEY_FILE
+        # HTTP stays on RELAY_PORT for localhost/MCP; HTTPS on RELAY_TLS_PORT for phone access
+        RELAY_EXTERNAL_SCHEME="https"
+        RELAY_EXTERNAL_PORT="$RELAY_TLS_PORT"
     fi
 fi
 
-log "  Relay server: starting on :${RELAY_PORT}..."
+log "  Relay server: starting on :${RELAY_PORT} (HTTP/local) ${TLS_ENABLED:+and :${RELAY_TLS_PORT} (HTTPS/external)}..."
 cd "$PROJECT_DIR/relay-server"
 uv run \
     --python 3.12 \
@@ -365,7 +369,11 @@ if [ "$DEV_MODE" = true ]; then
 
     PIDS+=($!)
     log ""
-    log "Open ${RELAY_SCHEME}://localhost:${WEB_PORT} in your browser"
+    log "Open http://localhost:${WEB_PORT} in your browser"
+    if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
+        LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "your-local-ip")
+        log "Open https://${LOCAL_IP}:${RELAY_TLS_PORT} from your phone (accept the cert warning once)"
+    fi
 else
     log "  Web app: building for production..."
 
@@ -374,10 +382,14 @@ else
     npx vite build > /dev/null
 
     if [ -d "$PROJECT_DIR/web/dist" ]; then
-        log "Open ${RELAY_SCHEME}://localhost:${RELAY_PORT} in your browser (serving built web app)"
+        log "Open http://localhost:${RELAY_PORT} in your browser (serving built web app)"
+        if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
+            LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "your-local-ip")
+            log "Open https://${LOCAL_IP}:${RELAY_TLS_PORT} from your phone (accept the cert warning once)"
+        fi
     else
         log "Web app not built. Run 'npm run build' in web/ or use --dev for dev mode."
-        log "API available at ${RELAY_SCHEME}://localhost:${RELAY_PORT}/api/sessions"
+        log "API available at http://localhost:${RELAY_PORT}/api/sessions"
     fi
 fi
 

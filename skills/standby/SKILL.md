@@ -22,14 +22,17 @@ Before entering standby, verify services are installed and running:
 After services are confirmed running, print the web app URL and a fresh pairing code so the user can connect immediately.
 
 1. Get the local network IP by running: `ipconfig getifaddr en0 2>/dev/null || echo localhost`
-2. Detect the URL scheme: run `grep -q "TLS_ENABLED=true\|TLS_ENABLED=1" ~/.claude/voice-multiplexer/voice-multiplexer.env 2>/dev/null && echo https || echo http` to determine if TLS is enabled. Use `https` if so, otherwise `http`.
-3. Call the `generate_auth_code` MCP tool to get a one-time pairing code
-4. Print everything together in a single block like:
+2. Detect if TLS is enabled: `grep -q "TLS_ENABLED=true\|TLS_ENABLED=1" ~/.claude/voice-multiplexer/voice-multiplexer.env 2>/dev/null && echo yes || echo no`
+3. Get the TLS port if enabled: `grep "^RELAY_TLS_PORT=" ~/.claude/voice-multiplexer/voice-multiplexer.env 2>/dev/null | cut -d= -f2 || echo 3443`
+4. Call the `generate_auth_code` MCP tool to get a one-time pairing code
+5. Print everything together in a single block:
+   - **Without TLS**: show `http://<local-ip>:3100` for phone, `http://localhost:3100` for local
+   - **With TLS**: show `https://<local-ip>:<tls-port>` for phone (getUserMedia requires HTTPS), `http://localhost:3100` for local
 
 ```
 Voice Multiplexer ready — open on your phone:
-  https://<local-ip>:3100
-  (or https://localhost:3100 from this machine)
+  https://<local-ip>:<tls-port>        ← phone/tablet (HTTPS required for mic)
+  http://localhost:3100                ← this machine
 
 Pairing code: <CODE>  (expires in 60s)
 

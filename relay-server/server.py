@@ -20,7 +20,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, 
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import RELAY_HOST, RELAY_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AUTH_ENABLED, WHISPER_URL, KOKORO_URL, TLS_ENABLED, SSL_CERT_FILE, SSL_KEY_FILE
+from config import RELAY_HOST, RELAY_PORT, RELAY_TLS_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AUTH_ENABLED, WHISPER_URL, KOKORO_URL, TLS_ENABLED, SSL_CERT_FILE, SSL_KEY_FILE
 import auth
 from registry import SessionRegistry
 from livekit_agent import RelayAgent
@@ -768,9 +768,19 @@ else:
 
 
 if __name__ == "__main__":
+    import asyncio
     import uvicorn
-    kwargs: dict = {"host": RELAY_HOST, "port": RELAY_PORT}
+
     if TLS_ENABLED:
-        kwargs["ssl_keyfile"] = SSL_KEY_FILE
-        kwargs["ssl_certfile"] = SSL_CERT_FILE
-    uvicorn.run(app, **kwargs)
+        # HTTP on localhost only (for MCP and local browser access — .mcp.json stays unchanged)
+        # HTTPS on all interfaces on RELAY_TLS_PORT (for phone/remote browser access with getUserMedia)
+        async def _serve_both():
+            http_server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=RELAY_PORT))
+            https_server = uvicorn.Server(uvicorn.Config(
+                app, host=RELAY_HOST, port=RELAY_TLS_PORT,
+                ssl_keyfile=SSL_KEY_FILE, ssl_certfile=SSL_CERT_FILE,
+            ))
+            await asyncio.gather(http_server.serve(), https_server.serve())
+        asyncio.run(_serve_both())
+    else:
+        uvicorn.run(app, host=RELAY_HOST, port=RELAY_PORT)
