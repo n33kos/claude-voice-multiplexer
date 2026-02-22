@@ -888,18 +888,18 @@ async def livekit_http_proxy(request: Request, path: str):
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            async with client.stream(
+            resp = await client.request(
                 method=request.method,
                 url=target,
                 content=await request.body(),
                 headers={k: v for k, v in request.headers.items() if k.lower() not in ("host", "transfer-encoding")},
-            ) as resp:
-                return Response(
-                    content=resp.content,
-                    status_code=resp.status_code,
-                    headers=dict(resp.headers),
-                    media_type=resp.headers.get("content-type")
-                )
+            )
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=dict(resp.headers),
+                media_type=resp.headers.get("content-type")
+            )
     except Exception as e:
         return Response(content=str(e), status_code=502)
 
