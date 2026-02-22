@@ -343,7 +343,12 @@ async def get_token(request: Request, room: str = "multiplexer", identity: str =
     # The relay proxies /livekit/* to the local LiveKit server, so remote
     # clients (phones, ngrok tunnels) reach LiveKit through a single port.
     host = request.headers.get("host", f"localhost:{RELAY_PORT}")
-    scheme = "wss" if request.headers.get("x-forwarded-proto") == "https" else "ws"
+    # Use wss when: (a) behind a TLS-terminating proxy, or (b) uvicorn itself is serving TLS
+    is_https = (
+        request.headers.get("x-forwarded-proto") == "https"
+        or request.url.scheme == "https"
+    )
+    scheme = "wss" if is_https else "ws"
     livekit_url = f"{scheme}://{host}/livekit"
 
     return JSONResponse({
