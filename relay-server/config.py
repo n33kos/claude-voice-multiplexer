@@ -18,12 +18,6 @@ except ImportError:
 # --- Server ---
 RELAY_HOST = os.environ.get("RELAY_HOST", "0.0.0.0")
 RELAY_PORT = int(os.environ.get("RELAY_PORT", "3100"))
-# HTTPS always runs on RELAY_TLS_PORT alongside HTTP on RELAY_PORT.
-# Cert is auto-generated at ~/.claude/voice-multiplexer/certs/ on first start.
-# Note: VMUX_ prefix avoids collision with OpenSSL-reserved SSL_CERT_FILE/SSL_KEY_FILE env vars.
-RELAY_TLS_PORT = int(os.environ.get("RELAY_TLS_PORT", "3443"))
-SSL_CERT_FILE = os.environ.get("VMUX_SSL_CERT_FILE", str(Path.home() / ".claude" / "voice-multiplexer" / "certs" / "cert.pem"))
-SSL_KEY_FILE = os.environ.get("VMUX_SSL_KEY_FILE", str(Path.home() / ".claude" / "voice-multiplexer" / "certs" / "key.pem"))
 
 # --- External services ---
 WHISPER_URL = os.environ.get("WHISPER_URL", "http://127.0.0.1:8100/v1")
