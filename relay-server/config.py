@@ -40,9 +40,10 @@ STT_SAMPLE_RATE = int(os.environ.get("STT_SAMPLE_RATE", "16000"))  # Incoming au
 TTS_SAMPLE_RATE = int(os.environ.get("TTS_SAMPLE_RATE", "24000"))  # Outgoing audio (Kokoro TTS)
 
 # --- TLS ---
+# Note: VMUX_ prefix avoids collision with the reserved SSL_CERT_FILE/SSL_KEY_FILE OpenSSL env vars
 TLS_ENABLED = os.environ.get("TLS_ENABLED", "").lower() in ("1", "true", "yes")
-SSL_CERT_FILE = os.environ.get("SSL_CERT_FILE", str(Path.home() / ".claude" / "voice-multiplexer" / "certs" / "cert.pem"))
-SSL_KEY_FILE = os.environ.get("SSL_KEY_FILE", str(Path.home() / ".claude" / "voice-multiplexer" / "certs" / "key.pem"))
+SSL_CERT_FILE = os.environ.get("VMUX_SSL_CERT_FILE", str(Path.home() / ".claude" / "voice-multiplexer" / "certs" / "cert.pem"))
+SSL_KEY_FILE = os.environ.get("VMUX_SSL_KEY_FILE", str(Path.home() / ".claude" / "voice-multiplexer" / "certs" / "key.pem"))
 
 # --- Authentication ---
 AUTH_SECRET = os.environ.get("AUTH_SECRET", "")

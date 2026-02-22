@@ -391,8 +391,8 @@ AUTH_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 #   ~/.claude/voice-multiplexer/certs/
 # Users must accept the certificate warning once in their browser.
 # TLS_ENABLED=false
-# SSL_CERT_FILE=~/.claude/voice-multiplexer/certs/cert.pem
-# SSL_KEY_FILE=~/.claude/voice-multiplexer/certs/key.pem
+# VMUX_SSL_CERT_FILE=~/.claude/voice-multiplexer/certs/cert.pem
+# VMUX_SSL_KEY_FILE=~/.claude/voice-multiplexer/certs/key.pem
 EOF
     log "Config written to $CONFIG_FILE"
 else

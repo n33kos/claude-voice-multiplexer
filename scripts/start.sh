@@ -291,13 +291,14 @@ RELAY_SCHEME="http"
 if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
     CERT_DIR="$DATA_DIR/certs"
     mkdir -p "$CERT_DIR"
-    SSL_CERT_FILE="${SSL_CERT_FILE:-$CERT_DIR/cert.pem}"
-    SSL_KEY_FILE="${SSL_KEY_FILE:-$CERT_DIR/key.pem}"
+    # Use VMUX_ prefix to avoid collision with the OpenSSL-reserved SSL_CERT_FILE/SSL_KEY_FILE env vars
+    VMUX_SSL_CERT_FILE="${VMUX_SSL_CERT_FILE:-$CERT_DIR/cert.pem}"
+    VMUX_SSL_KEY_FILE="${VMUX_SSL_KEY_FILE:-$CERT_DIR/key.pem}"
 
     # Check if cert exists and is valid for at least 30 more days
     cert_ok=false
-    if [ -f "$SSL_CERT_FILE" ] && [ -f "$SSL_KEY_FILE" ]; then
-        if openssl x509 -checkend $((30 * 86400)) -noout -in "$SSL_CERT_FILE" 2>/dev/null; then
+    if [ -f "$VMUX_SSL_CERT_FILE" ] && [ -f "$VMUX_SSL_KEY_FILE" ]; then
+        if openssl x509 -checkend $((30 * 86400)) -noout -in "$VMUX_SSL_CERT_FILE" 2>/dev/null; then
             cert_ok=true
             log "  TLS: using existing certificate"
         else
@@ -313,8 +314,8 @@ if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
         fi
         log "  TLS: generating self-signed certificate (SAN: ${SAN})..."
         if openssl req -x509 -newkey rsa:2048 \
-            -keyout "$SSL_KEY_FILE" \
-            -out "$SSL_CERT_FILE" \
+            -keyout "$VMUX_SSL_KEY_FILE" \
+            -out "$VMUX_SSL_CERT_FILE" \
             -sha256 -days 365 -nodes \
             -subj "/CN=voice-multiplexer" \
             -addext "subjectAltName=${SAN}" \
@@ -327,7 +328,7 @@ if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
     fi
 
     if [ "$TLS_ENABLED" = "true" ] || [ "$TLS_ENABLED" = "1" ]; then
-        export TLS_ENABLED SSL_CERT_FILE SSL_KEY_FILE
+        export TLS_ENABLED VMUX_SSL_CERT_FILE VMUX_SSL_KEY_FILE
         RELAY_SCHEME="https"
     fi
 fi
