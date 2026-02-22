@@ -27,14 +27,15 @@ After services are confirmed running, print the web app URL and a fresh pairing 
 
 ```
 Voice Multiplexer ready — open on your phone:
-  http://<local-ip>:3100
-  (or http://localhost:3100 from this machine)
+  https://<local-ip>:3443    ← phone/tablet (HTTPS — accept cert warning once)
+  http://localhost:3100      ← this machine
 
 Pairing code: <CODE>  (expires in 60s)
 ```
 
-Use the `RELAY_PORT` from the config (default 3100). If `DEV_MODE=true`, show `:5173` for the Vite dev server instead.
-If the auth code tool returns an error (e.g. auth not enabled), skip the pairing code line silently — just show the URL.
+Use `RELAY_PORT` (default 3100) for the HTTP URL and `RELAY_TLS_PORT` (default 3443) for the HTTPS URL.
+If `DEV_MODE=true`, show the Vite dev server port instead of 3100 for the local URL.
+If the auth code tool returns an error (e.g. auth not enabled), skip the pairing code line silently — just show the URLs.
 
 ## Instructions
 

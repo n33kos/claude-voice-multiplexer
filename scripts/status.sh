@@ -31,6 +31,7 @@ fi
 WHISPER_PORT="${VMUX_WHISPER_PORT:-8100}"
 KOKORO_PORT="${VMUX_KOKORO_PORT:-8101}"
 RELAY_PORT="${RELAY_PORT:-3100}"
+RELAY_TLS_PORT="${RELAY_TLS_PORT:-3443}"
 LIVEKIT_PORT="${LIVEKIT_PORT:-7880}"
 
 # Check if the main start script is running
@@ -110,7 +111,11 @@ else
 fi
 
 if curl -s "http://127.0.0.1:${RELAY_PORT}/api/sessions" > /dev/null 2>&1; then
-    echo "  Relay server: running on :${RELAY_PORT}"
+    TLS_STATUS=""
+    if curl -sk "https://127.0.0.1:${RELAY_TLS_PORT}/api/sessions" > /dev/null 2>&1; then
+        TLS_STATUS=" + :${RELAY_TLS_PORT} (https)"
+    fi
+    echo "  Relay server: running on :${RELAY_PORT} (http)${TLS_STATUS}"
 else
     echo "  Relay server: not responding"
 fi
