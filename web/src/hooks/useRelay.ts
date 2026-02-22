@@ -9,11 +9,14 @@ import {
   pruneStaleData,
   type PersistedSession,
 } from './useTranscriptDB'
+import { authFetch } from './useAuth'
 
 export interface ConnectedClient {
   client_id: string
   device_name: string
 }
+
+export type SessionHealth = 'alive' | 'standby' | 'zombie' | 'dead' | 'spawn_failed'
 
 export interface Session {
   session_id: string
@@ -24,6 +27,8 @@ export interface Session {
   connected_clients: ConnectedClient[]
   created_at: number
   last_heartbeat: number
+  health?: SessionHealth
+  daemon_managed?: boolean
 }
 
 export interface DisplaySession {
@@ -38,6 +43,8 @@ export interface DisplaySession {
   last_interaction: number | null  // ms timestamp of last user/claude transcript entry
   connected_clients: ConnectedClient[]
   hue_override?: number          // user-set color hue (0-360)
+  health?: SessionHealth         // daemon-reported health (nil = not daemon-managed)
+  daemon_managed?: boolean       // true if managed by vmuxd
 }
 
 export interface TranscriptEntry {
@@ -138,6 +145,8 @@ function mergeDisplaySessions(
       last_interaction: getLastInteraction(transcripts, s.session_id),
       connected_clients: s.connected_clients || [],
       hue_override: hueOverrides.get(s.session_id),
+      health: s.health,
+      daemon_managed: s.daemon_managed,
     })
   }
 
@@ -523,6 +532,50 @@ export function useRelay(authenticated: boolean = true) {
     }
   }, [])
 
+  const spawnSession = useCallback(async (cwd: string): Promise<{ ok: boolean; error?: string; session_id?: string }> => {
+    try {
+      const resp = await authFetch('/api/sessions/spawn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd }),
+      })
+      const data = await resp.json()
+      if (!resp.ok) {
+        return { ok: false, error: data.error || 'Spawn failed' }
+      }
+      return { ok: true, session_id: data.session_id }
+    } catch {
+      return { ok: false, error: 'Network error' }
+    }
+  }, [])
+
+  const killSession = useCallback(async (sessionId: string): Promise<boolean> => {
+    try {
+      const resp = await authFetch(`/api/sessions/${sessionId}`, { method: 'DELETE' })
+      return resp.ok
+    } catch {
+      return false
+    }
+  }, [])
+
+  const restartSession = useCallback(async (sessionId: string): Promise<boolean> => {
+    try {
+      const resp = await authFetch(`/api/sessions/${sessionId}/restart`, { method: 'POST' })
+      return resp.ok
+    } catch {
+      return false
+    }
+  }, [])
+
+  const hardInterruptSession = useCallback(async (sessionId: string): Promise<boolean> => {
+    try {
+      const resp = await authFetch(`/api/sessions/${sessionId}/interrupt`, { method: 'POST' })
+      return resp.ok
+    } catch {
+      return false
+    }
+  }, [])
+
   const recolorSession = useCallback((sessionId: string, hue: number | null) => {
     setState(s => ({
       ...s,
@@ -562,5 +615,9 @@ export function useRelay(authenticated: boolean = true) {
     removeSession,
     renameSession,
     recolorSession,
+    spawnSession,
+    killSession,
+    restartSession,
+    hardInterruptSession,
   }
 }

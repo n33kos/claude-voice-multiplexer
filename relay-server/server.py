@@ -20,7 +20,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, 
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import RELAY_HOST, RELAY_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AUTH_ENABLED, WHISPER_URL, KOKORO_URL
+from config import RELAY_HOST, RELAY_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AUTH_ENABLED, WHISPER_URL, KOKORO_URL, DAEMON_SECRET
 import auth
 from registry import SessionRegistry
 from livekit_agent import RelayAgent
@@ -43,10 +43,34 @@ _transcript_seq: dict[str, int] = {}  # session_id → next sequence number
 
 # --- Auth helpers ---
 
+def _is_daemon_request(request: Request) -> bool:
+    """Check if request is from the vmux daemon (X-Daemon-Secret header)."""
+    if not DAEMON_SECRET:
+        return False
+    return request.headers.get("X-Daemon-Secret") == DAEMON_SECRET
+
+
 def _get_device(request: Request) -> Optional[dict]:
-    """Extract and validate device from JWT cookie. Returns payload or None."""
+    """Extract and validate device from JWT.
+
+    Checks (in order):
+    1. Daemon secret header — grants full access, no device record needed
+    2. Authorization: Bearer <jwt> header
+    3. vmux_token cookie (legacy / WebSocket upgrade fallback)
+    """
     if not AUTH_ENABLED:
         return {"device_id": "anonymous", "device_name": "anonymous"}
+    if _is_daemon_request(request):
+        return {"device_id": "daemon", "device_name": "vmuxd"}
+    # Bearer header
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        if token:
+            payload = auth.validate_token(token)
+            if payload:
+                return payload
+    # Cookie fallback (backwards compat)
     token = request.cookies.get(auth.COOKIE_NAME)
     if not token:
         return None
@@ -58,18 +82,32 @@ def _require_auth(request: Request) -> dict:
     device = _get_device(request)
     if not device:
         raise HTTPException(status_code=401, detail="Authentication required")
-    auth.update_last_seen(device["device_id"])
+    if device["device_id"] not in ("anonymous", "daemon"):
+        auth.update_last_seen(device["device_id"])
     return device
 
 
 def _get_ws_device(ws: WebSocket) -> Optional[dict]:
-    """Extract device from WebSocket upgrade cookies."""
+    """Extract device from WebSocket upgrade.
+
+    Checks (in order):
+    1. vmux_token cookie (browser auto-sends cookies on WS upgrade)
+    2. Sec-WebSocket-Protocol header used as token carrier (non-standard workaround)
+    """
     if not AUTH_ENABLED:
         return {"device_id": "anonymous", "device_name": "anonymous"}
     token = ws.cookies.get(auth.COOKIE_NAME)
-    if not token:
-        return None
-    return auth.validate_token(token)
+    if token:
+        return auth.validate_token(token)
+    # Subprotocol token trick — client sends "vmux-token.<jwt>" as a subprotocol
+    for proto in ws.headers.get("sec-websocket-protocol", "").split(","):
+        proto = proto.strip()
+        if proto.startswith("vmux-token."):
+            token = proto[len("vmux-token."):]
+            payload = auth.validate_token(token)
+            if payload:
+                return payload
+    return None
 
 
 async def _notify_client_status(session_id: str, state: str, activity: Optional[str] = None, *, disable_auto_listen: bool = False):
@@ -217,10 +255,13 @@ async def pair_device(request: Request):
     auth.register_device(device_id, device_name)
     token = auth.issue_token(device_id, device_name)
 
+    # Return token in body so web app can store it for Authorization: Bearer header.
+    # Also set cookie for WebSocket handshake auth (browsers auto-send cookies).
     response = JSONResponse({
         "success": True,
         "device_id": device_id,
         "device_name": device_name,
+        "token": token,
     })
     response.set_cookie(
         key=auth.COOKIE_NAME,
@@ -314,6 +355,73 @@ async def list_sessions(request: Request):
     _require_auth(request)
     sessions = await registry.list_sessions()
     return JSONResponse({"sessions": sessions})
+
+
+async def _daemon_ipc(cmd: dict) -> dict:
+    """Send a command to vmuxd via Unix socket. Returns response dict."""
+    import asyncio as _asyncio
+    SOCKET_PATH = "/tmp/vmuxd.sock"
+    try:
+        reader, writer = await _asyncio.wait_for(
+            _asyncio.open_unix_connection(SOCKET_PATH), timeout=5.0
+        )
+        writer.write((json.dumps(cmd) + "\n").encode())
+        await writer.drain()
+        line = await _asyncio.wait_for(reader.readline(), timeout=10.0)
+        writer.close()
+        await writer.wait_closed()
+        return json.loads(line.decode().strip())
+    except FileNotFoundError:
+        return {"ok": False, "error": "vmuxd is not running"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/sessions/spawn")
+async def spawn_session(request: Request):
+    """Spawn a new Claude session in a given directory (requires daemon)."""
+    _require_auth(request)
+    body = await request.json()
+    cwd = body.get("cwd", "").strip()
+    if not cwd:
+        return JSONResponse({"error": "cwd is required"}, status_code=400)
+    result = await _daemon_ipc({"cmd": "spawn", "cwd": cwd})
+    if result.get("ok"):
+        return JSONResponse(result)
+    return JSONResponse({"error": result.get("error", "Spawn failed")}, status_code=500)
+
+
+@app.delete("/api/sessions/{session_id}")
+async def kill_session(session_id: str, request: Request):
+    """Kill a spawned Claude session (requires daemon)."""
+    _require_auth(request)
+    result = await _daemon_ipc({"cmd": "kill", "session_id": session_id})
+    if result.get("ok"):
+        # Also unregister from the relay registry
+        await registry.unregister(session_id)
+        await _broadcast_sessions()
+        return JSONResponse({"success": True})
+    return JSONResponse({"error": result.get("error", "Kill failed")}, status_code=500)
+
+
+@app.post("/api/sessions/{session_id}/interrupt")
+async def interrupt_session(session_id: str, request: Request):
+    """Send hard interrupt to a session via daemon (Ctrl-C + re-enter standby)."""
+    _require_auth(request)
+    result = await _daemon_ipc({"cmd": "hard-interrupt", "session_id": session_id})
+    if result.get("ok"):
+        return JSONResponse({"success": True})
+    return JSONResponse({"error": result.get("error", "Interrupt failed")}, status_code=500)
+
+
+@app.post("/api/sessions/{session_id}/restart")
+async def restart_session_endpoint(session_id: str, request: Request):
+    """Kill + respawn a session via daemon."""
+    _require_auth(request)
+    result = await _daemon_ipc({"cmd": "restart-session", "session_id": session_id})
+    if result.get("ok"):
+        return JSONResponse(result)
+    return JSONResponse({"error": result.get("error", "Restart failed")}, status_code=500)
 
 
 @app.get("/api/token")
@@ -643,9 +751,35 @@ async def client_ws(ws: WebSocket):
         await _broadcast_sessions()
 
 
+async def _get_daemon_session_health() -> dict[str, str]:
+    """Fetch session health info from the daemon. Returns {relay_session_id: health_status}."""
+    try:
+        result = await _daemon_ipc({"cmd": "list"})
+        if result.get("ok"):
+            return {
+                s["relay_session_id"]: s["status"]
+                for s in result.get("sessions", [])
+                if s.get("relay_session_id")
+            }
+    except Exception:
+        pass
+    return {}
+
+
 async def _broadcast_sessions():
     """Send updated session list to all connected web clients."""
     sessions = await registry.list_sessions()
+    # Augment with daemon health info if available
+    try:
+        health_map = await _get_daemon_session_health()
+        if health_map:
+            for s in sessions:
+                sid = s.get("session_id")
+                if sid in health_map:
+                    s["health"] = health_map[sid]
+                    s["daemon_managed"] = True
+    except Exception:
+        pass
     msg = json.dumps({"type": "sessions", "sessions": sessions})
     for client_ws in list(_clients.values()):
         try:

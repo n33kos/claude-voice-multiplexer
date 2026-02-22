@@ -9,6 +9,9 @@ interface SessionMenuProps {
   onRemoveSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, displayName: string) => void;
   onRecolorSession: (sessionId: string, hue: number | null) => void;
+  onKillSession: (sessionId: string) => Promise<boolean>;
+  onRestartSession: (sessionId: string) => Promise<boolean>;
+  onHardInterrupt: (sessionId: string) => Promise<boolean>;
 }
 
 export function SessionMenu({
@@ -17,12 +20,16 @@ export function SessionMenu({
   onRemoveSession,
   onRenameSession,
   onRecolorSession,
+  onKillSession,
+  onRestartSession,
+  onHardInterrupt,
 }: SessionMenuProps) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [recoloring, setRecoloring] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [hueValue, setHueValue] = useState(0);
+  const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -37,6 +44,16 @@ export function SessionMenu({
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open]);
 
+  async function runAction(action: () => Promise<boolean>) {
+    setBusy(true);
+    setOpen(false);
+    try {
+      await action();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div ref={menuRef} className={styles.Root}>
       <button
@@ -45,6 +62,7 @@ export function SessionMenu({
           setOpen(!open);
         }}
         className={styles.MenuButton}
+        disabled={busy}
       >
         <svg className={styles.MenuIcon} fill="currentColor" viewBox="0 0 20 20">
           <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
@@ -146,6 +164,41 @@ export function SessionMenu({
               >
                 Clear transcripts
               </button>
+
+              {/* Daemon session controls — always visible */}
+              {session.daemon_managed && session.online && (
+                <>
+                  <div className={styles.Divider} />
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      runAction(() => onHardInterrupt(session.session_id));
+                    }}
+                    className={styles.MenuItem}
+                  >
+                    Hard interrupt
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      runAction(() => onRestartSession(session.session_id));
+                    }}
+                    className={styles.MenuItem}
+                  >
+                    Restart session
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      runAction(() => onKillSession(session.session_id));
+                    }}
+                    className={styles.DeleteItem}
+                  >
+                    Kill session
+                  </button>
+                </>
+              )}
+
               {!session.online && (
                 <button
                   onClick={(e) => {

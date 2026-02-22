@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+"""vmux — control the vmux daemon from the command line.
+
+Usage:
+  vmux status                     print service + session status
+  vmux spawn <path>               spawn new Claude session in directory
+  vmux kill <session-id>          kill a session
+  vmux attach <session-id>        attach to a session's tmux terminal
+  vmux sessions                   list sessions
+  vmux restart <session-id>       kill + respawn a session
+  vmux restart <service>          restart an infrastructure service (whisper|kokoro|livekit|relay)
+  vmux interrupt <session-id>     send Ctrl-C to a session
+  vmux hard-interrupt <session-id>  Ctrl-C + MCP reconnect + re-enter standby
+  vmux auth-code                  generate a one-time pairing code for the web app
+  vmux update-if-newer            update daemon from plugin cache if newer version available
+  vmux shutdown                   stop daemon and all children
+"""
+
+import json
+import os
+import socket
+import sys
+
+SOCKET_PATH = "/tmp/vmuxd.sock"
+SERVICES = {"whisper", "kokoro", "livekit", "relay"}
+
+
+def _send(cmd: dict) -> dict:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(30)
+        sock.connect(SOCKET_PATH)
+        sock.sendall(json.dumps(cmd).encode() + b"\n")
+        buf = b""
+        while True:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+            if b"\n" in buf:
+                break
+        return json.loads(buf.decode().strip())
+    except FileNotFoundError:
+        _die("vmuxd is not running.\n  Start it with: launchctl start com.vmux.daemon\n  Or install: run scripts/install.sh")
+    except ConnectionRefusedError:
+        _die("vmuxd not responding.\n  Check logs: ~/.claude/voice-multiplexer/logs/daemon.log")
+    except json.JSONDecodeError as e:
+        _die(f"Bad response from daemon: {e}")
+    finally:
+        sock.close()
+
+
+def _die(msg: str):
+    print(f"Error: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _ok(result: dict) -> bool:
+    if not result.get("ok"):
+        print(f"Error: {result.get('error', 'unknown error')}", file=sys.stderr)
+        return False
+    return True
+
+
+def cmd_status():
+    r = _send({"cmd": "status"})
+    if not _ok(r):
+        return
+    print(f"vmuxd (pid {r.get('daemon_pid', '?')})")
+    print()
+    print("Services:")
+    for name, status in r.get("services", {}).items():
+        icon = "✓" if status == "running" else "✗" if status == "failed" else "·"
+        print(f"  {icon} {name:<12} {status}")
+    print()
+    sessions = r.get("sessions", [])
+    if sessions:
+        print(f"Sessions ({len(sessions)}):")
+        for s in sessions:
+            relay_id = s.get("relay_session_id") or "(pending)"
+            cwd = s.get("cwd", "")
+            status = s.get("status", "?")
+            tmux = s.get("tmux_session", "")
+            print(f"  [{status}] {relay_id}  {cwd}  ({tmux})")
+    else:
+        print("No active sessions.")
+
+
+def cmd_spawn(path: str):
+    path = os.path.abspath(os.path.expanduser(path))
+    print(f"Spawning session in {path}...")
+    r = _send({"cmd": "spawn", "cwd": path})
+    if not _ok(r):
+        return
+    print(f"Session spawned:")
+    print(f"  session_id:   {r.get('session_id', '?')}")
+    print(f"  tmux_session: {r.get('tmux_session', '?')}")
+    print(f"  daemon_id:    {r.get('daemon_id', '?')}")
+    print(f"\nAttach with: vmux attach {r.get('session_id', '?')}")
+
+
+def cmd_kill(session_id: str):
+    r = _send({"cmd": "kill", "session_id": session_id})
+    if _ok(r):
+        print(f"Session {session_id} killed.")
+
+
+def cmd_attach(session_id: str):
+    r = _send({"cmd": "attach-info", "session_id": session_id})
+    if not _ok(r):
+        return
+    tmux_session = r.get("tmux_session", "")
+    if not tmux_session:
+        _die("No tmux session info returned")
+    print(f"Attaching to {tmux_session}...")
+    os.execlp("tmux", "tmux", "attach-session", "-t", tmux_session)
+
+
+def cmd_sessions():
+    r = _send({"cmd": "list"})
+    if not _ok(r):
+        return
+    sessions = r.get("sessions", [])
+    if not sessions:
+        print("No active sessions.")
+        return
+    print(f"Sessions ({len(sessions)}):")
+    for s in sessions:
+        relay_id = s.get("relay_session_id") or "(pending)"
+        status = s.get("status", "?")
+        cwd = s.get("cwd", "")
+        tmux = s.get("tmux_session", "")
+        print(f"  [{status}] {relay_id}")
+        print(f"            cwd:  {cwd}")
+        print(f"            tmux: {tmux}")
+
+
+def cmd_restart(target: str):
+    if target in SERVICES:
+        r = _send({"cmd": "restart", "service": target})
+    else:
+        r = _send({"cmd": "restart-session", "session_id": target})
+    if _ok(r):
+        print(f"Restarted: {target}")
+        if r.get("session_id"):
+            print(f"New session_id: {r.get('session_id')}")
+
+
+def cmd_interrupt(session_id: str):
+    r = _send({"cmd": "interrupt", "session_id": session_id})
+    if _ok(r):
+        print(f"Sent Ctrl-C to {session_id}.")
+
+
+def cmd_hard_interrupt(session_id: str):
+    print(f"Sending hard interrupt to {session_id} (Ctrl-C + MCP reconnect + standby)...")
+    r = _send({"cmd": "hard-interrupt", "session_id": session_id})
+    if _ok(r):
+        print(f"Hard interrupt sent.")
+
+
+def cmd_auth_code():
+    r = _send({"cmd": "auth-code"})
+    if not _ok(r):
+        return
+    code = r.get("code")
+    expires = r.get("expires_in", 60)
+    if code:
+        print(f"\nPairing code: {code}  (expires in {expires}s)\n")
+        print("Open the web app and enter this code to authorize a new device.")
+    else:
+        print("Authentication is not enabled (no AUTH_SECRET configured).")
+
+
+def cmd_update():
+    r = _send({"cmd": "update-if-newer"})
+    if not _ok(r):
+        return
+    if r.get("updated"):
+        print(f"Updated to version {r.get('version')}. Daemon will restart via launchd.")
+    else:
+        print(f"Up to date ({r.get('current', '?')}). Latest in cache: {r.get('latest', '?')}")
+
+
+def cmd_shutdown():
+    r = _send({"cmd": "shutdown"})
+    if _ok(r):
+        print("Daemon shutting down...")
+
+
+def usage():
+    print(__doc__)
+    sys.exit(0)
+
+
+def main():
+    if len(sys.argv) < 2:
+        usage()
+
+    sub = sys.argv[1]
+
+    if sub in ("status",):
+        cmd_status()
+    elif sub == "spawn":
+        if len(sys.argv) < 3:
+            _die("Usage: vmux spawn <path>")
+        cmd_spawn(sys.argv[2])
+    elif sub == "kill":
+        if len(sys.argv) < 3:
+            _die("Usage: vmux kill <session-id>")
+        cmd_kill(sys.argv[2])
+    elif sub == "attach":
+        if len(sys.argv) < 3:
+            _die("Usage: vmux attach <session-id>")
+        cmd_attach(sys.argv[2])
+    elif sub == "sessions":
+        cmd_sessions()
+    elif sub == "restart":
+        if len(sys.argv) < 3:
+            _die("Usage: vmux restart <session-id|service>")
+        cmd_restart(sys.argv[2])
+    elif sub == "interrupt":
+        if len(sys.argv) < 3:
+            _die("Usage: vmux interrupt <session-id>")
+        cmd_interrupt(sys.argv[2])
+    elif sub == "hard-interrupt":
+        if len(sys.argv) < 3:
+            _die("Usage: vmux hard-interrupt <session-id>")
+        cmd_hard_interrupt(sys.argv[2])
+    elif sub in ("auth-code", "authcode"):
+        cmd_auth_code()
+    elif sub in ("update", "update-if-newer"):
+        cmd_update()
+    elif sub == "shutdown":
+        cmd_shutdown()
+    elif sub in ("-h", "--help", "help"):
+        usage()
+    else:
+        _die(f"Unknown command: {sub}\nRun 'vmux help' for usage.")
+
+
+if __name__ == "__main__":
+    main()

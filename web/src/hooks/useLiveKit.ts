@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { authFetch } from './useAuth'
 
 interface LiveKitState {
   token: string | null
@@ -17,7 +18,7 @@ export function useLiveKit() {
 
   const fetchToken = useCallback(async (room: string) => {
     try {
-      const resp = await fetch(`/api/token?room=${encodeURIComponent(room)}`)
+      const resp = await authFetch(`/api/token?room=${encodeURIComponent(room)}`)
       if (!resp.ok) throw new Error(`Token fetch failed: ${resp.status}`)
       const data = await resp.json()
       setState({

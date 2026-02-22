@@ -3,18 +3,15 @@
 # claude-voice-multiplexer:status
 #
 # Check the status of all Claude Voice Multiplexer services.
-# Exit code 0 if the multiplexer is running, 1 if not.
+# Exit code 0 if services are running, 1 if not.
 #
 # Usage:
 #   ./scripts/status.sh           # Human-readable output
 #   ./scripts/status.sh --quiet   # Exit code only (for scripting)
 #
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-PID_FILE="$HOME/.claude/voice-multiplexer/.vmux.pid"
-PROCESS_NAME="claude-voice-multiplexer:start"
 DATA_DIR="$HOME/.claude/voice-multiplexer"
+VMUX_CLI="$DATA_DIR/daemon/vmux"
 QUIET=false
 
 if [ "$1" = "--quiet" ] || [ "$1" = "-q" ]; then
@@ -33,7 +30,30 @@ KOKORO_PORT="${VMUX_KOKORO_PORT:-8101}"
 RELAY_PORT="${RELAY_PORT:-3100}"
 LIVEKIT_PORT="${LIVEKIT_PORT:-7880}"
 
-# Check if the main start script is running
+# --- Prefer vmux daemon status ---
+if [ -f "$VMUX_CLI" ]; then
+    if [ "$QUIET" = true ]; then
+        # Quiet: check if relay is responding (daemon manages everything)
+        if curl -s --max-time 2 "http://127.0.0.1:${RELAY_PORT}/api/auth/status" > /dev/null 2>&1 \
+            && curl -s --max-time 2 "http://127.0.0.1:${WHISPER_PORT}/" > /dev/null 2>&1 \
+            && curl -s --max-time 2 "http://127.0.0.1:${KOKORO_PORT}/health" > /dev/null 2>&1; then
+            exit 0
+        else
+            exit 1
+        fi
+    fi
+
+    # Human-readable via vmux status
+    "$VMUX_CLI" status 2>/dev/null && exit 0
+
+    echo "vmuxd is not running."
+    echo "  Start with: launchctl start com.vmux.daemon"
+    exit 1
+fi
+
+# --- Legacy fallback (pre-daemon install) ---
+PID_FILE="$DATA_DIR/.vmux.pid"
+
 vmux_running=false
 vmux_pid=""
 
@@ -47,14 +67,13 @@ if [ -f "$PID_FILE" ]; then
 fi
 
 if [ "$vmux_running" = false ]; then
-    vmux_pid=$(pgrep -f "$PROCESS_NAME" 2>/dev/null | grep -v "$$" | head -1 || true)
+    vmux_pid=$(pgrep -f "scripts/start.sh" 2>/dev/null | grep -v "$$" | head -1 || true)
     if [ -n "$vmux_pid" ]; then
         vmux_running=true
     fi
 fi
 
 if [ "$QUIET" = true ]; then
-    # Check that the multiplexer AND critical services are actually responding
     if [ "$vmux_running" = true ] \
         && curl -s --max-time 2 "http://127.0.0.1:${WHISPER_PORT}/" > /dev/null 2>&1 \
         && curl -s --max-time 2 "http://127.0.0.1:${KOKORO_PORT}/health" > /dev/null 2>&1 \
@@ -68,7 +87,6 @@ fi
 echo "Claude Voice Multiplexer Status"
 echo ""
 
-# Installation
 if [ -d "$DATA_DIR" ]; then
     TOTAL_SIZE=$(du -sh "$DATA_DIR" 2>/dev/null | cut -f1)
     WHISPER_MODEL="${VMUX_WHISPER_MODEL:-base}"
@@ -84,35 +102,26 @@ fi
 
 echo ""
 
-# Services
 if [ "$vmux_running" = true ]; then
     echo "  Multiplexer: running (PID $vmux_pid)"
 else
     echo "  Multiplexer: stopped"
 fi
 
-if curl -s "http://127.0.0.1:${WHISPER_PORT}/" > /dev/null 2>&1; then
-    echo "  Whisper: running on :${WHISPER_PORT}"
-else
-    echo "  Whisper: not responding"
-fi
+curl -s --max-time 2 "http://127.0.0.1:${WHISPER_PORT}/" > /dev/null 2>&1 \
+    && echo "  Whisper: running on :${WHISPER_PORT}" \
+    || echo "  Whisper: not responding"
 
-if curl -s "http://127.0.0.1:${KOKORO_PORT}/health" > /dev/null 2>&1; then
-    echo "  Kokoro: running on :${KOKORO_PORT}"
-else
-    echo "  Kokoro: not responding"
-fi
+curl -s --max-time 2 "http://127.0.0.1:${KOKORO_PORT}/health" > /dev/null 2>&1 \
+    && echo "  Kokoro: running on :${KOKORO_PORT}" \
+    || echo "  Kokoro: not responding"
 
-if curl -s "http://127.0.0.1:${LIVEKIT_PORT}" > /dev/null 2>&1; then
-    echo "  LiveKit: running on :${LIVEKIT_PORT}"
-else
-    echo "  LiveKit: not responding"
-fi
+curl -s --max-time 2 "http://127.0.0.1:${LIVEKIT_PORT}" > /dev/null 2>&1 \
+    && echo "  LiveKit: running on :${LIVEKIT_PORT}" \
+    || echo "  LiveKit: not responding"
 
-if curl -s "http://127.0.0.1:${RELAY_PORT}/api/sessions" > /dev/null 2>&1; then
-    echo "  Relay server: running on :${RELAY_PORT}"
-else
-    echo "  Relay server: not responding"
-fi
+curl -s --max-time 2 "http://127.0.0.1:${RELAY_PORT}/api/auth/status" > /dev/null 2>&1 \
+    && echo "  Relay server: running on :${RELAY_PORT}" \
+    || echo "  Relay server: not responding"
 
 [ "$vmux_running" = true ] && exit 0 || exit 1

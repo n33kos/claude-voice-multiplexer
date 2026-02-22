@@ -124,6 +124,13 @@ if ! check_cmd livekit-server; then
 fi
 log "livekit-server: OK"
 
+# tmux (required for daemon session spawning)
+if ! check_cmd tmux; then
+    log "tmux: not found, installing via Homebrew..."
+    brew install tmux
+fi
+log "tmux: OK ($(tmux -V))"
+
 # --- Create data directory ---
 
 mkdir -p "$DATA_DIR/logs"
@@ -400,6 +407,96 @@ else
     fi
 fi
 
+# --- Install daemon ---
+
+log_section "Installing vmuxd daemon"
+
+DAEMON_INSTALL_DIR="$DATA_DIR/daemon"
+LAUNCHD_PLIST="$HOME/Library/LaunchAgents/com.vmux.daemon.plist"
+
+# Copy daemon files to install location
+mkdir -p "$DAEMON_INSTALL_DIR"
+cp -r "$PROJECT_DIR/daemon/." "$DAEMON_INSTALL_DIR/"
+log "Daemon files copied to $DAEMON_INSTALL_DIR"
+
+# Ensure vmux CLI is executable
+chmod +x "$DAEMON_INSTALL_DIR/vmux"
+
+# Create a symlink in a PATH-accessible location
+VMUX_LINK="$HOME/.local/bin/vmux"
+mkdir -p "$(dirname "$VMUX_LINK")"
+ln -sf "$DAEMON_INSTALL_DIR/vmux" "$VMUX_LINK"
+log "vmux CLI installed at $VMUX_LINK"
+
+# Resolve absolute paths for launchd (launchd does not support ~ expansion)
+PYTHON3_PATH=$(python3 -c "import sys; print(sys.executable)")
+VMUXD_PATH="$DAEMON_INSTALL_DIR/vmuxd.py"
+LOG_PATH="$DATA_DIR/logs/daemon.log"
+LOG_ERR_PATH="$DATA_DIR/logs/daemon-error.log"
+PLUGIN_DIR="$PROJECT_DIR"
+
+# Write launchd plist
+cat > "$LAUNCHD_PLIST" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.vmux.daemon</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${PYTHON3_PATH}</string>
+        <string>${VMUXD_PATH}</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>VMUX_PLUGIN_DIR</key>
+        <string>${PLUGIN_DIR}</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:${HOME}/.local/bin</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>${DAEMON_INSTALL_DIR}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>${LOG_PATH}</string>
+    <key>StandardErrorPath</key>
+    <string>${LOG_ERR_PATH}</string>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>
+PLIST_EOF
+log "launchd plist written to $LAUNCHD_PLIST"
+
+# Load the daemon
+if launchctl list com.vmux.daemon &>/dev/null; then
+    log "Reloading daemon (already registered)..."
+    launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
+fi
+launchctl load -w "$LAUNCHD_PLIST"
+log "Daemon loaded via launchd (com.vmux.daemon)"
+
+# Wait a moment then generate a pairing code
+sleep 3
+PAIR_CODE=$(python3 -c "
+import socket, json
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    sock.settimeout(5)
+    sock.connect('/tmp/vmuxd.sock')
+    sock.sendall(json.dumps({'cmd': 'auth-code'}).encode() + b'\n')
+    resp = json.loads(sock.recv(4096).decode().strip())
+    print(resp.get('code', ''))
+except:
+    print('')
+finally:
+    sock.close()
+" 2>/dev/null)
+
 # --- Summary ---
 
 log_section "Installation complete"
@@ -416,7 +513,24 @@ log "  Total:   $TOTAL_SIZE"
 log ""
 log "Web app: $WEB_SIZE (built in $WEB_DIR/dist)"
 echo ""
-log "Next steps:"
-log "  1. Start services: ./scripts/start.sh"
-log "  2. Enter standby:  /voice-multiplexer:relay-standby"
+log ""
+log "vmuxd daemon: running as launchd service (com.vmux.daemon)"
+log "  Start/stop:   launchctl start/stop com.vmux.daemon"
+log "  Status:       vmux status"
+log "  Logs:         $DATA_DIR/logs/daemon.log"
+echo ""
+if [ -n "$PAIR_CODE" ]; then
+    log "Open the web app and enter this pairing code:"
+    log ""
+    log "    Pairing code: $PAIR_CODE"
+    log ""
+    log "  Web app: http://localhost:3100"
+    LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "your-local-ip")
+    log "  From phone:  http://${LOCAL_IP}:3100"
+else
+    log "Next steps:"
+    log "  1. Open http://localhost:3100 in your browser"
+    log "  2. Run: vmux auth-code  — to generate a pairing code"
+    log "  3. Enter the code in the web app to authorize your device"
+fi
 echo ""

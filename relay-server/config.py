@@ -44,6 +44,11 @@ AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
 AUTH_TOKEN_TTL_DAYS = int(os.environ.get("AUTH_TOKEN_TTL_DAYS", "90"))
 AUTH_ENABLED = bool(AUTH_SECRET)
 
+# --- Daemon integration ---
+# Shared secret between vmuxd and relay server — set by daemon on startup.
+# Daemon calls relay endpoints with X-Daemon-Secret header to bypass user auth.
+DAEMON_SECRET = os.environ.get("VMUX_DAEMON_SECRET", "")
+
 # --- VAD (Voice Activity Detection) ---
 VAD_AGGRESSIVENESS = int(os.environ.get("VAD_AGGRESSIVENESS", "2"))  # 0=permissive, 3=strict
 SILENCE_THRESHOLD_MS = int(os.environ.get("SILENCE_THRESHOLD_MS", "2500"))

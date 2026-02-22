@@ -13,7 +13,7 @@ from config import AUTH_SECRET, AUTH_TOKEN_TTL_DAYS, AUTH_ENABLED
 
 DEVICES_FILE = Path.home() / ".claude" / "voice-multiplexer" / "devices.json"
 CODE_TTL_S = 60
-COOKIE_NAME = "vmux_token"
+COOKIE_NAME = "vmux_token"  # kept for backwards compat (WS handshake uses cookies)
 
 # In-memory store for pending pairing codes: {code: {expires_at}}
 _pending_codes: dict[str, dict] = {}

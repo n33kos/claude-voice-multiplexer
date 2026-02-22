@@ -5,33 +5,33 @@ description: Start the Claude Voice Multiplexer relay server and all supporting 
 
 # Start Voice Multiplexer Services
 
-Start Whisper (STT), Kokoro (TTS), LiveKit, the relay server, and all supporting services needed for voice multiplexing.
+Start the vmuxd daemon and all supporting services (Whisper, Kokoro, LiveKit, relay server).
 
 ## Instructions
 
-1. Check if `~/.claude/voice-multiplexer/` exists. If not, run `"${CLAUDE_PLUGIN_ROOT}/scripts/install.sh"` first. This is a one-time setup.
+In v2.0+, services are managed by the vmuxd daemon which auto-starts on login via launchd.
 
-2. Check if the services are already running:
+1. Check if services are already running:
    ```
    Run: "${CLAUDE_PLUGIN_ROOT}/scripts/status.sh" --quiet
    ```
-   If exit code is 0, tell the user "Voice Multiplexer services are already running." and stop.
+   If exit code is 0, tell the user services are already running and stop.
 
-3. If not running, start the services in the background:
+2. If not running, start the daemon:
    ```
-   Run: nohup "${CLAUDE_PLUGIN_ROOT}/scripts/start.sh" > /tmp/vmux-start.log 2>&1 &
+   Run: launchctl start com.vmux.daemon
    ```
 
-4. Wait up to 90 seconds (Kokoro model loading takes ~60s), then check status:
+3. Wait up to 90 seconds (Kokoro model loading takes ~60s), checking status every 10s:
    ```
    Run: "${CLAUDE_PLUGIN_ROOT}/scripts/status.sh"
    ```
 
-5. Report the result to the user. If the relay server is responding, services are ready.
+4. Report the result to the user.
 
 ## Notes
 
-- The start script handles duplicate-instance protection via PID file
-- Whisper and Kokoro are started automatically from the installed data directory
-- LiveKit is auto-started if not already running
-- Use `/voice-multiplexer:stop-services` to stop everything
+- If `vmux` is not installed, prompt the user to run `./scripts/install.sh` first
+- Services are supervised by launchd and auto-restart on crash
+- Use `/voice-multiplexer:stop-services` to stop everything (calls `vmux shutdown`)
+- Logs: `~/.claude/voice-multiplexer/logs/daemon.log`

@@ -5,11 +5,11 @@ description: Stop the Claude Voice Multiplexer relay server and all supporting s
 
 # Stop Voice Multiplexer Services
 
-Stop all running Voice Multiplexer services (Whisper, Kokoro, LiveKit, relay server, dev server).
+Stop all running Voice Multiplexer services via the vmuxd daemon.
 
 ## Instructions
 
-1. Run the stop script:
+1. Run the stop script (which delegates to `vmux shutdown` in v2.0+):
    ```
    Run: "${CLAUDE_PLUGIN_ROOT}/scripts/stop.sh"
    ```
@@ -18,6 +18,7 @@ Stop all running Voice Multiplexer services (Whisper, Kokoro, LiveKit, relay ser
 
 ## Notes
 
-- The stop script uses a two-pass strategy: checks PID file first, then falls back to process name search
-- Sends SIGTERM first for graceful shutdown, then SIGKILL after 5 seconds if needed
-- Also kills processes by port as a final fallback for orphaned subshell children
+- In v2.0+, this calls `vmux shutdown` which stops the daemon and all managed child processes
+- The daemon gracefully terminates children (SIGTERM → 5s wait → SIGKILL)
+- launchd will restart the daemon automatically because `KeepAlive: true` — to permanently stop, use: `launchctl stop com.vmux.daemon`
+- To disable auto-start at login: `launchctl unload ~/Library/LaunchAgents/com.vmux.daemon.plist`

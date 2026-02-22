@@ -199,6 +199,10 @@ export default function App() {
           onRemoveSession={relay.removeSession}
           onRenameSession={relay.renameSession}
           onRecolorSession={relay.recolorSession}
+          onSpawnSession={relay.spawnSession}
+          onKillSession={relay.killSession}
+          onRestartSession={relay.restartSession}
+          onHardInterrupt={relay.hardInterruptSession}
         />
 
         {relay.connectedSessionId && (
