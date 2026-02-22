@@ -178,6 +178,7 @@ A Python server (FastAPI + Uvicorn) that bridges the web client, Claude sessions
 
 | Skill            | Description                                                           |
 | ---------------- | --------------------------------------------------------------------- |
+| `install`        | Run the full installer (builds deps, sets up launchd daemon)          |
 | `standby`        | Enter standby mode (checks relay is up, no auto-start needed)         |
 | `start-services` | Start the daemon via launchctl if not running                         |
 | `stop-services`  | Stop all services via `vmux shutdown`                                 |
@@ -226,7 +227,17 @@ All settings are configured via `~/.claude/voice-multiplexer/voice-multiplexer.e
 - Python 3.10+ with `uv` (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
 - Node.js 20+ with npm
 
-### Install Script
+### Install via Skill (Recommended)
+
+Once the plugin is installed in Claude Code, just run the install skill from any Claude session:
+
+```
+/voice-multiplexer:install
+```
+
+Claude will confirm with you, then run the installer and report the pairing code when done.
+
+### Install Script (Manual)
 
 ```bash
 # Install with defaults (base Whisper model, ~142 MB)
@@ -434,7 +445,7 @@ If `version > installed VERSION`:
 ```
 claude-voice-multiplexer/
 ├── .claude-plugin/
-│   └── plugin.json                      # Plugin manifest (v2.0.0)
+│   └── plugin.json                      # Plugin manifest (v2.0.1)
 ├── .mcp.json                            # Bundled MCP server definition
 ├── README.md
 ├── daemon/
@@ -445,6 +456,7 @@ claude-voice-multiplexer/
 │   ├── vmux                             # CLI wrapper (Python, executable)
 │   └── VERSION                          # Installed daemon version
 ├── skills/
+│   ├── install/SKILL.md
 │   ├── standby/SKILL.md
 │   ├── start-services/SKILL.md
 │   ├── stop-services/SKILL.md
