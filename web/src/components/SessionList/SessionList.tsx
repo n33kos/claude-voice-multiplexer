@@ -278,6 +278,7 @@ export function SessionList({
                       onKillSession={onKillSession}
                       onRestartSession={onRestartSession}
                       onHardInterrupt={onHardInterrupt}
+                      onSpawnSession={onSpawnSession}
                     />
                   </div>
                 </div>

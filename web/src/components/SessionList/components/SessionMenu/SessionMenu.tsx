@@ -13,6 +13,7 @@ interface SessionMenuProps {
   onKillSession: (sessionId: string) => Promise<boolean>;
   onRestartSession: (sessionId: string) => Promise<boolean>;
   onHardInterrupt: (sessionId: string) => Promise<boolean>;
+  onSpawnSession: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export function SessionMenu({
@@ -24,6 +25,7 @@ export function SessionMenu({
   onKillSession,
   onRestartSession,
   onHardInterrupt,
+  onSpawnSession,
 }: SessionMenuProps) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -190,14 +192,25 @@ export function SessionMenu({
                   <DropdownMenu.Separator className={styles.Divider} />
                   <DropdownMenu.Item
                     className={styles.MenuItem}
-                    onSelect={() => {
-                      const h = session.health;
-                      if (h === 'alive' || h === 'zombie') {
-                        runAction(() => onHardInterrupt(session.session_id));
-                      } else {
-                        runAction(() => onRestartSession(session.session_id));
-                      }
-                    }}
+                    onSelect={() => runAction(() => onHardInterrupt(session.session_id))}
+                  >
+                    Reconnect
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    className={styles.DeleteItem}
+                    onSelect={() => runAction(() => onRestartSession(session.session_id))}
+                  >
+                    Restart session
+                  </DropdownMenu.Item>
+                </>
+              )}
+
+              {!session.daemon_managed && !session.online && session.cwd && (
+                <>
+                  <DropdownMenu.Separator className={styles.Divider} />
+                  <DropdownMenu.Item
+                    className={styles.MenuItem}
+                    onSelect={() => runAction(() => onSpawnSession(session.cwd).then(r => r.ok))}
                   >
                     Reconnect
                   </DropdownMenu.Item>

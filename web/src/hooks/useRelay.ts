@@ -129,7 +129,7 @@ function mergeDisplaySessions(
         session_name: p.session_name,
         display_name: p.display_name || p.session_name,
         dir_name: p.dir_name,
-        cwd: '',
+        cwd: p.cwd || '',
         room_name: makeRoomName(p.session_id),
         online: false,
         last_seen: p.last_seen,
@@ -221,6 +221,7 @@ export function useRelay(authenticated: boolean = true) {
         session_id: s.session_id,
         session_name: s.name,
         dir_name: s.dir_name,
+        cwd: s.cwd,
         last_seen: s.last_heartbeat,
         display_name: overrides?.display_name,
         hue_override: overrides?.hue_override,
@@ -238,9 +239,11 @@ export function useRelay(authenticated: boolean = true) {
           session_id: s.session_id,
           session_name: s.name,
           dir_name: s.dir_name,
+          cwd: s.cwd,
           last_seen: s.last_heartbeat,
           display_name: existing?.display_name,
           hue_override: existing?.hue_override,
+          daemon_managed: s.daemon_managed,
         })
       }
       return { ...prev, persistedSessions: Array.from(persistedMap.values()) }

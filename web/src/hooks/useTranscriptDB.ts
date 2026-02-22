@@ -9,6 +9,7 @@ export interface PersistedSession {
   session_id: string       // primary key — hash of directory path
   session_name: string     // default name from MCP server
   dir_name: string
+  cwd?: string             // full working directory path (used for reconnect)
   last_seen: number
   display_name?: string    // user-set override
   hue_override?: number    // user-set color hue (0-360), overrides deterministic hue
