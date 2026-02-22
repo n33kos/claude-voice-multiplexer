@@ -385,6 +385,14 @@ AUTH_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 
 # How long device authorization tokens last (in days)
 # AUTH_TOKEN_TTL_DAYS=90
+
+# --- TLS / HTTPS ---
+# A self-signed certificate is auto-generated at startup and stored in:
+#   ~/.claude/voice-multiplexer/certs/
+# Users must accept the certificate warning once in their browser.
+# TLS_ENABLED=false
+# SSL_CERT_FILE=~/.claude/voice-multiplexer/certs/cert.pem
+# SSL_KEY_FILE=~/.claude/voice-multiplexer/certs/key.pem
 EOF
     log "Config written to $CONFIG_FILE"
 else
