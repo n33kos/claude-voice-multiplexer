@@ -424,6 +424,12 @@ mkdir -p "$DAEMON_INSTALL_DIR"
 cp -r "$PROJECT_DIR/daemon/." "$DAEMON_INSTALL_DIR/"
 log "Daemon files copied to $DAEMON_INSTALL_DIR"
 
+# Copy relay-server files to managed location (auto-updates will maintain this)
+RELAY_INSTALL_DIR="$DATA_DIR/relay-server"
+mkdir -p "$RELAY_INSTALL_DIR"
+cp -r "$PROJECT_DIR/relay-server/." "$RELAY_INSTALL_DIR/"
+log "Relay server files copied to $RELAY_INSTALL_DIR"
+
 # Ensure vmux CLI is executable
 chmod +x "$DAEMON_INSTALL_DIR/vmux"
 

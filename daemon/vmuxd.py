@@ -119,16 +119,21 @@ def _build_service_configs():
         except Exception:
             whisper_threads = "4"
 
-    # Resolve relay-server path: prefer VMUX_PLUGIN_DIR (set by launchd plist),
-    # fall back to __file__-relative (works when running from source tree directly).
+    # Resolve relay-server path. Priority order:
+    # 1. DATA_DIR/relay-server — managed copy updated by auto-updates
+    # 2. VMUX_PLUGIN_DIR/relay-server — initial install / plugin cache
+    # 3. __file__-relative — dev / running from source tree
+    relay_server_managed = DATA_DIR / "relay-server"
     plugin_dir = os.environ.get("VMUX_PLUGIN_DIR", "")
-    if plugin_dir:
+    if relay_server_managed.exists():
+        relay_server_dir = relay_server_managed
+    elif plugin_dir:
         relay_server_dir = Path(plugin_dir) / "relay-server"
     else:
         relay_server_dir = Path(__file__).parent.parent / "relay-server"
 
     if not relay_server_dir.exists():
-        logger.error("relay-server not found at %s — set VMUX_PLUGIN_DIR", relay_server_dir)
+        logger.error("relay-server not found at %s", relay_server_dir)
 
     configs = [
         ServiceConfig(
@@ -477,6 +482,24 @@ class VmuxDaemon:
                         logger.info("web app rebuilt and updated")
                     else:
                         logger.warning(f"web app build failed: {r.stderr.decode()[:200]}")
+
+            # 4. Update the launchd plist so VMUX_PLUGIN_DIR points to the new
+            #    version. This ensures any future installs or fallback paths use
+            #    the correct cache directory.
+            plist_path = Path.home() / "Library" / "LaunchAgents" / "com.vmux.daemon.plist"
+            if plist_path.exists():
+                try:
+                    import plistlib
+                    with open(plist_path, "rb") as f:
+                        plist = plistlib.load(f)
+                    env_vars = plist.get("EnvironmentVariables", {})
+                    env_vars["VMUX_PLUGIN_DIR"] = str(latest_dir)
+                    plist["EnvironmentVariables"] = env_vars
+                    with open(plist_path, "wb") as f:
+                        plistlib.dump(plist, f)
+                    logger.info(f"Plist updated: VMUX_PLUGIN_DIR → {latest_dir}")
+                except Exception as e:
+                    logger.warning(f"Failed to update plist: {e}")
 
             logger.info(f"Update complete: {installed_version} → {latest_version}")
             return {"ok": True, "updated": True, "version": latest_version}
