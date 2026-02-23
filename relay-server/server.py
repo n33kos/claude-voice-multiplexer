@@ -29,6 +29,121 @@ import mcp_tools
 
 registry = SessionRegistry()
 
+# --- Dynamic Kokoro voice loading ---
+# Fetches available voices from Kokoro's API and derives metadata (name, language,
+# gender) from the voice ID prefix convention. Cached with a TTL to avoid hitting
+# Kokoro on every settings request.
+
+_VOICE_PREFIX_MAP = {
+    "a": ("en-US", {
+        "f": "F", "m": "M",
+    }),
+    "b": ("en-GB", {
+        "f": "F", "m": "M",
+    }),
+    "e": ("es", {
+        "f": "F", "m": "M",
+    }),
+    "f": ("fr", {
+        "f": "F",
+    }),
+    "h": ("hi", {
+        "f": "F", "m": "M",
+    }),
+    "i": ("it", {
+        "f": "F", "m": "M",
+    }),
+    "j": ("ja", {
+        "f": "F", "m": "M",
+    }),
+    "p": ("pt", {
+        "f": "F", "m": "M",
+    }),
+    "z": ("zh", {
+        "f": "F", "m": "M",
+    }),
+}
+
+# Known custom voices that don't follow standard naming — override display names
+_CUSTOM_VOICE_NAMES = {
+    "af_kate_reading": "Kate Reading",
+    "am_michael_kramer": "Michael Kramer",
+}
+
+_voices_cache: list[dict] | None = None
+_voices_cache_ts: float = 0.0
+_VOICES_CACHE_TTL = 300  # 5 minutes
+
+
+def _parse_voice_id(voice_id: str) -> dict | None:
+    """Parse a Kokoro voice ID into a structured dict.
+
+    Voice IDs follow the convention: {lang_prefix}{gender_prefix}_{name}
+    e.g. af_bella → American English, Female, "Bella"
+
+    Returns None for unrecognized or legacy (v0) voices.
+    """
+    # Skip legacy v0 voices
+    if "_v0" in voice_id:
+        return None
+
+    if len(voice_id) < 3 or voice_id[2] != "_":
+        return None
+
+    lang_char = voice_id[0]
+    gender_char = voice_id[1]
+    raw_name = voice_id[3:]
+
+    lang_info = _VOICE_PREFIX_MAP.get(lang_char)
+    if not lang_info:
+        return None
+
+    lang, genders = lang_info
+    gender = genders.get(gender_char)
+    if not gender:
+        return None
+
+    # Use custom display name if available, otherwise derive from ID
+    if voice_id in _CUSTOM_VOICE_NAMES:
+        display_name = _CUSTOM_VOICE_NAMES[voice_id]
+    else:
+        display_name = raw_name.replace("_", " ").title()
+
+    return {"id": voice_id, "name": display_name, "lang": lang, "gender": gender}
+
+
+async def _fetch_kokoro_voices() -> list[dict]:
+    """Fetch and parse available voices from Kokoro's API with caching."""
+    global _voices_cache, _voices_cache_ts
+
+    now = time.time()
+    if _voices_cache is not None and (now - _voices_cache_ts) < _VOICES_CACHE_TTL:
+        return _voices_cache
+
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{KOKORO_URL}/audio/voices")
+            resp.raise_for_status()
+            raw_ids = resp.json().get("voices", [])
+    except Exception as e:
+        print(f"[server] Failed to fetch Kokoro voices: {e}")
+        # Return cached data if available, even if stale
+        if _voices_cache is not None:
+            return _voices_cache
+        return []
+
+    voices = []
+    for vid in raw_ids:
+        parsed = _parse_voice_id(vid)
+        if parsed:
+            voices.append(parsed)
+
+    _voices_cache = voices
+    _voices_cache_ts = now
+    print(f"[server] Loaded {len(voices)} voices from Kokoro (filtered from {len(raw_ids)} total)")
+    return voices
+
 # Track connected web clients
 _clients: dict[str, WebSocket] = {}
 
@@ -368,6 +483,59 @@ async def health_check(request: Request):
         "livekit": {"status": "ok" if livekit_ok else "down", "url": LIVEKIT_URL},
         "relay": {"status": "ok"},
     })
+
+
+@app.get("/api/settings")
+async def get_settings(request: Request):
+    """Get current configurable settings."""
+    _require_auth(request)
+    from config import get_setting
+    voices = await _fetch_kokoro_voices()
+    return JSONResponse({
+        "kokoro_voice": get_setting("kokoro_voice"),
+        "kokoro_speed": get_setting("kokoro_speed"),
+        "available_voices": voices,
+    })
+
+
+@app.patch("/api/settings")
+async def update_settings(request: Request):
+    """Update settings. Changes take effect immediately and are persisted to env file."""
+    _require_auth(request)
+    body = await request.json()
+    from config import update_setting, get_setting, _persist_settings
+
+    updated = {}
+    if "kokoro_voice" in body:
+        update_setting("kokoro_voice", body["kokoro_voice"])
+        updated["kokoro_voice"] = body["kokoro_voice"]
+    if "kokoro_speed" in body:
+        speed = float(body["kokoro_speed"])
+        update_setting("kokoro_speed", speed)
+        updated["kokoro_speed"] = speed
+
+    if updated:
+        _persist_settings()
+
+    return JSONResponse({"ok": True, "updated": updated})
+
+
+@app.get("/api/services")
+async def list_services(request: Request):
+    """List managed services and their status via daemon IPC."""
+    _require_auth(request)
+    result = await _daemon_ipc({"cmd": "status"})
+    return JSONResponse({"services": result.get("services", {})})
+
+
+@app.post("/api/services/{name}/restart")
+async def restart_service(name: str, request: Request):
+    """Restart a managed service via daemon IPC."""
+    _require_auth(request)
+    result = await _daemon_ipc({"cmd": "restart", "service": name})
+    if result.get("ok"):
+        return JSONResponse({"ok": True})
+    return JSONResponse({"error": result.get("error", "Restart failed")}, status_code=500)
 
 
 @app.get("/api/sessions")
