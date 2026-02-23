@@ -696,13 +696,14 @@ export function useRelay(authenticated: boolean = true) {
 
   const reconnectSession = useCallback(
     async (
-      cwd: string,
+      sessionId: string,
+      cwd?: string,
     ): Promise<{ ok: boolean; error?: string; session_id?: string }> => {
       try {
         const resp = await authFetch("/api/sessions/reconnect", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cwd }),
+          body: JSON.stringify({ session_id: sessionId, cwd }),
         });
         const data = await resp.json();
         if (!resp.ok) {

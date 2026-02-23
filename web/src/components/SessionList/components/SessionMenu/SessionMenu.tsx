@@ -14,7 +14,7 @@ interface SessionMenuProps {
   onRestartSession: (sessionId: string) => Promise<boolean>;
   onHardInterrupt: (sessionId: string) => Promise<boolean>;
   onSpawnSession: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
-  onReconnectSession: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
+  onReconnectSession: (sessionId: string, cwd?: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export function SessionMenu({
@@ -181,7 +181,7 @@ export function SessionMenu({
                 className={styles.MenuItem}
                 onSelect={() =>
                   runAction(() =>
-                    onReconnectSession(session.cwd).then((r) => r.ok),
+                    onReconnectSession(session.session_id, session.cwd).then((r) => r.ok),
                   )
                 }
               >

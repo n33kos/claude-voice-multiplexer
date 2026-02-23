@@ -1,6 +1,7 @@
 """Session manager — spawns and tracks Claude sessions via tmux."""
 
 import asyncio
+import hashlib
 import logging
 import os
 import time
@@ -16,6 +17,15 @@ SPAWN_POLL_INTERVAL = 2.0   # seconds between relay polling attempts
 SPAWN_TIMEOUT = 120.0        # max seconds to wait for session to register
 HEALTH_CHECK_INTERVAL = 30  # seconds between health checks
 ZOMBIE_THRESHOLD = 90.0     # seconds without heartbeat = zombie
+
+
+def _make_session_id(cwd: str) -> str:
+    """Generate a deterministic session ID from a working directory path.
+
+    Mirrors the MCP plugin's algorithm (relay-server/mcp_tools.py) so the
+    daemon can resolve relay session IDs without relying on dir_name matching.
+    """
+    return hashlib.sha256(cwd.encode()).hexdigest()[:12]
 
 
 @dataclass
@@ -194,14 +204,31 @@ class SessionManager:
             self._sessions.pop(daemon_id, None)
         return await self.spawn(cwd)
 
-    async def reconnect_session(self, cwd: str) -> dict:
-        """Attempt to reconnect to a session's tmux pane by re-entering standby."""
+    async def reconnect_session(self, session_id: str = "", cwd: str = "") -> dict:
+        """Attempt to reconnect to a session's tmux pane by re-entering standby.
+
+        First reconnects the MCP plugin to get a fresh connection to the relay
+        server (clears stale session state from previous relay instance), then
+        re-enters voice standby.
+
+        Accepts session_id (preferred) or cwd (fallback) to locate the session.
+        """
         async with self._lock:
-            session = self._find_session_by_cwd(cwd)
+            session = None
+            if session_id:
+                session = self._find_session(session_id)
+            if not session and cwd:
+                session = self._find_session_by_cwd(cwd)
             if not session:
                 return {"ok": False, "error": "Session not found"}
             tmux_session = session.tmux_session
         try:
+            # Reconnect MCP plugin first to clear stale session state
+            await self._run(["tmux", "send-keys", "-t", tmux_session,
+                             "/mcp reconnect plugin:voice-multiplexer:voice-multiplexer"])
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(2.0)
+            # Then re-enter voice standby
             await self._run(["tmux", "send-keys", "-t", tmux_session,
                              "/voice-multiplexer:standby"])
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
@@ -263,34 +290,22 @@ class SessionManager:
             except Exception:
                 cwd = ""
 
+            # Compute relay_session_id deterministically from cwd using the same
+            # algorithm as the MCP plugin (SHA256 hash). This replaces the fragile
+            # dir_name matching that could collide when multiple projects share the
+            # same directory basename.
+            relay_session_id = _make_session_id(cwd) if cwd else None
+
             session = SpawnedSession(
                 daemon_id=daemon_id,
                 tmux_session=tmux_session,
                 cwd=cwd,
+                relay_session_id=relay_session_id,
                 status="standby",
             )
             async with self._lock:
                 self._sessions[daemon_id] = session
-            logger.info(f"[sessions] re-registered orphan: {tmux_session}")
-
-        # Try to cross-reference relay session IDs
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(
-                    f"{self._relay_url}/api/sessions",
-                    headers={"X-Daemon-Secret": self._daemon_secret},
-                )
-                if resp.status_code == 200:
-                    relay_sessions = resp.json().get("sessions", [])
-                    relay_by_dir = {s.get("dir_name", ""): s.get("session_id") for s in relay_sessions}
-                    async with self._lock:
-                        for s in self._sessions.values():
-                            if s.relay_session_id is None:
-                                dir_name = os.path.basename(s.cwd) if s.cwd else ""
-                                if dir_name in relay_by_dir:
-                                    s.relay_session_id = relay_by_dir[dir_name]
-        except Exception:
-            pass
+            logger.info(f"[sessions] re-registered orphan: {tmux_session} (relay_session_id={relay_session_id})")
 
     async def _health_monitor(self):
         while True:
@@ -319,8 +334,6 @@ class SessionManager:
         except Exception:
             return
 
-        relay_by_dir = {s.get("dir_name", ""): sid for sid, s in relay_sessions.items()}
-
         for session in sessions:
             if session.status in ("spawn_failed", "dead"):
                 continue
@@ -332,13 +345,12 @@ class SessionManager:
                     session.status = "dead"
                 continue
 
-            # Try to resolve a pending relay_session_id
-            if session.relay_session_id is None and relay_by_dir:
-                dir_name = os.path.basename(session.cwd) if session.cwd else ""
-                if dir_name in relay_by_dir:
-                    async with self._lock:
-                        session.relay_session_id = relay_by_dir[dir_name]
-                    logger.info(f"[sessions] resolved pending relay_session_id: {session.tmux_session} -> {session.relay_session_id}")
+            # Resolve a pending relay_session_id deterministically from cwd
+            if session.relay_session_id is None and session.cwd:
+                computed_id = _make_session_id(session.cwd)
+                async with self._lock:
+                    session.relay_session_id = computed_id
+                logger.info(f"[sessions] resolved pending relay_session_id: {session.tmux_session} -> {computed_id}")
 
             # Check relay heartbeat for zombie detection
             if session.relay_session_id:

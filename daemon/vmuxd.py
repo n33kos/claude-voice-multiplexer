@@ -326,8 +326,9 @@ class VmuxDaemon:
                 session_id = request.get("session_id", "")
                 return await self._session_manager.restart_session(session_id)
             elif cmd == "reconnect-session":
+                session_id = request.get("session_id", "")
                 cwd = request.get("cwd", "")
-                return await self._session_manager.reconnect_session(cwd)
+                return await self._session_manager.reconnect_session(session_id=session_id, cwd=cwd)
             elif cmd == "restart":
                 service = request.get("service", "")
                 ok = await self._service_manager.restart(service)

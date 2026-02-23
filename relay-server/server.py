@@ -426,13 +426,17 @@ async def restart_session_endpoint(session_id: str, request: Request):
 
 @app.post("/api/sessions/reconnect")
 async def reconnect_session_endpoint(request: Request):
-    """Send reconnect attempt to a session via daemon"""
+    """Send reconnect attempt to a session via daemon.
+
+    Accepts session_id (preferred) or cwd (fallback) to identify the session.
+    """
     _require_auth(request)
     body = await request.json()
+    session_id = body.get("session_id", "").strip()
     cwd = body.get("cwd", "").strip()
-    if not cwd:
-        return JSONResponse({"error": "cwd is required"}, status_code=400)
-    result = await _daemon_ipc({"cmd": "reconnect-session", "cwd": cwd})
+    if not session_id and not cwd:
+        return JSONResponse({"error": "session_id or cwd is required"}, status_code=400)
+    result = await _daemon_ipc({"cmd": "reconnect-session", "session_id": session_id, "cwd": cwd})
     if result.get("ok"):
         return JSONResponse(result)
     return JSONResponse({"error": result.get("error", "Reconnect failed")}, status_code=500)
