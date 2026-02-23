@@ -75,10 +75,31 @@ class SessionManager:
                 pass
 
     async def spawn(self, cwd: str) -> dict:
-        """Spawn a new Claude session in the given directory."""
+        """Spawn a new Claude session in the given directory.
+
+        If a managed session already exists for this CWD, it is killed first
+        to prevent relay session ID collisions (the relay ID is a deterministic
+        hash of the CWD, so two sessions with the same CWD would share the
+        same relay ID and cause tracking/kill bugs).
+        """
         cwd = os.path.expanduser(cwd)
         if not os.path.isdir(cwd):
             return {"ok": False, "error": f"Directory not found: {cwd}"}
+
+        # Kill any existing managed session for this CWD to avoid relay ID collisions
+        kill_old = False
+        async with self._lock:
+            existing = self._find_session_by_cwd(cwd)
+            if existing and existing.status not in ("spawn_failed", "dead"):
+                logger.info(f"[sessions] killing existing session for {cwd} before respawn: {existing.tmux_session}")
+                daemon_id_old = existing.daemon_id
+                tmux_old = existing.tmux_session
+                existing.status = "dead"
+                kill_old = True
+        if kill_old:
+            await self._tmux_kill_session(tmux_old)
+            async with self._lock:
+                self._sessions.pop(daemon_id_old, None)
 
         daemon_id = uuid.uuid4().hex[:8]
         basename = os.path.basename(os.path.abspath(cwd)) or "home"
@@ -107,8 +128,14 @@ class SessionManager:
             )
             await self._run(["tmux", "send-keys", "-t", tmux_session, claude_cmd, "Enter"])
 
-            logger.info(f"[sessions] waiting for {tmux_session} to register with relay...")
-            relay_session_id = await self._poll_relay_for_session(timeout=SPAWN_TIMEOUT)
+            # Compute expected relay session ID from CWD (same algorithm as
+            # the MCP plugin) and poll for that specific ID to avoid picking up
+            # unrelated sessions that happen to register during the spawn window.
+            expected_relay_id = _make_session_id(cwd)
+            logger.info(f"[sessions] waiting for {tmux_session} to register as {expected_relay_id}...")
+            relay_session_id = await self._poll_relay_for_session(
+                expected_id=expected_relay_id, timeout=SPAWN_TIMEOUT,
+            )
 
             if relay_session_id:
                 async with self._lock:
@@ -477,19 +504,31 @@ class SessionManager:
         if reaped > 0:
             logger.info(f"[reaper] killed {reaped} excess caffeinate process(es)")
 
-    async def _poll_relay_for_session(self, timeout: float) -> Optional[str]:
-        """Poll relay until a new session appears that wasn't there before spawning."""
+    async def _poll_relay_for_session(
+        self, timeout: float, expected_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Poll relay until the spawned session registers.
+
+        If *expected_id* is provided (preferred), polls until that specific
+        session ID appears.  This avoids mis-identifying an unrelated session
+        that happens to register during the same window.
+
+        Falls back to the legacy "any new session" heuristic when
+        *expected_id* is None (shouldn't happen in normal operation).
+        """
         initial_ids: set[str] = set()
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(
-                    f"{self._relay_url}/api/sessions",
-                    headers={"X-Daemon-Secret": self._daemon_secret},
-                )
-                if resp.status_code == 200:
-                    initial_ids = {s["session_id"] for s in resp.json().get("sessions", [])}
-        except Exception:
-            pass
+        if not expected_id:
+            # Legacy fallback: snapshot current sessions so we can detect new ones
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    resp = await client.get(
+                        f"{self._relay_url}/api/sessions",
+                        headers={"X-Daemon-Secret": self._daemon_secret},
+                    )
+                    if resp.status_code == 200:
+                        initial_ids = {s["session_id"] for s in resp.json().get("sessions", [])}
+            except Exception:
+                pass
 
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -501,9 +540,14 @@ class SessionManager:
                         headers={"X-Daemon-Secret": self._daemon_secret},
                     )
                     if resp.status_code == 200:
-                        for s in resp.json().get("sessions", []):
-                            if s["session_id"] not in initial_ids:
-                                return s["session_id"]
+                        session_ids = {s["session_id"] for s in resp.json().get("sessions", [])}
+                        if expected_id:
+                            if expected_id in session_ids:
+                                return expected_id
+                        else:
+                            for sid in session_ids:
+                                if sid not in initial_ids:
+                                    return sid
             except Exception:
                 pass
         return None
