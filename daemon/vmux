@@ -9,6 +9,7 @@ Usage:
   vmux sessions                   list sessions
   vmux restart <session-id>       kill + respawn a session
   vmux restart <service>          restart an infrastructure service (whisper|kokoro|livekit|relay)
+  vmux reconnect <path>           attempt to reconnect to a session's tmux pane by re-entering standby
   vmux interrupt <session-id>     send Ctrl-C to a session
   vmux hard-interrupt <session-id>  Ctrl-C + MCP reconnect + re-enter standby
   vmux auth-code                  generate a one-time pairing code for the web app
@@ -146,6 +147,14 @@ def cmd_restart(target: str):
             print(f"New session_id: {r.get('session_id')}")
 
 
+def cmd_reconnect(cwd: str):
+    cwd = os.path.abspath(os.path.expanduser(cwd))
+    print(f"Attempting to reconnect session in {cwd}...")
+    r = _send({"cmd": "reconnect-session", "cwd": cwd})
+    if _ok(r):
+        print(f"Reconnect command sent. If a session with that cwd exists, it should re-enter standby shortly.")
+
+
 def cmd_interrupt(session_id: str):
     r = _send({"cmd": "interrupt", "session_id": session_id})
     if _ok(r):
@@ -219,6 +228,10 @@ def main():
         if len(sys.argv) < 3:
             _die("Usage: vmux restart <session-id|service>")
         cmd_restart(sys.argv[2])
+    elif sub == "reconnect":
+        if len(sys.argv) < 3:
+            _die("Usage: vmux reconnect <path>")
+        cmd_reconnect(sys.argv[2])
     elif sub == "interrupt":
         if len(sys.argv) < 3:
             _die("Usage: vmux interrupt <session-id>")

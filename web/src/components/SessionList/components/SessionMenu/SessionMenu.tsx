@@ -14,6 +14,7 @@ interface SessionMenuProps {
   onRestartSession: (sessionId: string) => Promise<boolean>;
   onHardInterrupt: (sessionId: string) => Promise<boolean>;
   onSpawnSession: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
+  onReconnectSession: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export function SessionMenu({
@@ -26,6 +27,7 @@ export function SessionMenu({
   onRestartSession,
   onHardInterrupt,
   onSpawnSession,
+  onReconnectSession,
 }: SessionMenuProps) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -57,7 +59,11 @@ export function SessionMenu({
     <DropdownMenu.Root open={open} onOpenChange={handleOpenChange}>
       <DropdownMenu.Trigger asChild>
         <button className={styles.MenuButton} disabled={busy}>
-          <svg className={styles.MenuIcon} fill="currentColor" viewBox="0 0 20 20">
+          <svg
+            className={styles.MenuIcon}
+            fill="currentColor"
+            viewBox="0 0 20 20"
+          >
             <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
           </svg>
         </button>
@@ -93,8 +99,14 @@ export function SessionMenu({
               />
             </div>
           ) : recoloring ? (
-            <div className={styles.ColorRow} onClick={(e) => e.stopPropagation()}>
-              <div className={styles.ColorPreview} style={{ backgroundColor: `hsl(${hueValue}, 70%, 55%)` }} />
+            <div
+              className={styles.ColorRow}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                className={styles.ColorPreview}
+                style={{ backgroundColor: `hsl(${hueValue}, 70%, 55%)` }}
+              />
               <input
                 type="range"
                 min={0}
@@ -147,7 +159,9 @@ export function SessionMenu({
                 className={styles.MenuItem}
                 onSelect={(e) => {
                   e.preventDefault();
-                  setHueValue(session.hue_override ?? sessionHue(session.session_id));
+                  setHueValue(
+                    session.hue_override ?? sessionHue(session.session_id),
+                  );
                   setRecoloring(true);
                 }}
               >
@@ -162,60 +176,49 @@ export function SessionMenu({
               >
                 Clear transcripts
               </DropdownMenu.Item>
-
-              {session.daemon_managed && session.online && (
-                <>
-                  <DropdownMenu.Separator className={styles.Divider} />
-                  <DropdownMenu.Item
-                    className={styles.MenuItem}
-                    onSelect={() => runAction(() => onHardInterrupt(session.session_id))}
-                  >
-                    Hard interrupt
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item
-                    className={styles.MenuItem}
-                    onSelect={() => runAction(() => onRestartSession(session.session_id))}
-                  >
-                    Restart session
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item
-                    className={styles.DeleteItem}
-                    onSelect={() => runAction(() => onKillSession(session.session_id))}
-                  >
-                    Kill session
-                  </DropdownMenu.Item>
-                </>
-              )}
-
-              {session.daemon_managed && !session.online && (
-                <>
-                  <DropdownMenu.Separator className={styles.Divider} />
-                  <DropdownMenu.Item
-                    className={styles.MenuItem}
-                    onSelect={() => runAction(() => onHardInterrupt(session.session_id))}
-                  >
-                    Reconnect
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item
-                    className={styles.DeleteItem}
-                    onSelect={() => runAction(() => onRestartSession(session.session_id))}
-                  >
-                    Restart session
-                  </DropdownMenu.Item>
-                </>
-              )}
-
-              {!session.daemon_managed && !session.online && session.cwd && (
-                <>
-                  <DropdownMenu.Separator className={styles.Divider} />
-                  <DropdownMenu.Item
-                    className={styles.MenuItem}
-                    onSelect={() => runAction(() => onSpawnSession(session.cwd).then(r => r.ok))}
-                  >
-                    Reconnect
-                  </DropdownMenu.Item>
-                </>
-              )}
+              <DropdownMenu.Separator className={styles.Divider} />
+              <DropdownMenu.Item
+                className={styles.MenuItem}
+                onSelect={() =>
+                  runAction(() =>
+                    onReconnectSession(session.cwd).then((r) => r.ok),
+                  )
+                }
+              >
+                Reconnect
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                className={styles.MenuItem}
+                onSelect={() =>
+                  runAction(() => onSpawnSession(session.cwd).then((r) => r.ok))
+                }
+              >
+                Respawn
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                className={styles.MenuItem}
+                onSelect={() =>
+                  runAction(() => onHardInterrupt(session.session_id))
+                }
+              >
+                Hard interrupt
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                className={styles.MenuItem}
+                onSelect={() =>
+                  runAction(() => onRestartSession(session.session_id))
+                }
+              >
+                Restart session
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                className={styles.DeleteItem}
+                onSelect={() =>
+                  runAction(() => onKillSession(session.session_id))
+                }
+              >
+                Kill session
+              </DropdownMenu.Item>
 
               {!session.online && (
                 <DropdownMenu.Item

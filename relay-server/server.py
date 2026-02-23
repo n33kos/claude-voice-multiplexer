@@ -424,6 +424,18 @@ async def restart_session_endpoint(session_id: str, request: Request):
         return JSONResponse(result)
     return JSONResponse({"error": result.get("error", "Restart failed")}, status_code=500)
 
+@app.post("/api/sessions/reconnect")
+async def reconnect_session_endpoint(request: Request):
+    """Send reconnect attempt to a session via daemon"""
+    _require_auth(request)
+    body = await request.json()
+    cwd = body.get("cwd", "").strip()
+    if not cwd:
+        return JSONResponse({"error": "cwd is required"}, status_code=400)
+    result = await _daemon_ipc({"cmd": "reconnect-session", "cwd": cwd})
+    if result.get("ok"):
+        return JSONResponse(result)
+    return JSONResponse({"error": result.get("error", "Reconnect failed")}, status_code=500)
 
 @app.get("/api/token")
 async def get_token(request: Request, room: str = "multiplexer", identity: str = ""):

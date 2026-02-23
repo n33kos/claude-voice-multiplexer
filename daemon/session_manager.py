@@ -89,8 +89,8 @@ class SessionManager:
 
             # Launch Claude — try --continue first, fall back to fresh session
             claude_cmd = (
-                f"(claude --continue --dangerously-skip-permissions '/voice-multiplexer:standby') || "
-                f"(claude --dangerously-skip-permissions '/voice-multiplexer:standby')"
+                f"claude --continue --dangerously-skip-permissions '/voice-multiplexer:standby' || "
+                f"claude --dangerously-skip-permissions '/voice-multiplexer:standby'"
             )
             await self._run(["tmux", "send-keys", "-t", tmux_session, claude_cmd, "Enter"])
 
@@ -193,6 +193,22 @@ class SessionManager:
         async with self._lock:
             self._sessions.pop(daemon_id, None)
         return await self.spawn(cwd)
+
+    async def reconnect_session(self, cwd: str) -> dict:
+        """Attempt to reconnect to a session's tmux pane by re-entering standby."""
+        async with self._lock:
+            session = self._find_session_by_cwd(cwd)
+            if not session:
+                return {"ok": False, "error": "Session not found"}
+            tmux_session = session.tmux_session
+        try:
+            await self._run(["tmux", "send-keys", "-t", tmux_session,
+                             "/voice-multiplexer:standby"])
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            return {"ok": True}
+        except Exception as e:
+            logger.error(f"[sessions] reconnect failed: {e}")
+            return {"ok": False, "error": str(e)}
 
     async def get_attach_info(self, session_id: str) -> Optional[dict]:
         async with self._lock:
@@ -376,6 +392,13 @@ class SessionManager:
             if s.relay_session_id == session_id:
                 return s
         return self._sessions.get(session_id)
+
+    def _find_session_by_cwd(self, cwd: str) -> Optional[SpawnedSession]:
+        """Find a session by its working directory. Must be called with lock held."""
+        for s in self._sessions.values():
+            if s.cwd == cwd:
+                return s
+        return None
 
     async def _tmux_has_session(self, name: str) -> bool:
         try:
