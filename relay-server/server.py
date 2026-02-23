@@ -334,19 +334,63 @@ app = FastAPI(title="Claude Voice Multiplexer", lifespan=lifespan)
 # resilience to prevent fastmcp SSE disconnection errors from crashing
 # the entire server (known fastmcp issue: jlowin/fastmcp#671).
 class _MCPErrorGuard:
-    """ASGI middleware that catches RuntimeError from fastmcp SSE disconnects."""
+    """ASGI middleware that catches errors from fastmcp SSE disconnects.
+
+    Handles RuntimeError (ASGI message ordering), ClosedResourceError (anyio
+    stream closed mid-write), and ExceptionGroup wrappers around both.  Without
+    this guard any of those propagate up and crash the uvicorn process.
+    """
 
     def __init__(self, app):
         self._app = app
 
+    @staticmethod
+    def _is_disconnect_error(exc: BaseException) -> bool:
+        """Return True if *exc* is a benign MCP/SSE client disconnect."""
+        try:
+            from anyio import ClosedResourceError
+        except ImportError:
+            ClosedResourceError = None  # type: ignore[misc]
+
+        if isinstance(exc, RuntimeError):
+            msg = str(exc)
+            if "Expected ASGI message" in msg or "Unexpected ASGI message" in msg:
+                return True
+        if ClosedResourceError and isinstance(exc, ClosedResourceError):
+            return True
+        return False
+
+    @classmethod
+    def _all_disconnect(cls, group: BaseException) -> bool:
+        """Return True if every leaf exception in *group* is a disconnect error."""
+        if isinstance(group, BaseExceptionGroup):
+            return all(cls._all_disconnect(e) for e in group.exceptions)
+        return cls._is_disconnect_error(group)
+
     async def __call__(self, scope, receive, send):
         try:
             await self._app(scope, receive, send)
+        except BaseExceptionGroup as eg:
+            if self._all_disconnect(eg):
+                import logging
+                logging.getLogger("relay.mcp").warning(
+                    f"Suppressed MCP SSE disconnect ExceptionGroup ({len(eg.exceptions)} sub-exceptions)"
+                )
+            else:
+                raise
         except RuntimeError as e:
-            if "Expected ASGI message" in str(e) or "Unexpected ASGI message" in str(e):
+            if self._is_disconnect_error(e):
                 import logging
                 logging.getLogger("relay.mcp").warning(
                     f"Suppressed fastmcp SSE disconnect error: {e}"
+                )
+            else:
+                raise
+        except Exception as e:
+            if self._is_disconnect_error(e):
+                import logging
+                logging.getLogger("relay.mcp").warning(
+                    f"Suppressed MCP SSE disconnect error: {e}"
                 )
             else:
                 raise

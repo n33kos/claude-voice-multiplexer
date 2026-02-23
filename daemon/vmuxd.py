@@ -93,6 +93,77 @@ def _write_state(service_pids: dict, session_data: list):
     DAEMON_STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
+def _cleanup_stale_processes():
+    """Kill orphaned service processes left behind by a previous daemon crash.
+
+    Reads daemon.state written by the previous run.  For each recorded service
+    PID it attempts to kill the entire process group (covers `start_new_session`
+    children) and then the individual PID as a fallback.  This runs *before*
+    any new services are started so ports are freed.
+    """
+    if not DAEMON_STATE_FILE.exists():
+        return
+
+    try:
+        state = json.loads(DAEMON_STATE_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return
+
+    old_daemon_pid = state.get("daemon_pid")
+    if old_daemon_pid == os.getpid():
+        return  # same daemon — nothing to clean up
+
+    # Check if the old daemon is truly gone
+    if old_daemon_pid:
+        try:
+            os.kill(old_daemon_pid, 0)  # probe, don't actually signal
+            # Old daemon still alive — don't interfere
+            return
+        except (ProcessLookupError, OSError):
+            pass
+
+    service_pids = state.get("service_pids", {})
+    if not service_pids:
+        return
+
+    killed = []
+    for name, pid in service_pids.items():
+        if pid is None:
+            continue
+        # Try process group kill first (handles start_new_session children)
+        try:
+            pgid = os.getpgid(pid)
+            os.killpg(pgid, signal.SIGTERM)
+            killed.append(f"{name}(pgid={pgid})")
+        except (ProcessLookupError, OSError):
+            pass
+        # Fallback: kill the individual PID
+        try:
+            os.kill(pid, signal.SIGTERM)
+            if f"{name}(pgid=" not in str(killed):
+                killed.append(f"{name}(pid={pid})")
+        except (ProcessLookupError, OSError):
+            pass
+
+    if killed:
+        logger.info(f"[startup] cleaned up stale processes: {', '.join(killed)}")
+        # Give processes a moment to exit, then SIGKILL stragglers
+        import time as _time
+        _time.sleep(1)
+        for name, pid in service_pids.items():
+            if pid is None:
+                continue
+            try:
+                pgid = os.getpgid(pid)
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+
+
 def _build_service_configs():
     """Build ServiceConfig objects from environment variables."""
     from service_manager import ServiceConfig
@@ -210,6 +281,7 @@ def _build_service_configs():
             },
             cwd=str(relay_server_dir),
             health_url=f"http://127.0.0.1:{relay_port}/api/health",
+            health_headers={"X-Daemon-Secret": _load_or_create_daemon_secret()},
             startup_grace_s=30.0,
         ),
     ]
@@ -252,6 +324,9 @@ class VmuxDaemon:
         )
 
         self._ipc_server = IpcServer(self._handle_ipc)
+
+        # Kill orphaned processes from a previous daemon crash before binding ports
+        _cleanup_stale_processes()
 
         # Start all components
         logger.info("Starting infrastructure services...")

@@ -1,6 +1,6 @@
 {
   "name": "voice-multiplexer",
   "description": "Remote voice interaction with multiple Claude Code sessions. Talk to your running Claude sessions from anywhere — switch between them and control them by voice.",
-  "version": "2.1.10",
+  "version": "2.1.11",
   "author": { "name": "Nicholas Suski" }
 }

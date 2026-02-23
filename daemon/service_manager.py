@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import signal
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -17,6 +18,7 @@ class ServiceConfig:
     env: dict[str, str] = field(default_factory=dict)
     cwd: Optional[str] = None
     health_url: Optional[str] = None
+    health_headers: dict[str, str] = field(default_factory=dict)
     max_restarts: int = 5
     restart_backoff_base: float = 2.0
     restart_backoff_max: float = 60.0
@@ -48,13 +50,17 @@ class ManagedService:
                 pass
         if self.process and self.process.returncode is None:
             try:
-                self.process.terminate()
+                # Kill the entire process group so child processes (e.g. the
+                # Python process spawned by `uv run`) are also terminated.
+                pgid = os.getpgid(self.process.pid)
+                os.killpg(pgid, signal.SIGTERM)
                 try:
                     await asyncio.wait_for(self.process.wait(), timeout=timeout)
                 except asyncio.TimeoutError:
-                    self.process.kill()
+                    os.killpg(pgid, signal.SIGKILL)
                     await self.process.wait()
-            except ProcessLookupError:
+            except (ProcessLookupError, OSError):
+                # Process or group already gone
                 pass
         self.process = None
         self.pid = None
@@ -72,6 +78,7 @@ class ManagedService:
                 cwd=self.config.cwd,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
+                start_new_session=True,  # new process group so we can kill children
             )
             self.process = proc
             self.pid = proc.pid
@@ -130,8 +137,11 @@ class ManagedService:
         while time.monotonic() < deadline:
             try:
                 async with httpx.AsyncClient(timeout=2.0) as client:
-                    resp = await client.get(self.config.health_url)
-                    if resp.status_code < 500:
+                    resp = await client.get(
+                        self.config.health_url,
+                        headers=self.config.health_headers,
+                    )
+                    if resp.status_code == 200:
                         return True
             except Exception:
                 pass
@@ -146,8 +156,11 @@ class ManagedService:
         import httpx
         try:
             async with httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.get(self.config.health_url)
-                return resp.status_code < 500
+                resp = await client.get(
+                    self.config.health_url,
+                    headers=self.config.health_headers,
+                )
+                return resp.status_code == 200
         except Exception:
             return False
 

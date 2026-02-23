@@ -73,9 +73,18 @@ export function useAuth() {
         const data = await resp.json()
         setState(s => ({ ...s, devices: data.devices || [] }))
       } else if (resp.status === 401) {
-        // Token expired — clear and force re-pairing
-        clearStoredToken()
-        setState(s => ({ ...s, authenticated: false }))
+        // Don't immediately clear auth — verify with the canonical status
+        // endpoint first. A 401 here can be transient (relay restarting).
+        try {
+          const check = await authFetch('/api/auth/status')
+          const data = await check.json()
+          if (!data.authenticated) {
+            clearStoredToken()
+            setState(s => ({ ...s, authenticated: false }))
+          }
+        } catch {
+          // Server unreachable — keep existing auth state
+        }
       }
     } catch {
       // ignore
