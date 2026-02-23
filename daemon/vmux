@@ -26,10 +26,10 @@ SOCKET_PATH = "/tmp/vmuxd.sock"
 SERVICES = {"whisper", "kokoro", "livekit", "relay"}
 
 
-def _send(cmd: dict) -> dict:
+def _send(cmd: dict, timeout: int = 30) -> dict:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        sock.settimeout(30)
+        sock.settimeout(timeout)
         sock.connect(SOCKET_PATH)
         sock.sendall(json.dumps(cmd).encode() + b"\n")
         buf = b""
@@ -90,7 +90,7 @@ def cmd_status():
 def cmd_spawn(path: str):
     path = os.path.abspath(os.path.expanduser(path))
     print(f"Spawning session in {path}...")
-    r = _send({"cmd": "spawn", "cwd": path})
+    r = _send({"cmd": "spawn", "cwd": path}, timeout=150)
     if not _ok(r):
         return
     print(f"Session spawned:")

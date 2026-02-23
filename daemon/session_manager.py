@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import signal
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ SPAWN_POLL_INTERVAL = 2.0   # seconds between relay polling attempts
 SPAWN_TIMEOUT = 120.0        # max seconds to wait for session to register
 HEALTH_CHECK_INTERVAL = 30  # seconds between health checks
 ZOMBIE_THRESHOLD = 90.0     # seconds without heartbeat = zombie
+CAFFEINATE_REAP_INTERVAL = 60  # seconds between caffeinate reaper runs
 
 
 def _make_session_id(cwd: str) -> str:
@@ -58,6 +60,7 @@ class SessionManager:
         self._daemon_secret = daemon_secret
         self._lock = asyncio.Lock()
         self._health_task: Optional[asyncio.Task] = None
+        self._last_reap: float = 0.0
 
     async def start(self):
         await self.reconcile_orphans()
@@ -312,6 +315,10 @@ class SessionManager:
             try:
                 await asyncio.sleep(HEALTH_CHECK_INTERVAL)
                 await self._check_health()
+                # Run caffeinate reaper less frequently than health checks
+                if time.time() - self._last_reap >= CAFFEINATE_REAP_INTERVAL:
+                    await self._reap_caffeinate()
+                    self._last_reap = time.time()
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -366,6 +373,109 @@ class SessionManager:
                             async with self._lock:
                                 session.status = "zombie"
                             await self.interrupt(session.relay_session_id)
+
+    async def _reap_caffeinate(self):
+        """Kill excess caffeinate processes spawned by managed Claude sessions.
+
+        Claude Code automatically spawns `caffeinate -i -t 300` to prevent
+        macOS sleep.  It respawns a new one before the previous expires, so
+        multiple caffeinate processes accumulate per session.  During crash /
+        reconnect cycles the overlap can grow unbounded and eventually hit the
+        system process limit.
+
+        This reaper identifies caffeinate processes that are direct children of
+        Claude processes running inside our managed tmux sessions and kills all
+        but the newest one per Claude parent.  Caffeinate processes belonging to
+        other applications are never touched.
+        """
+        async with self._lock:
+            sessions = list(self._sessions.values())
+
+        if not sessions:
+            return
+
+        # Step 1: Collect PIDs of Claude processes in our managed tmux panes
+        managed_pane_pids: set[int] = set()
+        for session in sessions:
+            if session.status in ("spawn_failed", "dead"):
+                continue
+            try:
+                output = await self._run_output([
+                    "tmux", "list-panes", "-t", session.tmux_session,
+                    "-F", "#{pane_pid}",
+                ])
+                for line in output.strip().splitlines():
+                    line = line.strip()
+                    if line.isdigit():
+                        managed_pane_pids.add(int(line))
+            except Exception:
+                continue
+
+        if not managed_pane_pids:
+            return
+
+        # Step 2: Find all caffeinate processes and group by parent PID
+        # Only consider caffeinate processes whose parent is a managed pane PID
+        # or whose grandparent is (Claude spawns caffeinate as a child of its
+        # Node.js process which is a child of the tmux pane shell).
+        try:
+            output = await self._run_output([
+                "ps", "-eo", "pid,ppid,lstart,args",
+            ])
+        except Exception:
+            return
+
+        # Build a ppid lookup for all processes (to resolve grandparents)
+        pid_to_ppid: dict[int, int] = {}
+        caffeinate_entries: list[tuple[int, int, str]] = []  # (pid, ppid, lstart)
+
+        for line in output.strip().splitlines()[1:]:  # skip header
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            try:
+                pid = int(parts[0])
+                ppid = int(parts[1])
+            except ValueError:
+                continue
+            pid_to_ppid[pid] = ppid
+
+            # Check if this is a caffeinate process
+            args = " ".join(parts[6:])  # lstart takes 5 fields (Day Mon DD HH:MM:SS YYYY)
+            if "caffeinate" in args and "-i" in args:
+                lstart = " ".join(parts[2:7])
+                caffeinate_entries.append((pid, ppid, lstart))
+
+        # Step 3: Filter to only caffeinate processes belonging to our sessions.
+        # A caffeinate belongs to us if its parent OR grandparent is a managed
+        # pane PID (covers both direct child and child-of-claude-child cases).
+        managed_caffeinate: dict[int, list[tuple[int, str]]] = {}  # parent → [(pid, lstart)]
+
+        for caff_pid, caff_ppid, lstart in caffeinate_entries:
+            grandparent = pid_to_ppid.get(caff_ppid, -1)
+            if caff_ppid in managed_pane_pids or grandparent in managed_pane_pids:
+                parent_key = caff_ppid
+                managed_caffeinate.setdefault(parent_key, []).append((caff_pid, lstart))
+
+        # Step 4: For each parent, keep the newest caffeinate and kill the rest
+        reaped = 0
+        for parent_pid, entries in managed_caffeinate.items():
+            if len(entries) <= 1:
+                continue
+            # Sort by PID descending — higher PID = newer process
+            entries.sort(key=lambda e: e[0], reverse=True)
+            # Keep the first (newest), kill the rest
+            for caff_pid, lstart in entries[1:]:
+                try:
+                    os.kill(caff_pid, signal.SIGTERM)
+                    reaped += 1
+                except ProcessLookupError:
+                    pass  # already exited
+                except PermissionError:
+                    logger.warning(f"[reaper] no permission to kill caffeinate PID {caff_pid}")
+
+        if reaped > 0:
+            logger.info(f"[reaper] killed {reaped} excess caffeinate process(es)")
 
     async def _poll_relay_for_session(self, timeout: float) -> Optional[str]:
         """Poll relay until a new session appears that wasn't there before spawning."""

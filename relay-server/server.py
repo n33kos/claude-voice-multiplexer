@@ -215,8 +215,28 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Claude Voice Multiplexer", lifespan=lifespan)
 
-# Mount MCP SSE app for Claude Code sessions
-app.mount("/mcp", mcp_tools.create_mcp_app())
+# Mount MCP SSE app for Claude Code sessions, wrapped with ASGI error
+# resilience to prevent fastmcp SSE disconnection errors from crashing
+# the entire server (known fastmcp issue: jlowin/fastmcp#671).
+class _MCPErrorGuard:
+    """ASGI middleware that catches RuntimeError from fastmcp SSE disconnects."""
+
+    def __init__(self, app):
+        self._app = app
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await self._app(scope, receive, send)
+        except RuntimeError as e:
+            if "Expected ASGI message" in str(e) or "Unexpected ASGI message" in str(e):
+                import logging
+                logging.getLogger("relay.mcp").warning(
+                    f"Suppressed fastmcp SSE disconnect error: {e}"
+                )
+            else:
+                raise
+
+app.mount("/mcp", _MCPErrorGuard(mcp_tools.create_mcp_app()))
 
 
 # --- Auth API ---
