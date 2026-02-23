@@ -11,6 +11,7 @@ interface ServiceHealth {
   kokoro: { status: string };
   livekit: { status: string };
   relay: { status: string };
+  version?: string;
 }
 
 function useServiceHealth(open: boolean) {
@@ -318,7 +319,12 @@ export function Settings({
           <div className={styles.Divider} />
 
           <div className={styles.SectionHeader}>
-            <span className={styles.SectionTitle}>Services</span>
+            <span className={styles.SectionTitle}>
+              Services
+              {health?.version && (
+                <span className={styles.VersionBadge}>v{health.version}</span>
+              )}
+            </span>
             <button
               onClick={() => { refreshHealth(); fetchServices(); }}
               disabled={healthLoading}

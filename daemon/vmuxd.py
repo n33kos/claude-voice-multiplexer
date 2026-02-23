@@ -445,6 +445,7 @@ class VmuxDaemon:
         return {
             "ok": True,
             "daemon_pid": os.getpid(),
+            "version": _read_installed_version(),
             "services": services,
             "sessions": sessions,
         }
@@ -471,96 +472,117 @@ class VmuxDaemon:
                 await asyncio.sleep(AUTO_UPDATE_INTERVAL)
                 result = await self._cmd_update_if_newer()
                 if result.get("updated"):
-                    logger.info("Auto-update applied — restarting via launchd...")
-                    # launchd KeepAlive will restart us
+                    logger.info("[update] auto-update applied — forcing restart via launchd")
                     self._shutdown_event.set()
+                    # Watchdog: if graceful shutdown stalls, force-kill after 15s
+                    await asyncio.sleep(15)
+                    logger.warning("[update] graceful shutdown timed out — forcing exit")
+                    os._exit(0)
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.debug(f"Auto-update check failed: {e}")
+                logger.warning(f"[update] check failed: {e}")
 
     async def _cmd_update_if_newer(self) -> dict:
         """Check plugin cache for newer version and apply if found."""
         installed_version = _read_installed_version()
+        logger.info(f"[update] check: installed={installed_version}, cache={PLUGIN_CACHE_DIR}")
 
-        # Find latest cache directory
         if not PLUGIN_CACHE_DIR.exists():
+            logger.info(f"[update] plugin cache dir not found")
             return {"ok": True, "updated": False, "reason": "plugin cache not found"}
 
         cache_versions = []
         for entry in PLUGIN_CACHE_DIR.iterdir():
             if not entry.is_dir():
                 continue
-            plugin_json = entry / "plugin.json"
-            if not plugin_json.exists():
-                continue
-            try:
-                data = json.loads(plugin_json.read_text())
-                ver = data.get("version", "")
-                if ver:
-                    cache_versions.append((ver, entry))
-            except Exception:
-                continue
+            ver = _detect_cache_version(entry)
+            if ver and _parse_version(ver) != (0, 0, 0):
+                cache_versions.append((ver, entry))
+            else:
+                logger.debug(f"[update] skipping cache entry: {entry.name}")
 
         if not cache_versions:
+            logger.info(f"[update] no valid versions found in cache")
             return {"ok": True, "updated": False, "reason": "no versions in cache"}
 
-        # Sort by version
         cache_versions.sort(key=lambda x: _parse_version(x[0]), reverse=True)
         latest_version, latest_dir = cache_versions[0]
+        logger.info(f"[update] latest in cache: {latest_version} (dir={latest_dir.name})")
 
         if not _is_newer(latest_version, installed_version):
             return {"ok": True, "updated": False, "current": installed_version, "latest": latest_version}
 
-        logger.info(f"Updating daemon from {installed_version} → {latest_version}")
+        logger.info(f"[update] upgrading {installed_version} → {latest_version}")
 
-        # Copy daemon files from cache to install location
         src_daemon_dir = latest_dir / "daemon"
         if not src_daemon_dir.exists():
+            logger.error(f"[update] daemon/ not found in {latest_dir}")
             return {"ok": False, "error": "daemon/ directory not found in cache"}
 
         try:
             import shutil
-            # 1. Copy daemon files
-            shutil.copytree(str(src_daemon_dir), str(DAEMON_DIR), dirs_exist_ok=True)
-            VERSION_FILE.write_text(latest_version)
-            logger.info(f"Daemon files updated to {latest_version}")
+            import subprocess
+            import tempfile
 
-            # 2. Copy relay-server files
+            # 1. Daemon files — clean replace
+            logger.info("[update] replacing daemon/ files")
+            if DAEMON_DIR.exists():
+                shutil.rmtree(DAEMON_DIR)
+            shutil.copytree(str(src_daemon_dir), str(DAEMON_DIR))
+
+            # 2. Relay-server files — clean replace
             src_relay = latest_dir / "relay-server"
             dst_relay = DATA_DIR / "relay-server"
             if src_relay.exists():
-                shutil.copytree(str(src_relay), str(dst_relay), dirs_exist_ok=True)
-                logger.info("relay-server files updated")
+                logger.info("[update] replacing relay-server/ files")
+                if dst_relay.exists():
+                    shutil.rmtree(dst_relay)
+                shutil.copytree(str(src_relay), str(dst_relay))
 
-            # 3. Update web dist — prefer pre-built dist in cache, fall back to npm build
+            # 3. Web dist — prefer pre-built, else build in temp dir
             src_web_dist = latest_dir / "web" / "dist"
             dst_web_dist = DATA_DIR / "web" / "dist"
             dst_web_dist.parent.mkdir(parents=True, exist_ok=True)
+
             if src_web_dist.exists():
-                shutil.copytree(str(src_web_dist), str(dst_web_dist), dirs_exist_ok=True)
-                logger.info("web dist updated from cache")
+                logger.info("[update] copying pre-built web dist")
+                if dst_web_dist.exists():
+                    shutil.rmtree(dst_web_dist)
+                shutil.copytree(str(src_web_dist), str(dst_web_dist))
             else:
-                # No pre-built dist — try to build from source
                 src_web = latest_dir / "web"
                 if src_web.exists() and (src_web / "package.json").exists():
-                    import subprocess
-                    logger.info("Building web app from source...")
-                    r = subprocess.run(
-                        ["npm", "run", "build"],
-                        cwd=str(src_web),
-                        capture_output=True,
-                        timeout=120,
-                    )
-                    if r.returncode == 0 and (src_web / "dist").exists():
-                        shutil.copytree(str(src_web / "dist"), str(dst_web_dist), dirs_exist_ok=True)
-                        logger.info("web app rebuilt and updated")
-                    else:
-                        logger.warning(f"web app build failed: {r.stderr.decode()[:200]}")
+                    logger.info("[update] building web app from source")
+                    with tempfile.TemporaryDirectory() as tmp:
+                        build_dir = Path(tmp) / "web"
+                        shutil.copytree(str(src_web), str(build_dir))
+                        r = subprocess.run(
+                            ["npm", "ci", "--prefer-offline"],
+                            cwd=str(build_dir),
+                            capture_output=True,
+                            timeout=120,
+                        )
+                        if r.returncode != 0:
+                            logger.warning(f"[update] npm ci failed: {r.stderr.decode()[:300]}")
+                        else:
+                            r = subprocess.run(
+                                ["npm", "run", "build"],
+                                cwd=str(build_dir),
+                                capture_output=True,
+                                timeout=120,
+                            )
+                            if r.returncode == 0 and (build_dir / "dist").exists():
+                                if dst_web_dist.exists():
+                                    shutil.rmtree(dst_web_dist)
+                                shutil.copytree(str(build_dir / "dist"), str(dst_web_dist))
+                                logger.info("[update] web app built and installed")
+                            else:
+                                logger.warning(f"[update] npm build failed: {r.stderr.decode()[:300]}")
+                else:
+                    logger.warning("[update] no web source found in cache — web UI not updated")
 
-            # 4. Update the launchd plist so VMUX_PLUGIN_DIR points to the new
-            #    version. This ensures any future installs or fallback paths use
-            #    the correct cache directory.
+            # 4. Update launchd plist VMUX_PLUGIN_DIR
             plist_path = Path.home() / "Library" / "LaunchAgents" / "com.vmux.daemon.plist"
             if plist_path.exists():
                 try:
@@ -572,13 +594,20 @@ class VmuxDaemon:
                     plist["EnvironmentVariables"] = env_vars
                     with open(plist_path, "wb") as f:
                         plistlib.dump(plist, f)
-                    logger.info(f"Plist updated: VMUX_PLUGIN_DIR → {latest_dir}")
+                    logger.info(f"[update] plist updated: VMUX_PLUGIN_DIR → {latest_dir}")
                 except Exception as e:
-                    logger.warning(f"Failed to update plist: {e}")
+                    logger.warning(f"[update] plist update failed: {e}")
 
-            logger.info(f"Update complete: {installed_version} → {latest_version}")
+            # 5. Verify
+            actual = _read_installed_version()
+            if actual != latest_version:
+                logger.error(f"[update] verification failed: expected {latest_version}, got {actual}")
+                return {"ok": False, "error": f"version mismatch after copy: {actual} != {latest_version}"}
+
+            logger.info(f"[update] complete: {installed_version} → {latest_version}")
             return {"ok": True, "updated": True, "version": latest_version}
         except Exception as e:
+            logger.error(f"[update] failed: {e}")
             return {"ok": False, "error": str(e)}
 
     async def _state_writer_loop(self):
@@ -593,6 +622,33 @@ class VmuxDaemon:
                 break
             except Exception:
                 pass
+
+
+def _detect_cache_version(cache_entry: Path) -> str:
+    """Extract version from a plugin cache directory.
+
+    Checks (in order):
+    1. .claude-plugin/plugin.json → version field
+    2. plugin.json at root → version field (legacy)
+    3. Directory name if it parses as a version
+    """
+    for json_path in [
+        cache_entry / ".claude-plugin" / "plugin.json",
+        cache_entry / "plugin.json",
+    ]:
+        if json_path.exists():
+            try:
+                data = json.loads(json_path.read_text())
+                ver = data.get("version", "")
+                if ver:
+                    return ver
+            except Exception:
+                continue
+    # Fall back to directory name
+    name = cache_entry.name
+    if _parse_version(name) != (0, 0, 0):
+        return name
+    return ""
 
 
 def _read_installed_version() -> str:

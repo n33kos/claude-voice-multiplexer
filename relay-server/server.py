@@ -521,11 +521,17 @@ async def health_check(request: Request):
         check_service(livekit_http),
     )
 
+    version = "unknown"
+    version_file = Path(__file__).resolve().parent.parent / "daemon" / "VERSION"
+    if version_file.exists():
+        version = version_file.read_text().strip()
+
     return JSONResponse({
         "whisper": {"status": "ok" if whisper_ok else "down", "url": whisper_base},
         "kokoro": {"status": "ok" if kokoro_ok else "down", "url": kokoro_base},
         "livekit": {"status": "ok" if livekit_ok else "down", "url": LIVEKIT_URL},
         "relay": {"status": "ok"},
+        "version": version,
     })
 
 

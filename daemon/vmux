@@ -67,7 +67,8 @@ def cmd_status():
     r = _send({"cmd": "status"})
     if not _ok(r):
         return
-    print(f"vmuxd (pid {r.get('daemon_pid', '?')})")
+    version = r.get("version", "unknown")
+    print(f"vmuxd v{version} (pid {r.get('daemon_pid', '?')})")
     print()
     print("Services:")
     for name, status in r.get("services", {}).items():
