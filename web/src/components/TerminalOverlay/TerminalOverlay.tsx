@@ -1,3 +1,4 @@
+import { useState, useEffect, useRef } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import type { TerminalSnapshot } from "../../hooks/useRelay";
 import styles from "./TerminalOverlay.module.scss";
@@ -20,6 +21,15 @@ function formatTimestamp(ts: number): string {
 
 export function TerminalOverlay({ snapshot, loading, onRefresh, onClose }: TerminalOverlayProps) {
   const isOpen = loading || snapshot !== null;
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const onRefreshRef = useRef(onRefresh);
+  onRefreshRef.current = onRefresh;
+
+  useEffect(() => {
+    if (!isOpen || !autoRefresh) return;
+    const interval = setInterval(() => onRefreshRef.current(), 2000);
+    return () => clearInterval(interval);
+  }, [isOpen, autoRefresh]);
 
   return (
     <Dialog.Root open={isOpen} onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -40,12 +50,11 @@ export function TerminalOverlay({ snapshot, loading, onRefresh, onClose }: Termi
             </div>
             <div className={styles.Actions}>
               <button
-                className={styles.RefreshButton}
-                onClick={() => onRefresh()}
-                disabled={loading}
-                title="Refresh snapshot"
+                className={`${styles.AutoRefreshToggle} ${autoRefresh ? styles.AutoRefreshActive : ''}`}
+                onClick={() => setAutoRefresh((v) => !v)}
+                title={autoRefresh ? "Disable auto-refresh" : "Enable auto-refresh"}
               >
-                <svg className={loading ? styles.RefreshIconSpin : styles.RefreshIcon} viewBox="0 0 20 20" fill="currentColor">
+                <svg className={autoRefresh && !loading ? styles.RefreshIconSpin : styles.RefreshIcon} viewBox="0 0 20 20" fill="currentColor">
                   <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
                 </svg>
               </button>

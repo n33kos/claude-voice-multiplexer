@@ -926,11 +926,27 @@ async def livekit_http_proxy(request: Request, path: str):
 _static_file_semaphore = asyncio.Semaphore(16)
 
 class LimitedStaticFiles(StaticFiles):
-    """StaticFiles with concurrency limiting to prevent file descriptor exhaustion."""
+    """StaticFiles with concurrency limiting and cache control headers."""
 
     async def __call__(self, scope, receive, send):
+        async def send_with_cache(message):
+            if message.get("type") == "http.response.start":
+                path = scope.get("path", "")
+                headers = dict(message.get("headers", []))
+                # Hashed assets (e.g. /assets/index-abc123.js) can be cached forever
+                if "/assets/" in path:
+                    message["headers"] = list(message.get("headers", [])) + [
+                        (b"cache-control", b"public, max-age=31536000, immutable"),
+                    ]
+                else:
+                    # HTML and other files: always revalidate
+                    message["headers"] = list(message.get("headers", [])) + [
+                        (b"cache-control", b"no-cache"),
+                    ]
+            await send(message)
+
         async with _static_file_semaphore:
-            await super().__call__(scope, receive, send)
+            await super().__call__(scope, receive, send_with_cache)
 
 # VMUX_WEB_DIST lets the daemon point to a managed path that auto-updates can replace.
 # Falls back to the path relative to this file (dev / source-tree installs).

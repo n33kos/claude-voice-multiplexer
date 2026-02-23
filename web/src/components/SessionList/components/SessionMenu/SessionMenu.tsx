@@ -15,6 +15,7 @@ interface SessionMenuProps {
   onHardInterrupt: (sessionId: string) => Promise<boolean>;
   onSpawnSession: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
   onReconnectSession: (sessionId: string, cwd?: string) => Promise<{ ok: boolean; error?: string }>;
+  onMenuOpenChange?: (open: boolean) => void;
 }
 
 export function SessionMenu({
@@ -28,6 +29,7 @@ export function SessionMenu({
   onHardInterrupt,
   onSpawnSession,
   onReconnectSession,
+  onMenuOpenChange,
 }: SessionMenuProps) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -39,6 +41,7 @@ export function SessionMenu({
 
   function handleOpenChange(nextOpen: boolean) {
     setOpen(nextOpen);
+    onMenuOpenChange?.(nextOpen);
     if (!nextOpen) {
       setRenaming(false);
       setRecoloring(false);
@@ -58,7 +61,7 @@ export function SessionMenu({
   return (
     <DropdownMenu.Root open={open} onOpenChange={handleOpenChange}>
       <DropdownMenu.Trigger asChild>
-        <button className={styles.MenuButton} disabled={busy}>
+        <button data-session-menu className={styles.MenuButton} disabled={busy}>
           <svg
             className={styles.MenuIcon}
             fill="currentColor"
@@ -75,6 +78,7 @@ export function SessionMenu({
           align="end"
           sideOffset={4}
           onCloseAutoFocus={(e) => e.preventDefault()}
+          onClick={(e) => e.stopPropagation()}
         >
           {renaming ? (
             <div className={styles.RenameRow}>

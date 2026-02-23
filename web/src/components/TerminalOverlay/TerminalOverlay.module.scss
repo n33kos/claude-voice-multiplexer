@@ -13,6 +13,7 @@
   left: 0;
   right: 0;
   z-index: 60;
+  max-width: 100%;
   max-height: 70vh;
   display: flex;
   flex-direction: column;
@@ -21,15 +22,6 @@
   border-bottom: none;
   border-radius: 1rem 1rem 0 0;
   animation: slideUp 0.2s ease-out;
-
-  @media (min-width: 640px) {
-    max-width: 56rem;
-    left: 50%;
-    right: auto;
-    transform: translateX(-50%);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 1rem 1rem 0 0;
-  }
 }
 
 @keyframes fadeIn {
@@ -48,22 +40,6 @@
   }
 }
 
-@media (min-width: 640px) {
-  .Content {
-    animation: slideUpDesktop 0.2s ease-out;
-  }
-
-  @keyframes slideUpDesktop {
-    from {
-      transform: translateX(-50%) translateY(100%);
-      opacity: 0;
-    }
-    to {
-      transform: translateX(-50%) translateY(0);
-      opacity: 1;
-    }
-  }
-}
 
 .VisuallyHidden {
   position: absolute;
@@ -126,7 +102,7 @@
   gap: 0.25rem;
 }
 
-.RefreshButton,
+.AutoRefreshToggle,
 .CloseButton {
   width: 1.75rem;
   height: 1.75rem;
@@ -137,14 +113,18 @@
   color: rgba(255, 255, 255, 0.4);
   transition: color 0.15s, background-color 0.15s;
 
-  &:hover:not(:disabled) {
+  &:hover {
     color: rgba(255, 255, 255, 0.7);
     background-color: rgba(255, 255, 255, 0.06);
   }
+}
 
-  &:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+.AutoRefreshActive {
+  color: rgba(34, 197, 94, 0.8);
+
+  &:hover {
+    color: rgba(34, 197, 94, 1);
+    background-color: rgba(34, 197, 94, 0.1);
   }
 }
 
@@ -155,7 +135,7 @@
 }
 
 .RefreshIconSpin {
-  animation: spin 1s linear infinite;
+  animation: spin 2s linear infinite;
 }
 
 @keyframes spin {
