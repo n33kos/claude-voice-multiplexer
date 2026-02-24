@@ -330,72 +330,103 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Claude Voice Multiplexer", lifespan=lifespan)
 
-# Mount MCP SSE app for Claude Code sessions, wrapped with ASGI error
-# resilience to prevent fastmcp SSE disconnection errors from crashing
-# the entire server (known fastmcp issue: jlowin/fastmcp#671).
-class _MCPErrorGuard:
-    """ASGI middleware that catches errors from fastmcp SSE disconnects.
 
-    Handles RuntimeError (ASGI message ordering), ClosedResourceError (anyio
-    stream closed mid-write), and ExceptionGroup wrappers around both.  Without
-    this guard any of those propagate up and crash the uvicorn process.
-    """
+# --- ASGI error resilience for fastmcp SSE disconnects ---
+# Known fastmcp issue (jlowin/fastmcp#671): when an MCP SSE client
+# disconnects, fastmcp/starlette may try to send a new HTTP response on a
+# connection that already has SSE headers in flight.  This triggers a
+# RuntimeError ("Expected ASGI message 'http.response.body', but got
+# 'http.response.start'") which, if uncaught, crashes the entire uvicorn
+# process.
+#
+# We defend in TWO layers:
+# 1. _ASGIErrorGuard wraps sub-apps (e.g. the MCP mount) and catches errors
+#    from within the app's own call tree.
+# 2. _TopLevelASGIGuard wraps the ENTIRE FastAPI app so that any errors that
+#    escape layer 1 (e.g. from starlette middleware cleanup or send-callback
+#    chains) are still caught before reaching uvicorn.
+
+import logging as _logging
+_asgi_logger = _logging.getLogger("relay.asgi")
+
+
+def _is_disconnect_error(exc: BaseException) -> bool:
+    """Return True if *exc* is a benign MCP/SSE client disconnect."""
+    try:
+        from anyio import ClosedResourceError
+    except ImportError:
+        ClosedResourceError = None  # type: ignore[misc]
+
+    if isinstance(exc, RuntimeError):
+        msg = str(exc)
+        if "Expected ASGI message" in msg or "Unexpected ASGI message" in msg:
+            return True
+    if ClosedResourceError and isinstance(exc, ClosedResourceError):
+        return True
+    return False
+
+
+def _all_disconnect(group: BaseException) -> bool:
+    """Return True if every leaf exception in *group* is a disconnect error."""
+    if isinstance(group, BaseExceptionGroup):
+        return all(_all_disconnect(e) for e in group.exceptions)
+    return _is_disconnect_error(group)
+
+
+class _ASGIErrorGuard:
+    """ASGI middleware that catches errors from fastmcp SSE disconnects."""
 
     def __init__(self, app):
         self._app = app
-
-    @staticmethod
-    def _is_disconnect_error(exc: BaseException) -> bool:
-        """Return True if *exc* is a benign MCP/SSE client disconnect."""
-        try:
-            from anyio import ClosedResourceError
-        except ImportError:
-            ClosedResourceError = None  # type: ignore[misc]
-
-        if isinstance(exc, RuntimeError):
-            msg = str(exc)
-            if "Expected ASGI message" in msg or "Unexpected ASGI message" in msg:
-                return True
-        if ClosedResourceError and isinstance(exc, ClosedResourceError):
-            return True
-        return False
-
-    @classmethod
-    def _all_disconnect(cls, group: BaseException) -> bool:
-        """Return True if every leaf exception in *group* is a disconnect error."""
-        if isinstance(group, BaseExceptionGroup):
-            return all(cls._all_disconnect(e) for e in group.exceptions)
-        return cls._is_disconnect_error(group)
 
     async def __call__(self, scope, receive, send):
         try:
             await self._app(scope, receive, send)
         except BaseExceptionGroup as eg:
-            if self._all_disconnect(eg):
-                import logging
-                logging.getLogger("relay.mcp").warning(
-                    f"Suppressed MCP SSE disconnect ExceptionGroup ({len(eg.exceptions)} sub-exceptions)"
+            if _all_disconnect(eg):
+                _asgi_logger.warning(
+                    "Suppressed MCP SSE disconnect ExceptionGroup (%d sub-exceptions)",
+                    len(eg.exceptions),
                 )
             else:
                 raise
-        except RuntimeError as e:
-            if self._is_disconnect_error(e):
-                import logging
-                logging.getLogger("relay.mcp").warning(
-                    f"Suppressed fastmcp SSE disconnect error: {e}"
-                )
-            else:
-                raise
-        except Exception as e:
-            if self._is_disconnect_error(e):
-                import logging
-                logging.getLogger("relay.mcp").warning(
-                    f"Suppressed MCP SSE disconnect error: {e}"
-                )
+        except (RuntimeError, Exception) as e:
+            if _is_disconnect_error(e):
+                _asgi_logger.warning("Suppressed SSE disconnect error: %s", e)
             else:
                 raise
 
-app.mount("/mcp", _MCPErrorGuard(mcp_tools.create_mcp_app()))
+
+class _TopLevelASGIGuard:
+    """Outermost ASGI wrapper — catches any disconnect errors that escape
+    the sub-app guard or starlette's own middleware cleanup.
+
+    This is the last line of defense before uvicorn, which would otherwise
+    treat uncaught RuntimeErrors as fatal and shut down the server process.
+    """
+
+    def __init__(self, app):
+        self._app = app
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await self._app(scope, receive, send)
+        except BaseExceptionGroup as eg:
+            if _all_disconnect(eg):
+                _asgi_logger.warning(
+                    "Top-level guard caught ExceptionGroup (%d sub-exceptions)",
+                    len(eg.exceptions),
+                )
+            else:
+                raise
+        except (RuntimeError, Exception) as e:
+            if _is_disconnect_error(e):
+                _asgi_logger.warning("Top-level guard caught: %s", e)
+            else:
+                raise
+
+
+app.mount("/mcp", _ASGIErrorGuard(mcp_tools.create_mcp_app()))
 
 
 # --- Auth API ---
@@ -1199,6 +1230,13 @@ else:
             "status": "running",
             "message": "Claude Voice Multiplexer relay server. Web app not built yet — run 'npm run build' in web/.",
         })
+
+
+# Wrap the entire ASGI app in a top-level error guard.
+# This is the last line of defense: any SSE disconnect RuntimeErrors that
+# escape the sub-app _ASGIErrorGuard (e.g. from starlette middleware cleanup
+# or send-callback chains) are caught here before reaching uvicorn.
+app = _TopLevelASGIGuard(app)
 
 
 if __name__ == "__main__":
