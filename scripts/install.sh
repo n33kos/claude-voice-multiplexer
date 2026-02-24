@@ -489,6 +489,16 @@ cat > "$LAUNCHD_PLIST" << PLIST_EOF
     <string>${LOG_ERR_PATH}</string>
     <key>ThrottleInterval</key>
     <integer>10</integer>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
 </dict>
 </plist>
 PLIST_EOF

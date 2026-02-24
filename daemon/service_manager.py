@@ -11,6 +11,31 @@ from typing import Optional
 
 logger = logging.getLogger("vmuxd.services")
 
+# Shared HTTP client for health checks — lazy-initialized on first use.
+# Avoids creating a new httpx.AsyncClient (and its TCP connection pool)
+# for every health check, which was the primary source of fd leaks.
+_health_http_client = None
+
+
+async def _get_health_client():
+    """Get or create the shared httpx client for health checks."""
+    global _health_http_client
+    if _health_http_client is None:
+        import httpx
+        _health_http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(5.0, connect=3.0),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+    return _health_http_client
+
+
+async def close_health_client():
+    """Close the shared health-check HTTP client. Call on shutdown."""
+    global _health_http_client
+    if _health_http_client is not None:
+        await _health_http_client.aclose()
+        _health_http_client = None
+
 # Max log file size before rotation (5 MB)
 _MAX_LOG_BYTES = 5 * 1024 * 1024
 
@@ -176,17 +201,17 @@ class ManagedService:
                 await asyncio.sleep(1.0)
 
     async def _wait_healthy(self, timeout: float) -> bool:
-        import httpx
         deadline = time.monotonic() + timeout
+        client = await _get_health_client()
         while time.monotonic() < deadline:
             try:
-                async with httpx.AsyncClient(timeout=2.0) as client:
-                    resp = await client.get(
-                        self.config.health_url,
-                        headers=self.config.health_headers,
-                    )
-                    if resp.status_code == 200:
-                        return True
+                resp = await client.get(
+                    self.config.health_url,
+                    headers=self.config.health_headers,
+                    timeout=2.0,
+                )
+                if resp.status_code == 200:
+                    return True
             except Exception:
                 pass
             await asyncio.sleep(2.0)
@@ -204,14 +229,14 @@ class ManagedService:
                 except (ProcessLookupError, OSError):
                     return False
             return self.status == "running"
-        import httpx
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.get(
-                    self.config.health_url,
-                    headers=self.config.health_headers,
-                )
-                return resp.status_code == 200
+            client = await _get_health_client()
+            resp = await client.get(
+                self.config.health_url,
+                headers=self.config.health_headers,
+                timeout=3.0,
+            )
+            return resp.status_code == 200
         except Exception:
             return False
 
@@ -232,6 +257,7 @@ class ServiceManager:
             *[svc.stop(timeout) for svc in self._services.values()],
             return_exceptions=True,
         )
+        await close_health_client()
 
     async def restart(self, name: str) -> bool:
         svc = self._services.get(name)

@@ -11,11 +11,22 @@ Bridges web clients (phone/browser) with Claude Code sessions via:
 import asyncio
 import json
 import os
+import resource
 import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+
+# Raise file descriptor limit — launchd defaults to 256 which is too low
+# for a server managing multiple SSE connections and LiveKit rooms.
+try:
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    target = min(hard, 65536) if hard != resource.RLIM_INFINITY else 65536
+    if soft < target:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+except (ValueError, OSError):
+    pass
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, Cookie, HTTPException
 from fastapi.responses import JSONResponse
@@ -28,6 +39,22 @@ from livekit_agent import RelayAgent
 import mcp_tools
 
 registry = SessionRegistry()
+
+# --- Shared HTTP client ---
+# Single httpx.AsyncClient reused for ALL outbound HTTP requests in the relay
+# server process. This prevents fd leaks from per-request connection pool churn.
+# Initialized in lifespan(), closed on shutdown.
+import httpx as _httpx
+
+_http_client: Optional[_httpx.AsyncClient] = None
+
+
+def get_http_client() -> _httpx.AsyncClient:
+    """Get the shared httpx client. Raises if called before lifespan init."""
+    if _http_client is None:
+        raise RuntimeError("HTTP client not initialized (server not started)")
+    return _http_client
+
 
 # --- Dynamic Kokoro voice loading ---
 # Fetches available voices from Kokoro's API and derives metadata (name, language,
@@ -120,12 +147,11 @@ async def _fetch_kokoro_voices() -> list[dict]:
     if _voices_cache is not None and (now - _voices_cache_ts) < _VOICES_CACHE_TTL:
         return _voices_cache
 
-    import httpx
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{KOKORO_URL}/audio/voices")
-            resp.raise_for_status()
-            raw_ids = resp.json().get("voices", [])
+        client = get_http_client()
+        resp = await client.get(f"{KOKORO_URL}/audio/voices", timeout=5.0)
+        resp.raise_for_status()
+        raw_ids = resp.json().get("voices", [])
     except Exception as e:
         print(f"[server] Failed to fetch Kokoro voices: {e}")
         # Return cached data if available, even if stale
@@ -303,7 +329,21 @@ async def _warmup_kokoro():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _agent
+    global _agent, _http_client
+
+    # Initialize shared HTTP client — reused for ALL outbound requests.
+    # Limits: 20 connections per host, 100 total. Keepalive reuses connections
+    # instead of creating new TCP sockets per request.
+    _http_client = _httpx.AsyncClient(
+        timeout=_httpx.Timeout(10.0, connect=5.0),
+        limits=_httpx.Limits(max_connections=100, max_keepalive_connections=20),
+    )
+    print("[server] Shared HTTP client initialized")
+
+    # Share the client with the audio pipeline
+    import audio as _audio_mod
+    _audio_mod.set_http_client(_http_client)
+
     _agent = RelayAgent(registry, _broadcast_sessions, _notify_client_status, _notify_client_transcript)
     print("[server] Agent manager initialized (rooms created per session)")
 
@@ -321,11 +361,50 @@ async def lifespan(app: FastAPI):
         print("[server] Authentication enabled")
     else:
         print("[server] Authentication disabled (no AUTH_SECRET set)")
+
+    # Start FD monitoring task
+    _fd_monitor_task = asyncio.create_task(_fd_monitor_loop())
+
     # Warm up Kokoro TTS in the background (non-blocking)
     asyncio.create_task(_warmup_kokoro())
     yield
+    _fd_monitor_task.cancel()
     if _agent:
         await _agent.stop()
+    if _http_client:
+        await _http_client.aclose()
+        _http_client = None
+        print("[server] Shared HTTP client closed")
+
+
+def _get_open_fd_count() -> int:
+    """Return the number of currently open file descriptors for this process."""
+    try:
+        return len(os.listdir(f"/dev/fd"))
+    except OSError:
+        # Fallback for systems without /dev/fd
+        try:
+            import subprocess
+            result = subprocess.run(["lsof", "-p", str(os.getpid())], capture_output=True)
+            return result.stdout.count(b"\n") - 1  # subtract header
+        except Exception:
+            return -1
+
+
+async def _fd_monitor_loop():
+    """Periodically log the open fd count so leaks are visible before they crash the process."""
+    while True:
+        try:
+            await asyncio.sleep(60)
+            fd_count = _get_open_fd_count()
+            soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            print(f"[fd-monitor] open={fd_count} limit={soft}/{hard}")
+            if fd_count > soft * 0.8:
+                print(f"[fd-monitor] WARNING: fd usage at {fd_count}/{soft} ({fd_count/soft*100:.0f}%)")
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            pass
 
 
 app = FastAPI(title="Claude Voice Multiplexer", lifespan=lifespan)
@@ -531,13 +610,11 @@ async def health_check(request: Request):
     """Check the health of all backend services."""
     _require_auth(request)
 
-    import httpx
-
     async def check_service(url: str) -> bool:
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.get(url)
-                return resp.status_code < 500
+            client = get_http_client()
+            resp = await client.get(url, timeout=3.0)
+            return resp.status_code < 500
         except Exception:
             return False
 
@@ -563,6 +640,33 @@ async def health_check(request: Request):
         "livekit": {"status": "ok" if livekit_ok else "down", "url": LIVEKIT_URL},
         "relay": {"status": "ok"},
         "version": version,
+    })
+
+
+@app.get("/api/diagnostics")
+async def diagnostics(request: Request):
+    """Return process-level resource diagnostics (fd count, memory, connections)."""
+    _require_auth(request)
+    fd_count = _get_open_fd_count()
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    session_count = len(await registry.list_sessions())
+    client_count = len(_clients)
+    room_count = len(_agent._rooms) if _agent else 0
+    # Safely probe httpx connection pool size
+    pool_info = None
+    if _http_client:
+        try:
+            pool = _http_client._transport._pool
+            pool_info = {"connections_in_pool": len(pool.connections)}
+        except Exception:
+            pool_info = {"connections_in_pool": "unknown"}
+
+    return JSONResponse({
+        "fds": {"open": fd_count, "soft_limit": soft, "hard_limit": hard},
+        "sessions": session_count,
+        "web_clients": client_count,
+        "livekit_rooms": room_count,
+        "http_client_pool": pool_info,
     })
 
 
@@ -629,22 +733,27 @@ async def list_sessions(request: Request):
 
 async def _daemon_ipc(cmd: dict) -> dict:
     """Send a command to vmuxd via Unix socket. Returns response dict."""
-    import asyncio as _asyncio
     SOCKET_PATH = "/tmp/vmuxd.sock"
+    writer = None
     try:
-        reader, writer = await _asyncio.wait_for(
-            _asyncio.open_unix_connection(SOCKET_PATH), timeout=5.0
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_unix_connection(SOCKET_PATH), timeout=5.0
         )
         writer.write((json.dumps(cmd) + "\n").encode())
         await writer.drain()
-        line = await _asyncio.wait_for(reader.readline(), timeout=10.0)
-        writer.close()
-        await writer.wait_closed()
+        line = await asyncio.wait_for(reader.readline(), timeout=10.0)
         return json.loads(line.decode().strip())
     except FileNotFoundError:
         return {"ok": False, "error": "vmuxd is not running"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+    finally:
+        if writer is not None:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
 
 
 @app.post("/api/sessions/spawn")
@@ -786,12 +895,15 @@ async def session_ws(ws: WebSocket):
 
                 # Recycle the LiveKit room on reconnect, or create a new one
                 if _agent:
-                    try:
-                        if is_reconnect:
+                    if is_reconnect:
+                        try:
                             await _agent.remove_session(session_id)
+                        except Exception as e:
+                            print(f"[server] Error removing old room (continuing): {e}")
+                    try:
                         await _agent.add_session(session_id, session.room_name)
                     except Exception as e:
-                        print(f"[server] Failed to manage room for session: {e}")
+                        print(f"[server] Failed to create room for session: {e}")
 
                 # Notify all clients of session list change
                 await _broadcast_sessions()
@@ -1164,27 +1276,26 @@ async def livekit_ws_proxy(ws: WebSocket, path: str):
 @app.api_route("/livekit/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def livekit_http_proxy(request: Request, path: str):
     """Proxy HTTP requests (e.g. /validate) to the local LiveKit server."""
-    import httpx
-
     target = f"http://{_LK_HOST}:{_LK_PORT}/{path}"
     query = str(request.url.query)
     if query:
         target += f"?{query}"
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.request(
-                method=request.method,
-                url=target,
-                content=await request.body(),
-                headers={k: v for k, v in request.headers.items() if k.lower() not in ("host", "transfer-encoding")},
-            )
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                headers=dict(resp.headers),
-                media_type=resp.headers.get("content-type")
-            )
+        client = get_http_client()
+        resp = await client.request(
+            method=request.method,
+            url=target,
+            content=await request.body(),
+            headers={k: v for k, v in request.headers.items() if k.lower() not in ("host", "transfer-encoding")},
+            timeout=10.0,
+        )
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=dict(resp.headers),
+            media_type=resp.headers.get("content-type")
+        )
     except Exception as e:
         return Response(content=str(e), status_code=502)
 

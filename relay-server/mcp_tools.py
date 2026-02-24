@@ -122,12 +122,15 @@ async def _resolve_session(ctx: Context) -> tuple[Optional[str], Optional[str]]:
     # Manage LiveKit room
     agent = _app["get_agent"]()
     if agent:
-        try:
-            if is_reconnect:
+        if is_reconnect:
+            try:
                 await agent.remove_session(session_id)
+            except Exception as e:
+                print(f"[mcp] Error removing old room (continuing): {e}")
+        try:
             await agent.add_session(session_id, session.room_name)
         except Exception as e:
-            print(f"[mcp] Failed to manage room for session: {e}")
+            print(f"[mcp] Failed to create room for session: {e}")
 
     if _app["broadcast_sessions"]:
         await _app["broadcast_sessions"]()

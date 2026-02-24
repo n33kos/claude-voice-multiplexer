@@ -271,8 +271,14 @@ class SessionRoom:
             self._error_timer.cancel()
 
         if self.room:
-            await self.room.disconnect()
+            try:
+                await asyncio.wait_for(self.room.disconnect(), timeout=5.0)
+            except asyncio.TimeoutError:
+                print(f"[room:{self.room_name}] WARNING: room.disconnect() timed out after 5s, forcing cleanup")
+            except Exception as e:
+                print(f"[room:{self.room_name}] Error during disconnect: {e}")
             self.room = None
+        self.audio_source = None
         print(f"[room:{self.room_name}] Disconnected")
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):

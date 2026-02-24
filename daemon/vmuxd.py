@@ -12,12 +12,23 @@ import asyncio
 import json
 import logging
 import os
+import resource
 import secrets
 import signal
 import sys
 import time
 from pathlib import Path
 from typing import Optional
+
+# Raise file descriptor limit for daemon and all child services.
+# launchd defaults to 256 which is too low for managing multiple services.
+try:
+    _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    _target = min(_hard, 65536) if _hard != resource.RLIM_INFINITY else 65536
+    if _soft < _target:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (_target, _hard))
+except (ValueError, OSError):
+    pass
 
 # Try to set process title for Activity Monitor visibility
 try:
