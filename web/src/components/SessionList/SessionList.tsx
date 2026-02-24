@@ -150,6 +150,12 @@ export function SessionList({
       })
     : sessions;
 
+  const connectedSessionDisplayName = connectedSession
+    ? connectedSession.display_name ||
+      connectedSession.dir_name.split("/").slice(-1)[0] ||
+      connectedSession.session_name
+    : null;
+
   return (
     <div
       data-component="SessionList"
@@ -172,7 +178,7 @@ export function SessionList({
           <div className={styles.HeaderLeft}>
             {connectedSession ? (
               <span className={styles.SessionName}>
-                {connectedSession.display_name}
+                {connectedSessionDisplayName}
               </span>
             ) : (
               <span className={styles.PlaceholderText}>Select a session</span>
@@ -217,6 +223,11 @@ export function SessionList({
               session.session_id === connectedSessionId && !!connectedSessionId;
             const canConnect = session.online;
             const hue = session.hue_override ?? sessionHue(session.session_id);
+            const sessionDisplayTitle =
+              session.display_name ||
+              session.dir_name.split("/").slice(-1)[0] ||
+              session.session_name;
+
             return (
               <div
                 key={session.session_id}
@@ -251,7 +262,7 @@ export function SessionList({
                           [styles.NameTextOffline]: !session.online,
                         })}
                       >
-                        {session.display_name}
+                        {sessionDisplayTitle}
                       </span>
                       {!session.online && (
                         <span className={styles.OfflineBadge}>offline</span>
@@ -262,7 +273,7 @@ export function SessionList({
                           <HealthBadge health={session.health} />
                         )}
                     </div>
-                    <div className={styles.DirName}>{session.dir_name}</div>
+                    <div className={styles.DirName}>{session.cwd}</div>
                   </div>
                   <div className={styles.SessionMeta}>
                     {session.last_interaction != null && (
