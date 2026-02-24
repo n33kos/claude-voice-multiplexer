@@ -72,7 +72,7 @@ def cmd_status():
     print()
     print("Services:")
     for name, status in r.get("services", {}).items():
-        icon = "✓" if status == "running" else "✗" if status == "failed" else "·"
+        icon = "✓" if status == "running" else "✗" if status in ("failed", "stopped") else "!" if status == "unhealthy" else "·"
         print(f"  {icon} {name:<12} {status}")
     print()
     sessions = r.get("sessions", [])

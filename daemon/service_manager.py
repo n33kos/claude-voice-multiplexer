@@ -6,9 +6,28 @@ import os
 import signal
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("vmuxd.services")
+
+# Max log file size before rotation (5 MB)
+_MAX_LOG_BYTES = 5 * 1024 * 1024
+
+
+def _rotate_log(path: Path) -> None:
+    """Rotate a log file if it exceeds the size limit.
+
+    Keeps one backup (.1) and truncates the current file.
+    """
+    try:
+        if path.exists() and path.stat().st_size > _MAX_LOG_BYTES:
+            backup = path.with_suffix(path.suffix + ".1")
+            if backup.exists():
+                backup.unlink()
+            path.rename(backup)
+    except OSError:
+        pass
 
 
 @dataclass
@@ -19,6 +38,7 @@ class ServiceConfig:
     cwd: Optional[str] = None
     health_url: Optional[str] = None
     health_headers: dict[str, str] = field(default_factory=dict)
+    log_dir: Optional[str] = None
     max_restarts: int = 5
     restart_backoff_base: float = 2.0
     restart_backoff_max: float = 60.0
@@ -34,6 +54,7 @@ class ManagedService:
         self._restart_count = 0
         self._stop_requested = False
         self._monitor_task: Optional[asyncio.Task] = None
+        self._log_fh: Optional[object] = None  # combined stdout+stderr log file handle
 
     async def start(self) -> bool:
         self._stop_requested = False
@@ -65,6 +86,15 @@ class ManagedService:
         self.process = None
         self.pid = None
         self.status = "stopped"
+        self._close_log()
+
+    def _close_log(self):
+        if self._log_fh:
+            try:
+                self._log_fh.close()
+            except OSError:
+                pass
+            self._log_fh = None
 
     def reset_restart_count(self):
         self._restart_count = 0
@@ -72,12 +102,26 @@ class ManagedService:
     async def _launch(self) -> bool:
         try:
             env = {**os.environ, **self.config.env}
+
+            # Open a log file for stdout+stderr if log_dir is configured
+            self._close_log()
+            stdout_dest = asyncio.subprocess.DEVNULL
+            stderr_dest = asyncio.subprocess.DEVNULL
+            if self.config.log_dir:
+                log_dir = Path(self.config.log_dir)
+                log_dir.mkdir(parents=True, exist_ok=True)
+                log_path = log_dir / f"{self.config.name}.log"
+                _rotate_log(log_path)
+                self._log_fh = open(log_path, "a")
+                stdout_dest = self._log_fh
+                stderr_dest = self._log_fh
+
             proc = await asyncio.create_subprocess_exec(
                 *self.config.cmd,
                 env=env,
                 cwd=self.config.cwd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                stdout=stdout_dest,
+                stderr=stderr_dest,
                 start_new_session=True,  # new process group so we can kill children
             )
             self.process = proc
@@ -152,6 +196,13 @@ class ManagedService:
         if self.process is None or self.process.returncode is not None:
             return False
         if not self.config.health_url:
+            # No health URL — check process is alive via kill(0)
+            if self.pid:
+                try:
+                    os.kill(self.pid, 0)
+                    return True
+                except (ProcessLookupError, OSError):
+                    return False
             return self.status == "running"
         import httpx
         try:

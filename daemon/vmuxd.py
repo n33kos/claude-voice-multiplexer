@@ -206,6 +206,8 @@ def _build_service_configs():
     if not relay_server_dir.exists():
         logger.error("relay-server not found at %s", relay_server_dir)
 
+    log_dir = str(LOG_DIR)
+
     configs = [
         ServiceConfig(
             name="whisper",
@@ -218,6 +220,7 @@ def _build_service_configs():
                 "--threads", whisper_threads,
             ],
             health_url=f"http://127.0.0.1:{whisper_port}/",
+            log_dir=log_dir,
             startup_grace_s=20.0,
         ),
         ServiceConfig(
@@ -240,6 +243,7 @@ def _build_service_configs():
             },
             cwd=str(kokoro_repo),
             health_url=f"http://127.0.0.1:{kokoro_port}/health",
+            log_dir=log_dir,
             startup_grace_s=90.0,
         ),
         ServiceConfig(
@@ -249,6 +253,8 @@ def _build_service_configs():
                 "--bind", "0.0.0.0",
                 "--keys", f"{livekit_api_key}: {livekit_api_secret}",
             ],
+            health_url=f"http://127.0.0.1:{livekit_port}/",
+            log_dir=log_dir,
             startup_grace_s=10.0,
         ),
         ServiceConfig(
@@ -282,6 +288,7 @@ def _build_service_configs():
             cwd=str(relay_server_dir),
             health_url=f"http://127.0.0.1:{relay_port}/api/health",
             health_headers={"X-Daemon-Secret": _load_or_create_daemon_secret()},
+            log_dir=log_dir,
             startup_grace_s=30.0,
         ),
     ]
@@ -441,6 +448,11 @@ class VmuxDaemon:
 
     async def _cmd_status(self) -> dict:
         services = self._service_manager.get_status()
+        # Run live health checks to catch silently-broken services
+        health = await self._service_manager.health_check_all()
+        for name in services:
+            if services[name] == "running" and not health.get(name, True):
+                services[name] = "unhealthy"
         sessions = await self._session_manager.list_sessions()
         return {
             "ok": True,
