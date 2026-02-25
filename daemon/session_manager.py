@@ -156,12 +156,6 @@ class SessionManager:
             logger.info(f"[sessions] waiting for Claude to initialize in {tmux_session}...")
             await asyncio.sleep(5.0)
 
-            # Reconnect MCP plugin to ensure SSE connection is established
-            await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "/mcp reconnect plugin:voice-multiplexer:voice-multiplexer"])
-            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-            await asyncio.sleep(3.0)
-
             # Now enter voice standby
             await self._run(["tmux", "send-keys", "-t", tmux_session,
                              "/voice-multiplexer:standby"])
