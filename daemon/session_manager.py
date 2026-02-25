@@ -153,8 +153,14 @@ class SessionManager:
                 f"claude --dangerously-skip-permissions"
             )
             await self._run(["tmux", "send-keys", "-t", tmux_session, claude_cmd, "Enter"])
-            logger.info(f"[sessions] waiting for Claude to initialize in {tmux_session}...")
-            await asyncio.sleep(5.0)
+
+            # Wait for Claude Code's input prompt to appear before sending
+            # commands.  A blind sleep is unreliable — Claude may still be
+            # loading MCP servers, resuming a session, etc.  We capture the
+            # tmux pane and look for the prompt character (❯) which signals
+            # that the TUI is initialized and the input field is ready.
+            if not await self._wait_for_claude_prompt(tmux_session, timeout=30.0):
+                logger.warning(f"[sessions] Claude prompt not detected in {tmux_session} after 30s — sending standby anyway")
 
             # Now enter voice standby
             await self._run(["tmux", "send-keys", "-t", tmux_session,
@@ -597,6 +603,26 @@ class SessionManager:
             if s.cwd == cwd:
                 return s
         return None
+
+    async def _wait_for_claude_prompt(self, tmux_session: str, timeout: float = 30.0) -> bool:
+        """Wait for Claude Code's input prompt (❯) to appear in the tmux pane.
+
+        Returns True if the prompt was detected within the timeout, False otherwise.
+        Polls every 2 seconds by capturing the tmux pane content.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            await asyncio.sleep(2.0)
+            try:
+                output = await self._run_output([
+                    "tmux", "capture-pane", "-t", tmux_session, "-p", "-S", "-10"
+                ])
+                if "❯" in output:
+                    logger.info(f"[sessions] Claude prompt detected in {tmux_session}")
+                    return True
+            except Exception:
+                pass
+        return False
 
     async def _tmux_has_session(self, name: str) -> bool:
         try:
