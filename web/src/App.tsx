@@ -276,7 +276,10 @@ export default function App() {
                 }
                 onConnected={() => livekit.setConnected(true)}
                 onDisconnected={() => livekit.setConnected(false)}
-                onInterrupt={relay.interruptAgent}
+                onInterrupt={() => {
+                  relay.interruptAgent();
+                  relay.hardInterruptSession(relay.connectedSessionId!);
+                }}
                 particleAnalyserRef={particleAnalyserRef}
               />
             </Suspense>

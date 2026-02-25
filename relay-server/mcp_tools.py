@@ -226,8 +226,12 @@ async def relay_standby(ctx: Context, session_name: str = "") -> str:
         mcp_sid = ctx.session_id
         _connection_map.pop(mcp_sid, None)
         _connection_cwd.pop(mcp_sid, None)
-        # Keep the per-session heartbeat running — it holds the session alive
-        # in the registry during the reconnect window.
+        # Cancel the persistent heartbeat — let SESSION_TIMEOUT handle
+        # natural expiry.  If Claude reconnects within the timeout window,
+        # _resolve_session will start a fresh heartbeat.
+        hb = _session_heartbeats.pop(session_id, None)
+        if hb:
+            hb.cancel()
         raise
     except Exception as e:
         return f"[Standby error]: {e}"

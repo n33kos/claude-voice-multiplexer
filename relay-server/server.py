@@ -775,12 +775,17 @@ async def kill_session(session_id: str, request: Request):
     """Kill a spawned Claude session (requires daemon)."""
     _require_auth(request)
     result = await _daemon_ipc({"cmd": "kill", "session_id": session_id})
+    # Always unregister from the relay registry — even if the daemon
+    # doesn't know about the session (e.g. tmux was killed manually,
+    # worktree was removed, daemon restarted).  This prevents ghost
+    # sessions from lingering in the web UI.
+    await registry.unregister(session_id)
+    await _broadcast_sessions()
     if result.get("ok"):
-        # Also unregister from the relay registry
-        await registry.unregister(session_id)
-        await _broadcast_sessions()
         return JSONResponse({"success": True})
-    return JSONResponse({"error": result.get("error", "Kill failed")}, status_code=500)
+    # Return success even if daemon kill failed — the session is
+    # cleaned up from the relay side regardless.
+    return JSONResponse({"success": True, "note": "Session removed from relay; daemon reported: " + result.get("error", "unknown")})
 
 
 @app.post("/api/sessions/{session_id}/interrupt")
