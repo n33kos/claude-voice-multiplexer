@@ -475,16 +475,17 @@ class VmuxDaemon:
 
     async def _cmd_auth_code(self) -> dict:
         """Generate a pairing code via the relay server."""
-        import httpx
+        from service_manager import _get_health_client
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(
-                    f"{RELAY_URL}/api/auth/session-code",
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return {"ok": True, "code": data.get("code"), "expires_in": data.get("expires_in")}
-                return {"ok": False, "error": f"Relay returned {resp.status_code}"}
+            client = await _get_health_client()
+            resp = await client.post(
+                f"{RELAY_URL}/api/auth/session-code",
+                timeout=5.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return {"ok": True, "code": data.get("code"), "expires_in": data.get("expires_in")}
+            return {"ok": False, "error": f"Relay returned {resp.status_code}"}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 

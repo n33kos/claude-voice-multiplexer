@@ -10,9 +10,22 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
-import httpx
-
 logger = logging.getLogger("vmuxd.sessions")
+
+# Shared HTTP client for relay API calls — lazy-initialized.
+_session_http_client = None
+
+
+async def _get_session_client():
+    """Get or create the shared httpx client for session manager relay calls."""
+    global _session_http_client
+    if _session_http_client is None:
+        import httpx
+        _session_http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(5.0, connect=3.0),
+            limits=httpx.Limits(max_connections=5, max_keepalive_connections=2),
+        )
+    return _session_http_client
 
 SPAWN_POLL_INTERVAL = 2.0   # seconds between relay polling attempts
 SPAWN_TIMEOUT = 120.0        # max seconds to wait for session to register
@@ -117,16 +130,42 @@ class SessionManager:
             self._sessions[daemon_id] = session
 
         try:
-            # Create tmux session
-            await self._run(["tmux", "new-session", "-d", "-s", tmux_session, "-c", cwd])
-            logger.info(f"[sessions] created tmux session {tmux_session} in {cwd}")
+            # Create tmux session with a login shell so the user's full profile
+            # (.zprofile, .zshrc, etc.) is loaded.  Without this, sessions spawned
+            # by the daemon inherit the daemon's stripped-down environment, and
+            # Claude Code fails to load user-scoped plugins (the MCP servers
+            # registered in ~/.claude/settings.json won't appear).
+            user_shell = os.environ.get("SHELL", "/bin/zsh")
+            await self._run([
+                "tmux", "new-session", "-d", "-s", tmux_session, "-c", cwd,
+                user_shell, "-l",  # -l = login shell
+            ])
+            logger.info(f"[sessions] created tmux session {tmux_session} in {cwd} (login shell: {user_shell})")
 
-            # Launch Claude — try --continue first, fall back to fresh session
+            # Launch Claude — try --continue first, fall back to fresh session.
+            # Do NOT pass the standby skill as a startup prompt — the MCP plugin
+            # needs time to establish the SSE connection first.  Instead, start
+            # Claude, wait for it to initialize, reconnect the MCP plugin, then
+            # send the standby command as a separate step (same pattern as
+            # hard_interrupt and reconnect_session).
             claude_cmd = (
-                f"claude --continue --dangerously-skip-permissions '/voice-multiplexer:standby' || "
-                f"claude --dangerously-skip-permissions '/voice-multiplexer:standby'"
+                f"claude --continue --dangerously-skip-permissions || "
+                f"claude --dangerously-skip-permissions"
             )
             await self._run(["tmux", "send-keys", "-t", tmux_session, claude_cmd, "Enter"])
+            logger.info(f"[sessions] waiting for Claude to initialize in {tmux_session}...")
+            await asyncio.sleep(5.0)
+
+            # Reconnect MCP plugin to ensure SSE connection is established
+            await self._run(["tmux", "send-keys", "-t", tmux_session,
+                             "/mcp reconnect plugin:voice-multiplexer:voice-multiplexer"])
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(3.0)
+
+            # Now enter voice standby
+            await self._run(["tmux", "send-keys", "-t", tmux_session,
+                             "/voice-multiplexer:standby"])
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
 
             # Compute expected relay session ID from CWD (same algorithm as
             # the MCP plugin) and poll for that specific ID to avoid picking up
@@ -356,15 +395,15 @@ class SessionManager:
             sessions = list(self._sessions.values())
 
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(
-                    f"{self._relay_url}/api/sessions",
-                    headers={"X-Daemon-Secret": self._daemon_secret},
-                )
-                relay_sessions = {}
-                if resp.status_code == 200:
-                    for s in resp.json().get("sessions", []):
-                        relay_sessions[s["session_id"]] = s
+            client = await _get_session_client()
+            resp = await client.get(
+                f"{self._relay_url}/api/sessions",
+                headers={"X-Daemon-Secret": self._daemon_secret},
+            )
+            relay_sessions = {}
+            if resp.status_code == 200:
+                for s in resp.json().get("sessions", []):
+                    relay_sessions[s["session_id"]] = s
         except Exception:
             return
 
@@ -517,16 +556,16 @@ class SessionManager:
         *expected_id* is None (shouldn't happen in normal operation).
         """
         initial_ids: set[str] = set()
+        client = await _get_session_client()
         if not expected_id:
             # Legacy fallback: snapshot current sessions so we can detect new ones
             try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    resp = await client.get(
-                        f"{self._relay_url}/api/sessions",
-                        headers={"X-Daemon-Secret": self._daemon_secret},
-                    )
-                    if resp.status_code == 200:
-                        initial_ids = {s["session_id"] for s in resp.json().get("sessions", [])}
+                resp = await client.get(
+                    f"{self._relay_url}/api/sessions",
+                    headers={"X-Daemon-Secret": self._daemon_secret},
+                )
+                if resp.status_code == 200:
+                    initial_ids = {s["session_id"] for s in resp.json().get("sessions", [])}
             except Exception:
                 pass
 
@@ -534,20 +573,19 @@ class SessionManager:
         while time.monotonic() < deadline:
             await asyncio.sleep(SPAWN_POLL_INTERVAL)
             try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    resp = await client.get(
-                        f"{self._relay_url}/api/sessions",
-                        headers={"X-Daemon-Secret": self._daemon_secret},
-                    )
-                    if resp.status_code == 200:
-                        session_ids = {s["session_id"] for s in resp.json().get("sessions", [])}
-                        if expected_id:
-                            if expected_id in session_ids:
-                                return expected_id
-                        else:
-                            for sid in session_ids:
-                                if sid not in initial_ids:
-                                    return sid
+                resp = await client.get(
+                    f"{self._relay_url}/api/sessions",
+                    headers={"X-Daemon-Secret": self._daemon_secret},
+                )
+                if resp.status_code == 200:
+                    session_ids = {s["session_id"] for s in resp.json().get("sessions", [])}
+                    if expected_id:
+                        if expected_id in session_ids:
+                            return expected_id
+                    else:
+                        for sid in session_ids:
+                            if sid not in initial_ids:
+                                return sid
             except Exception:
                 pass
         return None
