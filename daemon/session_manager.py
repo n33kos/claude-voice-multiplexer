@@ -162,9 +162,14 @@ class SessionManager:
             if not await self._wait_for_claude_prompt(tmux_session, timeout=30.0):
                 logger.warning(f"[sessions] Claude prompt not detected in {tmux_session} after 30s — sending standby anyway")
 
-            # Now enter voice standby
+            # Now enter voice standby.  Send Enter twice: the first press
+            # selects the slash command from the autocomplete dropdown, and
+            # the second press submits it.  A brief sleep between presses
+            # gives the TUI time to process the selection.
             await self._run(["tmux", "send-keys", "-t", tmux_session,
                              "/voice-multiplexer:standby"])
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(0.5)
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
 
             # Compute expected relay session ID from CWD (same algorithm as
@@ -605,7 +610,12 @@ class SessionManager:
         return None
 
     async def _wait_for_claude_prompt(self, tmux_session: str, timeout: float = 30.0) -> bool:
-        """Wait for Claude Code's input prompt (❯) to appear in the tmux pane.
+        """Wait for Claude Code's input UI to be fully ready.
+
+        Looks for the horizontal separator line (────) that frames the input
+        field in Claude Code's TUI.  This is more reliable than looking for ❯
+        because ❯ also appears in conversation history when using --continue,
+        which would cause premature detection while the TUI is still loading.
 
         Returns True if the prompt was detected within the timeout, False otherwise.
         Polls every 2 seconds by capturing the tmux pane content.
@@ -617,7 +627,9 @@ class SessionManager:
                 output = await self._run_output([
                     "tmux", "capture-pane", "-t", tmux_session, "-p", "-S", "-10"
                 ])
-                if "❯" in output:
+                # The ──── separator only appears in Claude Code's input frame,
+                # never in conversation history.  Four chars is enough to match.
+                if "────" in output:
                     logger.info(f"[sessions] Claude prompt detected in {tmux_session}")
                     return True
             except Exception:
