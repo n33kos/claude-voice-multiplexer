@@ -8,6 +8,8 @@ interface TerminalOverlayProps {
   loading: boolean;
   onRefresh: () => void;
   onClose: () => void;
+  onSendKeys?: (keys: string) => void;
+  onSendSpecialKey?: (key: string) => void;
 }
 
 function formatTimestamp(ts: number): string {
@@ -19,11 +21,14 @@ function formatTimestamp(ts: number): string {
   return `${Math.round(minutes / 60)}h ago`;
 }
 
-export function TerminalOverlay({ snapshot, loading, onRefresh, onClose }: TerminalOverlayProps) {
+export function TerminalOverlay({ snapshot, loading, onRefresh, onClose, onSendKeys, onSendSpecialKey }: TerminalOverlayProps) {
   const isOpen = loading || snapshot !== null;
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [termInput, setTermInput] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
   const onRefreshRef = useRef(onRefresh);
   onRefreshRef.current = onRefresh;
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!isOpen || !autoRefresh) return;
@@ -31,12 +36,53 @@ export function TerminalOverlay({ snapshot, loading, onRefresh, onClose }: Termi
     return () => clearInterval(interval);
   }, [isOpen, autoRefresh]);
 
+  // Auto-scroll to bottom when content updates
+  useEffect(() => {
+    if (bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    }
+  }, [snapshot?.content]);
+
+  // Focus input when terminal opens
+  useEffect(() => {
+    if (isOpen && inputRef.current) {
+      // Small delay to ensure dialog is rendered
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [isOpen]);
+
+  const handleTerminalSubmit = () => {
+    if (!termInput && onSendSpecialKey) {
+      // Empty enter = just send Enter
+      onSendSpecialKey("Enter");
+      return;
+    }
+    if (termInput && onSendKeys) {
+      onSendKeys(termInput);
+      // Small delay then send Enter
+      setTimeout(() => onSendSpecialKey?.("Enter"), 50);
+      setTermInput("");
+    }
+  };
+
+  const handleTerminalKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleTerminalSubmit();
+    }
+    // Ctrl+C shortcut
+    if (e.key === "c" && e.ctrlKey) {
+      e.preventDefault();
+      onSendSpecialKey?.("C-c");
+    }
+  };
+
   return (
     <Dialog.Root open={isOpen} onOpenChange={(open) => { if (!open) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay className={styles.Overlay} />
         <Dialog.Content className={styles.Content} aria-describedby={undefined}>
-          <Dialog.Title className={styles.VisuallyHidden}>Terminal Snapshot</Dialog.Title>
+          <Dialog.Title className={styles.VisuallyHidden}>Terminal</Dialog.Title>
           <div className={styles.Handle} />
           <div className={styles.Header}>
             <div className={styles.TitleGroup}>
@@ -68,7 +114,7 @@ export function TerminalOverlay({ snapshot, loading, onRefresh, onClose }: Termi
             </div>
           </div>
 
-          <div className={styles.Body}>
+          <div className={styles.Body} ref={bodyRef}>
             {loading && !snapshot && (
               <div className={styles.LoadingState}>
                 <span className={styles.LoadingDot} />
@@ -83,6 +129,53 @@ export function TerminalOverlay({ snapshot, loading, onRefresh, onClose }: Termi
               <pre className={styles.TerminalContent}>{snapshot.content}</pre>
             )}
           </div>
+
+          {onSendKeys && onSendSpecialKey && (
+            <div className={styles.InputBar}>
+              <div className={styles.QuickKeys}>
+                <button className={styles.QuickKey} onClick={() => onSendSpecialKey("C-c")} title="Ctrl+C">
+                  ^C
+                </button>
+                <button className={styles.QuickKey} onClick={() => onSendSpecialKey("Escape")} title="Escape">
+                  Esc
+                </button>
+                <button className={styles.QuickKey} onClick={() => onSendSpecialKey("Tab")} title="Tab">
+                  Tab
+                </button>
+                <button className={styles.QuickKey} onClick={() => onSendSpecialKey("Up")} title="Up arrow">
+                  ↑
+                </button>
+                <button className={styles.QuickKey} onClick={() => onSendSpecialKey("Down")} title="Down arrow">
+                  ↓
+                </button>
+              </div>
+              <div className={styles.InputRow}>
+                <span className={styles.InputPrompt}>$</span>
+                <input
+                  ref={inputRef}
+                  className={styles.TermInput}
+                  type="text"
+                  placeholder="Type a command..."
+                  value={termInput}
+                  onChange={(e) => setTermInput(e.target.value)}
+                  onKeyDown={handleTerminalKeyDown}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                />
+                <button
+                  className={styles.SendKeyButton}
+                  onClick={handleTerminalSubmit}
+                  title="Send"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7M5 12h15" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

@@ -12,6 +12,9 @@ Usage:
   vmux reconnect <path>           attempt to reconnect to a session's tmux pane by re-entering standby
   vmux interrupt <session-id>     send Ctrl-C to a session
   vmux hard-interrupt <session-id>  Ctrl-C + MCP reconnect + re-enter standby
+  vmux send <session-id> <text>   send a text message to a session (like web UI chat)
+  vmux send-keys <session-id> <text>  send literal keystrokes to a session's terminal
+  vmux send-key <session-id> <key>    send a special key (Enter, C-c, Tab, etc)
   vmux auth-code                  generate a one-time pairing code for the web app
   vmux update-if-newer            update daemon from plugin cache if newer version available
   vmux shutdown                   stop daemon and all children
@@ -169,6 +172,29 @@ def cmd_hard_interrupt(session_id: str):
         print(f"Hard interrupt sent.")
 
 
+def cmd_send(target: str, text: str):
+    # If target looks like a path, compute session_id from it
+    if os.path.sep in target or target.startswith("~"):
+        import hashlib
+        cwd = os.path.abspath(os.path.expanduser(target))
+        target = hashlib.sha256(cwd.encode()).hexdigest()[:12]
+    r = _send({"cmd": "send-message", "session_id": target, "text": text})
+    if _ok(r):
+        print(f"Message sent to {target}.")
+
+
+def cmd_send_keys(session_id: str, keys: str):
+    r = _send({"cmd": "send-keys", "session_id": session_id, "keys": keys})
+    if _ok(r):
+        print("Keys sent.")
+
+
+def cmd_send_key(session_id: str, key: str):
+    r = _send({"cmd": "send-keys", "session_id": session_id, "special_key": key})
+    if _ok(r):
+        print(f"Key '{key}' sent.")
+
+
 def cmd_auth_code():
     r = _send({"cmd": "auth-code"})
     if not _ok(r):
@@ -241,6 +267,24 @@ def main():
         if len(sys.argv) < 3:
             _die("Usage: vmux hard-interrupt <session-id>")
         cmd_hard_interrupt(sys.argv[2])
+    elif sub == "send":
+        if len(sys.argv) < 4:
+            _die("Usage: vmux send <session-id|path> <text>\n  Use '-' for text to read from stdin")
+        target = sys.argv[2]
+        text = sys.argv[3]
+        if text == "-":
+            text = sys.stdin.read().strip()
+        if not text:
+            _die("No text provided")
+        cmd_send(target, text)
+    elif sub == "send-keys":
+        if len(sys.argv) < 4:
+            _die("Usage: vmux send-keys <session-id> <text>")
+        cmd_send_keys(sys.argv[2], sys.argv[3])
+    elif sub == "send-key":
+        if len(sys.argv) < 4:
+            _die("Usage: vmux send-key <session-id> <key>\n  Special keys: Enter, C-c, Escape, Tab, Up, Down, Left, Right")
+        cmd_send_key(sys.argv[2], sys.argv[3])
     elif sub in ("auth-code", "authcode"):
         cmd_auth_code()
     elif sub in ("update", "update-if-newer"):

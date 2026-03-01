@@ -788,6 +788,41 @@ async def kill_session(session_id: str, request: Request):
     return JSONResponse({"success": True, "note": "Session removed from relay; daemon reported: " + result.get("error", "unknown")})
 
 
+@app.post("/api/sessions/{session_id}/message")
+async def send_message_to_session(session_id: str, request: Request):
+    """Send a text message to a session's voice queue (like the web UI text input).
+
+    This enables CLI tools and orchestrators to communicate with sessions
+    without going through the web UI.
+    """
+    device = _require_auth(request)
+    body = await request.json()
+    text = body.get("text", "").strip()
+    if not text:
+        return JSONResponse({"error": "text is required"}, status_code=400)
+
+    session = await registry.get(session_id)
+    if not session:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+
+    if session.is_stale:
+        return JSONResponse({"error": "Session is stale (Claude Code disconnected)"}, status_code=410)
+
+    # Identify the caller
+    caller = device.get("device_name", "cli")
+    msg = f"[Voice from {caller}]: {text}"
+    await session.voice_queue.put(msg)
+
+    # Set agent to thinking state
+    if _agent:
+        asyncio.create_task(_agent.handle_text_message(session_id, text, caller))
+
+    # Broadcast transcript
+    await _notify_client_transcript(session_id, "user", text)
+
+    return JSONResponse({"ok": True})
+
+
 @app.post("/api/sessions/{session_id}/interrupt")
 async def interrupt_session(session_id: str, request: Request):
     """Send hard interrupt to a session via daemon (Ctrl-C + re-enter standby)."""
@@ -1136,6 +1171,33 @@ async def client_ws(ws: WebSocket):
                 # User pressed interrupt — force agent to idle
                 if connected_session_id and _agent:
                     asyncio.create_task(_agent.handle_claude_listening(connected_session_id))
+
+            elif msg_type == "terminal_input":
+                # Send keystrokes to the connected session's tmux pane
+                if connected_session_id:
+                    keys = data.get("keys", "")
+                    special_key = data.get("special_key", "")
+                    result = await _daemon_ipc({
+                        "cmd": "send-keys",
+                        "session_id": connected_session_id,
+                        "keys": keys,
+                        "special_key": special_key,
+                    })
+                    # Immediately capture terminal so UI updates fast
+                    if result.get("ok"):
+                        await asyncio.sleep(0.1)  # Tiny delay for output to render
+                        capture = await _daemon_ipc({
+                            "cmd": "capture-terminal",
+                            "session_id": connected_session_id,
+                            "lines": 50,
+                        })
+                        if capture.get("ok"):
+                            await ws.send_text(json.dumps({
+                                "type": "terminal_snapshot",
+                                "session_id": connected_session_id,
+                                "content": capture["output"],
+                                "timestamp": time.time(),
+                            }))
 
             elif msg_type == "capture_terminal":
                 # Capture terminal snapshot from daemon — bypasses Claude entirely

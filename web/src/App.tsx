@@ -246,6 +246,8 @@ export default function App() {
           loading={relay.terminalSnapshotLoading}
           onRefresh={relay.requestTerminalCapture}
           onClose={relay.dismissTerminalSnapshot}
+          onSendKeys={relay.sendTerminalKeys}
+          onSendSpecialKey={relay.sendTerminalSpecialKey}
         />
 
         {relay.connectedSessionId && !navigator.mediaDevices && (

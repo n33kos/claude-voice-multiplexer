@@ -764,6 +764,14 @@ export function useRelay(authenticated: boolean = true) {
     wsRef.current?.send(JSON.stringify({ type: "capture_terminal", lines }));
   }, []);
 
+  const sendTerminalKeys = useCallback((keys: string) => {
+    wsRef.current?.send(JSON.stringify({ type: "terminal_input", keys }));
+  }, []);
+
+  const sendTerminalSpecialKey = useCallback((key: string) => {
+    wsRef.current?.send(JSON.stringify({ type: "terminal_input", special_key: key }));
+  }, []);
+
   const dismissTerminalSnapshot = useCallback(() => {
     setState((s) => ({
       ...s,
@@ -831,5 +839,7 @@ export function useRelay(authenticated: boolean = true) {
     hardInterruptSession,
     requestTerminalCapture,
     dismissTerminalSnapshot,
+    sendTerminalKeys,
+    sendTerminalSpecialKey,
   };
 }

@@ -152,25 +152,43 @@ class SessionManager:
                 f"claude --continue --dangerously-skip-permissions || "
                 f"claude --dangerously-skip-permissions"
             )
-            await self._run(["tmux", "send-keys", "-t", tmux_session, claude_cmd, "Enter"])
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "-l", claude_cmd])
+            await asyncio.sleep(0.3)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
 
-            # Wait for Claude Code's input prompt to appear before sending
+            # Wait for Claude Code's input UI to be fully ready before sending
             # commands.  A blind sleep is unreliable — Claude may still be
             # loading MCP servers, resuming a session, etc.  We capture the
-            # tmux pane and look for the prompt character (❯) which signals
-            # that the TUI is initialized and the input field is ready.
-            if not await self._wait_for_claude_prompt(tmux_session, timeout=30.0):
+            # tmux pane and look for the horizontal separator (────) that frames
+            # the input field, which is more reliable than ❯ (appears in history).
+            if await self._wait_for_claude_prompt(tmux_session, timeout=30.0):
+                # Grace period: the prompt character may render before input
+                # event handlers are fully attached in Claude's TUI.
+                await asyncio.sleep(1.5)
+            else:
                 logger.warning(f"[sessions] Claude prompt not detected in {tmux_session} after 30s — sending standby anyway")
 
-            # Now enter voice standby.  Send Enter twice: the first press
-            # selects the slash command from the autocomplete dropdown, and
-            # the second press submits it.  A brief sleep between presses
-            # gives the TUI time to process the selection.
+            # Now enter voice standby.
+            # Use -l (literal) flag so tmux sends the text as typed characters
+            # rather than interpreting any special key sequences.
+            # Send Enter twice: the first press selects the slash command from
+            # the autocomplete dropdown, and the second press submits it.
             await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "/voice-multiplexer:standby"])
+                             "-l", "/voice-multiplexer:standby"])
+            await asyncio.sleep(0.3)  # Brief pause between text and Enter
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.5)  # Wait for autocomplete selection
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+
+            # Post-verification: capture the pane to confirm the command was received
+            await asyncio.sleep(3.0)
+            try:
+                pane_output = await self._run_output([
+                    "tmux", "capture-pane", "-t", tmux_session, "-p", "-S", "-5"
+                ])
+                logger.info(f"[sessions] pane after standby command: {repr(pane_output[-200:])}")
+            except Exception:
+                pass
 
             # Compute expected relay session ID from CWD (same algorithm as
             # the MCP plugin) and poll for that specific ID to avoid picking up
@@ -251,12 +269,20 @@ class SessionManager:
         try:
             await self.interrupt(session_id)
             await asyncio.sleep(1.0)
+            # MCP reconnect — slash command needs two Enters (autocomplete select + submit)
             await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "/mcp reconnect plugin:voice-multiplexer:voice-multiplexer"])
+                             "-l", "/mcp reconnect plugin:voice-multiplexer:voice-multiplexer"])
+            await asyncio.sleep(0.3)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(0.5)
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             await asyncio.sleep(2.0)
+            # Voice standby — same double-Enter pattern
             await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "/voice-multiplexer:standby"])
+                             "-l", "/voice-multiplexer:standby"])
+            await asyncio.sleep(0.3)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(0.5)
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             return True
         except Exception as e:
@@ -298,18 +324,76 @@ class SessionManager:
             tmux_session = session.tmux_session
         try:
             # Reconnect MCP plugin first to clear stale session state
+            # Slash commands need two Enters (autocomplete select + submit)
             await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "/mcp reconnect plugin:voice-multiplexer:voice-multiplexer"])
+                             "-l", "/mcp reconnect plugin:voice-multiplexer:voice-multiplexer"])
+            await asyncio.sleep(0.3)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(0.5)
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             await asyncio.sleep(2.0)
             # Then re-enter voice standby
             await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "/voice-multiplexer:standby"])
+                             "-l", "/voice-multiplexer:standby"])
+            await asyncio.sleep(0.3)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(0.5)
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             return {"ok": True}
         except Exception as e:
             logger.error(f"[sessions] reconnect failed: {e}")
             return {"ok": False, "error": str(e)}
+
+    async def send_keys(self, session_id: str, keys: str) -> bool:
+        """Send literal keystrokes to a session's tmux pane.
+
+        The text is sent with -l (literal) so tmux doesn't interpret
+        any special key sequences.
+        """
+        async with self._lock:
+            session = self._find_session(session_id)
+            if not session:
+                return False
+            tmux_session = session.tmux_session
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "tmux", "send-keys", "-t", tmux_session, "-l", keys,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+            return proc.returncode == 0
+        except Exception as e:
+            logger.error(f"[sessions] send_keys failed: {e}")
+            return False
+
+    async def send_special_key(self, session_id: str, key: str) -> bool:
+        """Send a special key (Enter, C-c, Escape, Tab, etc) to a session."""
+        ALLOWED_SPECIAL = {
+            "Enter", "C-c", "Escape", "Tab", "BSpace",
+            "Up", "Down", "Left", "Right",
+            "C-l", "C-d", "C-z", "C-a", "C-e",
+        }
+        if key not in ALLOWED_SPECIAL:
+            return False
+        async with self._lock:
+            session = self._find_session(session_id)
+            if not session:
+                return False
+            tmux_session = session.tmux_session
+        try:
+            # Empty string after key name is required for tmux send-keys
+            # with special keys to terminate the key name sequence.
+            proc = await asyncio.create_subprocess_exec(
+                "tmux", "send-keys", "-t", tmux_session, key, "",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+            return proc.returncode == 0
+        except Exception as e:
+            logger.error(f"[sessions] send_special_key failed: {e}")
+            return False
 
     async def get_attach_info(self, session_id: str) -> Optional[dict]:
         async with self._lock:

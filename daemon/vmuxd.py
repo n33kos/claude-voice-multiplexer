@@ -444,6 +444,27 @@ class VmuxDaemon:
                 if output is None:
                     return {"ok": False, "error": "Session not found or tmux capture failed"}
                 return {"ok": True, "output": output}
+            elif cmd == "send-keys":
+                session_id = request.get("session_id", "")
+                keys = request.get("keys", "")
+                special = request.get("special_key", "")
+                if not session_id:
+                    return {"ok": False, "error": "session_id is required"}
+                if special:
+                    ok = await self._session_manager.send_special_key(session_id, special)
+                elif keys:
+                    ok = await self._session_manager.send_keys(session_id, keys)
+                else:
+                    return {"ok": False, "error": "keys or special_key is required"}
+                return {"ok": ok, "error": None if ok else "Session not found or send failed"}
+            elif cmd == "send-message":
+                session_id = request.get("session_id", "")
+                text = request.get("text", "")
+                if not session_id:
+                    return {"ok": False, "error": "session_id is required"}
+                if not text:
+                    return {"ok": False, "error": "text is required"}
+                return await self._cmd_send_message(session_id, text)
             elif cmd == "auth-code":
                 return await self._cmd_auth_code()
             elif cmd == "update-if-newer":
@@ -472,6 +493,24 @@ class VmuxDaemon:
             "services": services,
             "sessions": sessions,
         }
+
+    async def _cmd_send_message(self, session_id: str, text: str) -> dict:
+        """Send a text message to a session via the relay server."""
+        from service_manager import _get_health_client
+        try:
+            client = await _get_health_client()
+            resp = await client.post(
+                f"{RELAY_URL}/api/sessions/{session_id}/message",
+                json={"text": text},
+                headers={"X-Daemon-Secret": self._daemon_secret},
+                timeout=10.0,
+            )
+            if resp.status_code == 200:
+                return {"ok": True}
+            data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            return {"ok": False, "error": data.get("error", f"Relay returned {resp.status_code}")}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     async def _cmd_auth_code(self) -> dict:
         """Generate a pairing code via the relay server."""
