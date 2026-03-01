@@ -86,9 +86,18 @@ export interface TerminalSnapshot {
 /** Callback for raw terminal data (ANSI) from streaming. */
 export type TerminalDataCallback = (data: string) => void;
 
+/** Server-side session metadata (display names, color overrides). */
+interface ServerSessionMetadata {
+  session_id: string;
+  display_name: string | null;
+  hue_override: number | null;
+  updated_at: number | null;
+}
+
 interface RelayState {
   liveSessions: Session[];
   persistedSessions: PersistedSession[];
+  serverMetadata: ServerSessionMetadata[]; // server-side metadata (takes priority)
   connectedSessionId: string | null;
   connectedSessionName: string | null;
   transcripts: Record<string, TranscriptEntry[]>; // keyed by session_id
@@ -129,10 +138,23 @@ function mergeDisplaySessions(
   live: Session[],
   persisted: PersistedSession[],
   transcripts: Record<string, TranscriptEntry[]>,
+  serverMeta: ServerSessionMetadata[] = [],
 ): DisplaySession[] {
   const result = new Map<string, DisplaySession>();
 
-  // Build lookups for persisted overrides (keyed by session_id)
+  // Build lookups for server-side metadata (takes priority over local)
+  const serverDisplayNames = new Map(
+    serverMeta
+      .filter((m) => m.display_name)
+      .map((m) => [m.session_id, m.display_name!]),
+  );
+  const serverHueOverrides = new Map(
+    serverMeta
+      .filter((m) => m.hue_override != null)
+      .map((m) => [m.session_id, m.hue_override!]),
+  );
+
+  // Build lookups for persisted overrides (keyed by session_id) — fallback
   const displayNames = new Map(
     persisted
       .filter((p) => p.display_name)
@@ -153,7 +175,10 @@ function mergeDisplaySessions(
       result.set(p.session_id, {
         session_id: p.session_id,
         session_name: p.session_name,
-        display_name: p.display_name || p.session_name,
+        display_name:
+          serverDisplayNames.get(p.session_id) ||
+          p.display_name ||
+          p.session_name,
         dir_name: p.dir_name,
         cwd: p.cwd || "",
         room_name: makeRoomName(p.session_id),
@@ -161,7 +186,8 @@ function mergeDisplaySessions(
         last_seen: p.last_seen,
         last_interaction: getLastInteraction(transcripts, p.session_id),
         connected_clients: [],
-        hue_override: p.hue_override,
+        hue_override:
+          serverHueOverrides.get(p.session_id) ?? p.hue_override,
         daemon_managed: p.daemon_managed,
       });
     }
@@ -172,7 +198,10 @@ function mergeDisplaySessions(
     result.set(s.session_id, {
       session_id: s.session_id,
       session_name: s.name,
-      display_name: displayNames.get(s.session_id) || s.name,
+      display_name:
+        serverDisplayNames.get(s.session_id) ||
+        displayNames.get(s.session_id) ||
+        s.name,
       dir_name: s.dir_name,
       cwd: s.cwd,
       room_name: s.room_name,
@@ -180,7 +209,9 @@ function mergeDisplaySessions(
       last_seen: s.last_heartbeat,
       last_interaction: getLastInteraction(transcripts, s.session_id),
       connected_clients: s.connected_clients || [],
-      hue_override: hueOverrides.get(s.session_id),
+      hue_override:
+        serverHueOverrides.get(s.session_id) ??
+        hueOverrides.get(s.session_id),
       health: s.health,
       daemon_managed: s.daemon_managed,
     });
@@ -211,6 +242,7 @@ export function useRelay(authenticated: boolean = true) {
   const [state, setState] = useState<RelayState>({
     liveSessions: [],
     persistedSessions: [],
+    serverMetadata: [],
     connectedSessionId: null,
     connectedSessionName: null,
     transcripts: {},
@@ -309,6 +341,17 @@ export function useRelay(authenticated: boolean = true) {
     ws.onopen = () => {
       reconnectAttempt.current = 0;
       setState((s) => ({ ...s, status: "connected" }));
+      // Fetch server-side session metadata on connect
+      authFetch("/api/session-metadata")
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.metadata) {
+            setState((s) => ({ ...s, serverMetadata: data.metadata }));
+          }
+        })
+        .catch(() => {
+          // Non-fatal — server metadata is best-effort
+        });
       // Auto-rejoin previous session after reconnect
       if (lastSessionRef.current) {
         ws.send(
@@ -523,6 +566,26 @@ export function useRelay(authenticated: boolean = true) {
             agentStatus: { state: data.state, activity: null },
           }));
           break;
+        case "session_metadata_updated": {
+          const meta = data.metadata as ServerSessionMetadata;
+          if (meta?.session_id) {
+            setState((s) => {
+              const existing = s.serverMetadata.filter(
+                (m) => m.session_id !== meta.session_id,
+              );
+              // If all fields are null, the metadata was deleted — just remove it
+              if (
+                meta.display_name == null &&
+                meta.hue_override == null &&
+                meta.updated_at == null
+              ) {
+                return { ...s, serverMetadata: existing };
+              }
+              return { ...s, serverMetadata: [...existing, meta] };
+            });
+          }
+          break;
+        }
         case "ping":
           ws.send(JSON.stringify({ type: "pong" }));
           break;
@@ -651,6 +714,7 @@ export function useRelay(authenticated: boolean = true) {
 
   const renameSession = useCallback(
     (sessionId: string, displayName: string) => {
+      // Optimistic local update
       setState((s) => ({
         ...s,
         persistedSessions: s.persistedSessions.map((p) =>
@@ -659,7 +723,7 @@ export function useRelay(authenticated: boolean = true) {
             : p,
         ),
       }));
-      // Persist to IndexedDB
+      // Persist to IndexedDB as cache/fallback
       const existing = stateRef.current.persistedSessions.find(
         (p) => p.session_id === sessionId,
       );
@@ -669,6 +733,14 @@ export function useRelay(authenticated: boolean = true) {
           display_name: displayName || undefined,
         });
       }
+      // Persist to server (authoritative)
+      authFetch(`/api/session-metadata/${sessionId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ display_name: displayName || null }),
+      }).catch(() => {
+        // Non-fatal — local state is already updated
+      });
     },
     [],
   );
@@ -795,6 +867,7 @@ export function useRelay(authenticated: boolean = true) {
 
   const recolorSession = useCallback(
     (sessionId: string, hue: number | null) => {
+      // Optimistic local update
       setState((s) => ({
         ...s,
         persistedSessions: s.persistedSessions.map((p) =>
@@ -803,22 +876,31 @@ export function useRelay(authenticated: boolean = true) {
             : p,
         ),
       }));
-      // Persist to IndexedDB
+      // Persist to IndexedDB as cache/fallback
       const existing = stateRef.current.persistedSessions.find(
         (p) => p.session_id === sessionId,
       );
       if (existing) {
         savePersistedSession({ ...existing, hue_override: hue ?? undefined });
       }
+      // Persist to server (authoritative)
+      authFetch(`/api/session-metadata/${sessionId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hue_override: hue }),
+      }).catch(() => {
+        // Non-fatal — local state is already updated
+      });
     },
     [],
   );
 
-  // Merge live + persisted for display
+  // Merge live + persisted for display (server metadata takes priority)
   const displaySessions = mergeDisplaySessions(
     state.liveSessions,
     state.persistedSessions,
     state.transcripts,
+    state.serverMetadata,
   );
 
   // Select transcript for connected session by session_id

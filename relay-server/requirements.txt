@@ -10,3 +10,4 @@ scipy>=1.10
 webrtcvad>=2.0.10
 PyJWT>=2.8
 fastmcp>=2.0
+aiosqlite>=0.20

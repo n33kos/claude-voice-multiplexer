@@ -36,9 +36,11 @@ from config import RELAY_HOST, RELAY_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT
 import auth
 from registry import SessionRegistry
 from livekit_agent import RelayAgent
+from metadata_store import MetadataStore
 import mcp_tools
 
 registry = SessionRegistry()
+metadata_store = MetadataStore()
 
 # --- Shared HTTP client ---
 # Single httpx.AsyncClient reused for ALL outbound HTTP requests in the relay
@@ -370,6 +372,7 @@ async def lifespan(app: FastAPI):
     _fd_monitor_task.cancel()
     if _agent:
         await _agent.stop()
+    await metadata_store.close()
     if _http_client:
         await _http_client.aclose()
         _http_client = None
@@ -857,6 +860,57 @@ async def reconnect_session_endpoint(request: Request):
     if result.get("ok"):
         return JSONResponse(result)
     return JSONResponse({"error": result.get("error", "Reconnect failed")}, status_code=500)
+
+async def _broadcast_metadata_update(metadata: dict):
+    """Broadcast a session_metadata_updated message to all connected web clients."""
+    msg = json.dumps({"type": "session_metadata_updated", "metadata": metadata})
+    for client_ws in list(_clients.values()):
+        try:
+            await client_ws.send_text(msg)
+        except Exception:
+            pass
+
+
+@app.get("/api/session-metadata")
+async def get_all_session_metadata(request: Request):
+    """Return all server-side session metadata (display names, color overrides)."""
+    _require_auth(request)
+    metadata = await metadata_store.get_all()
+    return JSONResponse({"metadata": metadata})
+
+
+@app.put("/api/session-metadata/{session_id}")
+async def upsert_session_metadata(session_id: str, request: Request):
+    """Create or update session metadata (display_name and/or hue_override)."""
+    _require_auth(request)
+    body = await request.json()
+
+    display_name = body.get("display_name")
+    hue_override = body.get("hue_override")
+
+    # Allow explicitly clearing values by passing null
+    if display_name is not None and not isinstance(display_name, str):
+        return JSONResponse({"error": "display_name must be a string"}, status_code=400)
+    if hue_override is not None and not isinstance(hue_override, (int, float)):
+        return JSONResponse({"error": "hue_override must be a number"}, status_code=400)
+
+    hue_int = int(hue_override) if hue_override is not None else None
+    updated = await metadata_store.set(session_id, display_name=display_name, hue_override=hue_int)
+    await _broadcast_metadata_update(updated)
+    return JSONResponse({"ok": True, "metadata": updated})
+
+
+@app.delete("/api/session-metadata/{session_id}")
+async def delete_session_metadata(session_id: str, request: Request):
+    """Delete session metadata for a given session."""
+    _require_auth(request)
+    deleted = await metadata_store.delete(session_id)
+    if not deleted:
+        return JSONResponse({"error": "Metadata not found"}, status_code=404)
+    # Broadcast removal to clients
+    await _broadcast_metadata_update({"session_id": session_id, "display_name": None, "hue_override": None, "updated_at": None})
+    return JSONResponse({"ok": True})
+
 
 @app.get("/api/token")
 async def get_token(request: Request, room: str = "multiplexer", identity: str = ""):
