@@ -418,6 +418,22 @@ class SessionManager:
             logger.error(f"[sessions] capture_terminal failed: {e}")
             return None
 
+    async def capture_terminal_ansi(self, session_id: str, lines: int = 50) -> str:
+        """Capture terminal with ANSI escape sequences preserved."""
+        async with self._lock:
+            session = self._find_session(session_id)
+            if not session:
+                return ""
+            tmux_session = session.tmux_session
+        try:
+            output = await self._run_output([
+                "tmux", "capture-pane", "-t", tmux_session, "-p", "-e", "-S", f"-{lines}"
+            ])
+            return output
+        except Exception as e:
+            logger.error(f"[sessions] capture_terminal_ansi failed: {e}")
+            return ""
+
     async def list_sessions(self) -> list[dict]:
         async with self._lock:
             return [s.to_dict() for s in self._sessions.values()]

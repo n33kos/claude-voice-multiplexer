@@ -83,6 +83,9 @@ export interface TerminalSnapshot {
   timestamp: number;
 }
 
+/** Callback for raw terminal data (ANSI) from streaming. */
+export type TerminalDataCallback = (data: string) => void;
+
 interface RelayState {
   liveSessions: Session[];
   persistedSessions: PersistedSession[];
@@ -220,6 +223,9 @@ export function useRelay(authenticated: boolean = true) {
 
   const stateRef = useRef(state);
   stateRef.current = state;
+
+  // Callback ref for terminal data streaming — set by TerminalOverlay
+  const terminalDataCallbackRef = useRef<TerminalDataCallback | null>(null);
 
   // Load persisted sessions on mount and prune stale data
   useEffect(() => {
@@ -515,6 +521,12 @@ export function useRelay(authenticated: boolean = true) {
             },
           }));
           break;
+        case "terminal_data":
+          // Forward raw ANSI terminal data to the xterm.js callback
+          if (terminalDataCallbackRef.current && data.data) {
+            terminalDataCallbackRef.current(data.data);
+          }
+          break;
         case "agent_state":
           // Backward compat: flat state without activity
           setState((s) => ({
@@ -780,6 +792,18 @@ export function useRelay(authenticated: boolean = true) {
     }));
   }, []);
 
+  const startTerminalStream = useCallback(() => {
+    wsRef.current?.send(JSON.stringify({ type: "terminal_stream_start" }));
+  }, []);
+
+  const stopTerminalStream = useCallback(() => {
+    wsRef.current?.send(JSON.stringify({ type: "terminal_stream_stop" }));
+  }, []);
+
+  const setTerminalDataCallback = useCallback((cb: TerminalDataCallback | null) => {
+    terminalDataCallbackRef.current = cb;
+  }, []);
+
   const recolorSession = useCallback(
     (sessionId: string, hue: number | null) => {
       setState((s) => ({
@@ -841,5 +865,8 @@ export function useRelay(authenticated: boolean = true) {
     dismissTerminalSnapshot,
     sendTerminalKeys,
     sendTerminalSpecialKey,
+    startTerminalStream,
+    stopTerminalStream,
+    setTerminalDataCallback,
   };
 }

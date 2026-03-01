@@ -1069,6 +1069,7 @@ async def client_ws(ws: WebSocket):
     device_name = device.get("device_name", "Unknown")
     _clients[client_id] = ws
     connected_session_id = None
+    terminal_stream_task: Optional[asyncio.Task] = None
 
     try:
         # Send current session list on connect
@@ -1224,6 +1225,54 @@ async def client_ws(ws: WebSocket):
                             "timestamp": time.time(),
                         }))
 
+            elif msg_type == "terminal_stream_start":
+                # Start streaming terminal output with ANSI escapes
+                if connected_session_id:
+                    # Cancel any existing stream task for this client
+                    if terminal_stream_task and not terminal_stream_task.done():
+                        terminal_stream_task.cancel()
+                        try:
+                            await terminal_stream_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+
+                    async def _stream_terminal(sid: str, target_ws: WebSocket):
+                        """Background task: poll tmux with ANSI and send terminal_data."""
+                        prev_content = ""
+                        try:
+                            while True:
+                                result = await _daemon_ipc({
+                                    "cmd": "capture-terminal-ansi",
+                                    "session_id": sid,
+                                    "lines": 50,
+                                })
+                                content = result.get("content", "")
+                                if content and content != prev_content:
+                                    prev_content = content
+                                    await target_ws.send_text(json.dumps({
+                                        "type": "terminal_data",
+                                        "data": content,
+                                    }))
+                                await asyncio.sleep(0.15)
+                        except (asyncio.CancelledError, WebSocketDisconnect):
+                            pass
+                        except Exception as e:
+                            print(f"[terminal_stream] error: {e}")
+
+                    terminal_stream_task = asyncio.create_task(
+                        _stream_terminal(connected_session_id, ws)
+                    )
+
+            elif msg_type == "terminal_stream_stop":
+                # Stop streaming terminal output
+                if terminal_stream_task and not terminal_stream_task.done():
+                    terminal_stream_task.cancel()
+                    try:
+                        await terminal_stream_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                    terminal_stream_task = None
+
             elif msg_type == "disconnect_session":
                 if connected_session_id:
                     await registry.disconnect_client(connected_session_id, client_id)
@@ -1235,6 +1284,13 @@ async def client_ws(ws: WebSocket):
     except Exception as e:
         print(f"Client WebSocket error: {e}")
     finally:
+        # Clean up terminal stream task
+        if terminal_stream_task and not terminal_stream_task.done():
+            terminal_stream_task.cancel()
+            try:
+                await terminal_stream_task
+            except (asyncio.CancelledError, Exception):
+                pass
         if connected_session_id:
             await registry.disconnect_client(connected_session_id, client_id)
         _clients.pop(client_id, None)

@@ -444,6 +444,13 @@ class VmuxDaemon:
                 if output is None:
                     return {"ok": False, "error": "Session not found or tmux capture failed"}
                 return {"ok": True, "output": output}
+            elif cmd == "capture-terminal-ansi":
+                session_id = request.get("session_id", "")
+                lines = int(request.get("lines", 50))
+                content = await self._session_manager.capture_terminal_ansi(
+                    session_id, int(lines)
+                )
+                return {"ok": True, "content": content}
             elif cmd == "send-keys":
                 session_id = request.get("session_id", "")
                 keys = request.get("keys", "")
