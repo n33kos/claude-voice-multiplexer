@@ -32,9 +32,27 @@ Then enter a continuous conversation loop:
 
 **Note:** No session identifiers or working directory paths need to be passed to any tool. The server auto-detects your session from the MCP connection.
 
-### Background Agent Tasks
+### Prefer Background Execution
 
-When you need to do long-running work while staying in standby (e.g. searching a large codebase, running tests, spawning a research agent), use this pattern:
+**While in standby, you MUST stay responsive to voice input at all times.** Any task that takes more than a few seconds should be run as a background agent so you can immediately re-enter `relay_standby` and keep listening.
+
+**Run in background (default for non-trivial work):**
+- File edits and code changes
+- Codebase searches and exploration
+- Running commands (tests, builds, git operations)
+- Multi-step implementations
+- Research or analysis tasks
+
+**OK to do synchronously (quick inline work):**
+- Simple conversational answers (no tool calls needed)
+- Reading a single short file for immediate context
+- Quick one-line commands where the result is needed for the response
+
+When in doubt, background it. The cost of backgrounding a fast task is negligible, but the cost of blocking standby on a slow task makes you completely unresponsive to the user.
+
+### Background Agent Pattern
+
+When running background work, follow this pattern:
 
 1. Tell the user what you're starting via `relay_respond`
 2. Launch the background task with `Task(run_in_background=True, ...)`

@@ -2,7 +2,7 @@
 
 A Claude Code MCP plugin and relay server for remote voice interaction with multiple Claude Code sessions. Talk to your running Claude sessions from anywhere — switch between them, see their output, and control them by voice from your phone or any browser.
 
-**v2.0**: Powered by `vmuxd`, a persistent daemon that manages all services and spawns Claude sessions on demand from the web app.
+**v3.0**: Powered by `vmuxd`, a persistent daemon that manages all services and spawns Claude sessions on demand from the web app. Now with inter-session messaging, interactive terminal, and improved keystroke reliability.
 
 ## Architecture
 
@@ -129,6 +129,9 @@ vmux restart <session-id>       # kill + respawn a session
 vmux restart kokoro             # restart an infrastructure service
 vmux interrupt <session-id>     # send Ctrl-C to a session
 vmux hard-interrupt <session-id># Ctrl-C + MCP reconnect + re-enter standby
+vmux send <id-or-path> <text>   # send a text message to a session's voice queue
+vmux send-keys <id> <keys>      # send literal keystrokes to a session's tmux pane
+vmux send-key <id> <key>        # send a special key (Enter, C-c, Tab, etc.)
 vmux auth-code                  # generate a one-time pairing code
 vmux update-if-newer            # apply update from plugin cache
 vmux shutdown                   # stop daemon and all services
@@ -155,7 +158,7 @@ FastMCP tools embedded in the relay server and served over SSE at `/mcp/sse`.
 
 A Python server (FastAPI + Uvicorn) that bridges the web client, Claude sessions, and local AI services.
 
-**New endpoints (v2.0):**
+**Endpoints:**
 
 | Endpoint                              | Type | Description                                         |
 | ------------------------------------- | ---- | --------------------------------------------------- |
@@ -163,16 +166,17 @@ A Python server (FastAPI + Uvicorn) that bridges the web client, Claude sessions
 | `DELETE /api/sessions/<id>`           | HTTP | Kill a session via daemon (auth required)           |
 | `POST /api/sessions/<id>/interrupt`   | HTTP | Hard interrupt via daemon (auth required)           |
 | `POST /api/sessions/<id>/restart`     | HTTP | Kill + respawn via daemon (auth required)           |
+| `POST /api/sessions/<id>/message`     | HTTP | Send a text message to a session's voice queue      |
 
-**All existing endpoints from v1 are preserved.** See the WebSocket protocol documentation in the code.
+**WebSocket `terminal_input` message** (v3.0): The client WebSocket now accepts `terminal_input` messages with `{keys, special_key}` fields, forwarded to the session's tmux pane via the daemon.
 
 ### 5. React Web App (`web/`)
 
-**New in v2.0:**
 - **"+" button** in the session list header — opens a dialog to spawn a new Claude session by directory
 - **Health badges** on session cards — amber "zombie", red "dead"
 - **Kill / Restart / Hard Interrupt** menu items in the session context menu (for daemon-managed sessions)
-- **Authorization: Bearer header** — auth tokens are stored in localStorage and sent as `Authorization: Bearer <jwt>` on all REST requests (previously HTTP-only cookie only)
+- **Interactive terminal overlay** (v3.0) — tap the terminal icon in the transcript to open a bidirectional terminal view. Includes a command input bar, quick-action keys (^C, Esc, Tab, ↑, ↓), and auto-refreshing terminal snapshots. Sends keystrokes directly to the Claude Code TUI via WebSocket → daemon → tmux.
+- **Authorization: Bearer header** — auth tokens are stored in localStorage and sent as `Authorization: Bearer <jwt>` on all REST requests
 
 ### 6. Skills (`skills/`)
 
@@ -404,6 +408,15 @@ The Unix socket at `/tmp/vmuxd.sock` (mode 0600) accepts newline-delimited JSON:
 {"cmd": "status"}
 → {"ok": true, "daemon_pid": 1234, "services": {...}, "sessions": [...]}
 
+{"cmd": "send-keys", "session_id": "abc123", "keys": "hello world"}
+→ {"ok": true}
+
+{"cmd": "send-keys", "session_id": "abc123", "special_key": "Enter"}
+→ {"ok": true}
+
+{"cmd": "send-message", "session_id": "abc123", "text": "Please summarize..."}
+→ {"ok": true}
+
 {"cmd": "shutdown"}
 → {"ok": true}
 ```
@@ -445,7 +458,7 @@ If `version > installed VERSION`:
 ```
 claude-voice-multiplexer/
 ├── .claude-plugin/
-│   └── plugin.json                      # Plugin manifest (v2.0.1)
+│   └── plugin.json                      # Plugin manifest (v3.0.0)
 ├── .mcp.json                            # Bundled MCP server definition
 ├── README.md
 ├── daemon/
@@ -479,6 +492,7 @@ claude-voice-multiplexer/
 │       │   └── ...
 │       └── components/
 │           ├── SessionList/             # Session drawer + New Session button
+│           ├── TerminalOverlay/         # Interactive terminal with keystroke input
 │           └── ...
 └── scripts/
     ├── install.sh                       # Full install + daemon setup + launchd
@@ -487,6 +501,25 @@ claude-voice-multiplexer/
     ├── status.sh                        # Compatibility wrapper (delegates to vmux)
     └── uninstall.sh
 ```
+
+## Inter-Session Messaging (v3.0)
+
+The `vmux send` command enables programmatic messaging between sessions, unlocking an orchestrator pattern where one AI coordinates multiple Claude sessions.
+
+```bash
+# Send by session ID
+vmux send abc123 "Please summarize the recent changes"
+
+# Send by directory path (auto-computes session ID from path hash)
+vmux send ~/projects/my-app "Run the test suite and report back"
+
+# Pipe from stdin
+echo "Deploy to staging" | vmux send abc123 -
+```
+
+Messages are delivered to the target session's voice queue — the same path as web UI text input and voice transcriptions. The receiving Claude session picks them up on its next `relay_standby` call.
+
+**Flow:** `vmux send` → daemon IPC → `POST /api/sessions/{id}/message` → relay → `session.voice_queue` → `relay_standby` returns message to Claude.
 
 ## Migration from v1
 
