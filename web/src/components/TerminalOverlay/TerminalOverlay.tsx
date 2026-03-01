@@ -123,17 +123,23 @@ export function TerminalOverlay({
 
     // Register the callback to receive terminal_data from the relay
     const writeCallback = (data: string) => {
-      // Each terminal_data message is a full pane capture — clear and rewrite
-      term.reset();
-      term.write(data);
+      // Each terminal_data message is a full pane capture — clear and rewrite.
+      // Use ANSI escape sequences instead of term.reset() to avoid blanking
+      // the terminal between frames. \x1b[2J clears screen, \x1b[H moves
+      // cursor to home position.
+      term.write("\x1b[2J\x1b[H" + data);
     };
     onSetTerminalDataCallback?.(writeCallback);
 
-    // Start the stream
-    onStartStream?.();
+    // Start the stream after a short delay to ensure the terminal is fully
+    // mounted and the callback is registered before data arrives.
+    const startTimer = setTimeout(() => {
+      onStartStream?.();
+    }, 100);
 
     return () => {
       // Stop the stream and unregister callback
+      clearTimeout(startTimer);
       onStopStream?.();
       onSetTerminalDataCallback?.(null);
       term.dispose();
