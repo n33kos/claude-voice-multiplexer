@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -25,13 +25,14 @@ export function TerminalOverlay({
   onStopStream,
   onSetTerminalDataCallback,
 }: TerminalOverlayProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  // Track when the container div is actually in the DOM via callback ref
+  const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
 
-  // Initialize xterm.js when the overlay opens
+  // Initialize xterm.js when the container element is available
   useEffect(() => {
-    if (!open || !containerRef.current) return;
+    if (!open || !containerEl) return;
 
     const term = new Terminal({
       cursorBlink: false,
@@ -70,7 +71,7 @@ export function TerminalOverlay({
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
 
-    term.open(containerRef.current);
+    term.open(containerEl);
 
     // Small delay to let the DOM settle before fitting
     requestAnimationFrame(() => {
@@ -86,7 +87,6 @@ export function TerminalOverlay({
 
     // Wire up user input to send keystrokes
     term.onData((data) => {
-      // Map special sequences to special key names
       if (data === "\r") {
         onSendSpecialKey?.("Enter");
       } else if (data === "\x03") {
@@ -116,29 +116,26 @@ export function TerminalOverlay({
       } else if (data === "\x0c") {
         onSendSpecialKey?.("C-l");
       } else {
-        // Regular text input
         onSendKeys?.(data);
       }
     });
 
     // Register the callback to receive terminal_data from the relay
     const writeCallback = (data: string) => {
-      // Each terminal_data message is a full pane capture — clear and rewrite.
-      // Use ANSI escape sequences instead of term.reset() to avoid blanking
-      // the terminal between frames. \x1b[2J clears screen, \x1b[H moves
-      // cursor to home position.
       term.write("\x1b[2J\x1b[H" + data);
     };
     onSetTerminalDataCallback?.(writeCallback);
 
-    // Start the stream after a short delay to ensure the terminal is fully
-    // mounted and the callback is registered before data arrives.
+    // Write initial status message
+    term.writeln("\x1b[32m● Terminal connected\x1b[0m");
+    term.writeln("\x1b[90mStarting live stream...\x1b[0m");
+
+    // Start the stream
     const startTimer = setTimeout(() => {
       onStartStream?.();
     }, 100);
 
     return () => {
-      // Stop the stream and unregister callback
       clearTimeout(startTimer);
       onStopStream?.();
       onSetTerminalDataCallback?.(null);
@@ -146,9 +143,8 @@ export function TerminalOverlay({
       terminalRef.current = null;
       fitAddonRef.current = null;
     };
-    // Only re-run when open changes — the callbacks are stable refs
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, containerEl]);
 
   // Handle resize events
   useEffect(() => {
@@ -163,8 +159,6 @@ export function TerminalOverlay({
     };
 
     window.addEventListener("resize", handleResize);
-
-    // Also re-fit when dialog animation completes
     const timer = setTimeout(handleResize, 300);
 
     return () => {
@@ -176,11 +170,15 @@ export function TerminalOverlay({
   const handleQuickKey = useCallback(
     (key: string) => {
       onSendSpecialKey?.(key);
-      // Refocus the terminal so keyboard input continues
       terminalRef.current?.focus();
     },
     [onSendSpecialKey],
   );
+
+  // Callback ref: React calls this when the div mounts/unmounts in the DOM
+  const containerRefCallback = useCallback((node: HTMLDivElement | null) => {
+    setContainerEl(node);
+  }, []);
 
   return (
     <Dialog.Root
@@ -234,7 +232,7 @@ export function TerminalOverlay({
             </div>
           </div>
 
-          <div className={styles.TerminalContainer} ref={containerRef} />
+          <div className={styles.TerminalContainer} ref={containerRefCallback} />
 
           {onSendSpecialKey && (
             <div className={styles.InputBar}>
