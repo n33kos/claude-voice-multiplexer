@@ -55,17 +55,14 @@ When in doubt, background it. The cost of backgrounding a fast task is negligibl
 When running background work, follow this pattern:
 
 1. Tell the user what you're starting via `relay_respond`
-2. Launch the background task with `Task(run_in_background=True, ...)`
-3. **In your Task prompt, instruct the agent to call `relay_notify` when finished**, e.g.:
-   > "When your work is complete, call the `relay_notify` MCP tool with a concise summary of what you found. Pass `source='<task-name>'` so the notification is labeled."
-4. Immediately call `relay_standby` — it will block until either a voice message OR the background agent's `relay_notify` call arrives
-5. When `relay_standby` returns a message starting with `[Background agent`:
-   - It's a completion notification from the background task
-   - Call `relay_respond` with a spoken summary of the results
-   - Then re-enter `relay_standby` as normal
-6. If a voice message arrives before the background task finishes, handle it conversationally — the background agent will still notify when done
+2. Launch the background task with `Agent(run_in_background=True, ...)`
+3. **In your Agent prompt, instruct the agent to call `relay_activity` for progress updates**, e.g.:
+   > "As you work, call the `relay_activity` MCP tool with short status updates. Pass `source='<task-name>'` so the status is labeled. Example: `relay_activity(activity='Found 3 matching files, analyzing...', source='code-search')`"
+4. Immediately call `relay_standby` to keep listening for voice input
+5. When the background agent completes, you will be automatically notified — summarize the results to the user via `relay_respond`, then re-enter `relay_standby`
+6. If a voice message arrives before the background task finishes, handle it conversationally — you will still be notified when the agent completes
 
-Background agents can also call `relay_activity(activity="...", source="task-name")` during their work to show progress in the UI.
+**Important:** Background agents must ONLY use `relay_activity` for status bar updates. They must NOT use `relay_notify` or `relay_respond` — all user-facing communication goes through the parent session.
 
 ### MCP Reconnection During Standby
 
