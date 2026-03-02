@@ -12,6 +12,7 @@ joins that room. When a phone client connects to a session, the agent in that ro
 """
 
 import asyncio
+import gc
 import io
 import re
 import struct
@@ -42,6 +43,11 @@ NUM_CHANNELS = 1
 
 # VAD internals (not user-configurable)
 VAD_FRAME_MS = 30  # WebRTC VAD frame size (10, 20, or 30ms)
+
+# Maximum audio buffer size in frames.  At 16kHz with 30ms frames (~480
+# samples each), MAX_RECORDING_S (180s) = ~6000 frames.  We add 10%
+# headroom and hard-cap to prevent unbounded growth if VAD misbehaves.
+_MAX_AUDIO_BUFFER_FRAMES = int(MAX_RECORDING_S / (VAD_FRAME_MS / 1000) * 1.1)
 
 # Whisper noise/hallucination filtering.
 #
@@ -198,7 +204,7 @@ class SessionRoom:
         self._audio_stream_tasks: dict[str, asyncio.Task] = {}
 
         # Queue to serialize TTS responses (prevents concurrent playback conflicts)
-        self._response_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._response_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=50)
         self._response_worker_task: asyncio.Optional[Task] = None
 
     async def start(self):
@@ -253,22 +259,43 @@ class SessionRoom:
         self._response_worker_task = asyncio.create_task(self._response_worker())
 
     async def stop(self):
-        """Disconnect from LiveKit room and clean up."""
+        """Disconnect from LiveKit room and clean up all resources."""
         self._running = False
 
         # Cancel response worker
         if self._response_worker_task and not self._response_worker_task.done():
             self._response_worker_task.cancel()
+            try:
+                await self._response_worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
-        # Cancel all audio stream tasks
+        # Cancel all audio stream tasks and wait for them to finish cleanup
+        tasks_to_cancel = []
         for task in self._audio_stream_tasks.values():
             if not task.done():
                 task.cancel()
+                tasks_to_cancel.append(task)
+        for task in tasks_to_cancel:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
         self._audio_stream_tasks.clear()
 
         # Cancel timers
         if self._error_timer and not self._error_timer.done():
             self._error_timer.cancel()
+
+        # Drain the response queue to release any held text references
+        while not self._response_queue.empty():
+            try:
+                self._response_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+        # Clear audio buffer
+        self._clear_audio_buffer()
 
         if self.room:
             try:
@@ -279,6 +306,12 @@ class SessionRoom:
                 print(f"[room:{self.room_name}] Error during disconnect: {e}")
             self.room = None
         self.audio_source = None
+
+        # Drop references to registry/callbacks to break reference cycles
+        self.registry = None
+        self.notify_status_fn = None
+        self.notify_transcript_fn = None
+
         print(f"[room:{self.room_name}] Disconnected")
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant):
@@ -308,73 +341,93 @@ class SessionRoom:
             task = asyncio.ensure_future(self._process_audio_stream(audio_stream, participant))
             self._audio_stream_tasks[identity] = task
 
+    def _clear_audio_buffer(self):
+        """Clear the audio buffer and release memory."""
+        self._audio_buffer.clear()
+
     async def _process_audio_stream(
         self,
         stream: rtc.AudioStream,
         participant: rtc.RemoteParticipant,
     ):
         """Process incoming audio frames with VAD and transcription."""
-        self._audio_buffer = []
+        self._clear_audio_buffer()
         speech_detected = False
         silence_ms = 0
         speech_start_time = None
 
-        async for event in stream:
-            if not self._running:
-                break
+        try:
+            async for event in stream:
+                if not self._running:
+                    break
 
-            if self._waiting_for_response or self._is_speaking:
-                continue
-            if time.time() - self._speaking_ended_at < ECHO_COOLDOWN_S:
-                continue
-            if time.time() - self._idle_entered_at < IDLE_DEBOUNCE_S:
-                continue
+                if self._waiting_for_response or self._is_speaking:
+                    continue
+                if time.time() - self._speaking_ended_at < ECHO_COOLDOWN_S:
+                    continue
+                if time.time() - self._idle_entered_at < IDLE_DEBOUNCE_S:
+                    continue
 
-            frame = event.frame
-            samples = np.frombuffer(frame.data, dtype=np.int16).copy()
+                frame = event.frame
+                # Use np.copyto with a pre-sized array instead of .copy()
+                # to reduce allocation churn. The frombuffer view is read-only,
+                # so we must copy to own the data.
+                samples = np.array(frame.data, dtype=np.int16)
 
-            if frame.sample_rate != STT_SAMPLE_RATE:
-                from scipy import signal as scipy_signal
-                samples = scipy_signal.resample(
-                    samples,
-                    int(len(samples) * STT_SAMPLE_RATE / frame.sample_rate),
-                ).astype(np.int16)
+                if frame.sample_rate != STT_SAMPLE_RATE:
+                    from scipy import signal as scipy_signal
+                    samples = scipy_signal.resample(
+                        samples,
+                        int(len(samples) * STT_SAMPLE_RATE / frame.sample_rate),
+                    ).astype(np.int16)
 
-            self._audio_buffer.append(samples)
+                self._audio_buffer.append(samples)
 
-            # Samples are already at STT_SAMPLE_RATE (16kHz) which matches
-            # what WebRTC VAD needs — no second resample required.
-            is_speech = self._detect_speech(samples)
-
-            if is_speech:
-                if not speech_detected:
-                    speech_detected = True
-                    speech_start_time = time.time()
-                    print(f"[room:{self.room_name}] Speech detected from {participant.identity}")
-                silence_ms = 0
-            elif speech_detected:
-                silence_ms += VAD_FRAME_MS
-
-            # Check both silence-based end-of-speech and max recording timeout
-            if speech_detected and speech_start_time:
-                speech_duration = time.time() - speech_start_time
-                timed_out = speech_duration >= MAX_RECORDING_S
-                silence_ended = silence_ms >= SILENCE_THRESHOLD_MS and speech_duration >= MIN_SPEECH_DURATION_S
-
-                if timed_out or silence_ended:
-                    if timed_out:
-                        print(f"[room:{self.room_name}] Max recording timeout ({speech_duration:.1f}s), transcribing...")
-                    else:
-                        print(f"[room:{self.room_name}] End of speech ({speech_duration:.1f}s), transcribing...")
-                    try:
-                        await self._handle_utterance(participant)
-                    except Exception as e:
-                        print(f"[room:{self.room_name}] Error handling utterance: {e}")
-
-                    self._audio_buffer = []
+                # Hard cap: prevent unbounded buffer growth if VAD never triggers end-of-speech
+                if len(self._audio_buffer) > _MAX_AUDIO_BUFFER_FRAMES:
+                    print(f"[room:{self.room_name}] Audio buffer exceeded {_MAX_AUDIO_BUFFER_FRAMES} frames, force-flushing")
+                    self._clear_audio_buffer()
                     speech_detected = False
                     silence_ms = 0
                     speech_start_time = None
+                    continue
+
+                # Samples are already at STT_SAMPLE_RATE (16kHz) which matches
+                # what WebRTC VAD needs — no second resample required.
+                is_speech = self._detect_speech(samples)
+
+                if is_speech:
+                    if not speech_detected:
+                        speech_detected = True
+                        speech_start_time = time.time()
+                        print(f"[room:{self.room_name}] Speech detected from {participant.identity}")
+                    silence_ms = 0
+                elif speech_detected:
+                    silence_ms += VAD_FRAME_MS
+
+                # Check both silence-based end-of-speech and max recording timeout
+                if speech_detected and speech_start_time:
+                    speech_duration = time.time() - speech_start_time
+                    timed_out = speech_duration >= MAX_RECORDING_S
+                    silence_ended = silence_ms >= SILENCE_THRESHOLD_MS and speech_duration >= MIN_SPEECH_DURATION_S
+
+                    if timed_out or silence_ended:
+                        if timed_out:
+                            print(f"[room:{self.room_name}] Max recording timeout ({speech_duration:.1f}s), transcribing...")
+                        else:
+                            print(f"[room:{self.room_name}] End of speech ({speech_duration:.1f}s), transcribing...")
+                        try:
+                            await self._handle_utterance(participant)
+                        except Exception as e:
+                            print(f"[room:{self.room_name}] Error handling utterance: {e}")
+
+                        self._clear_audio_buffer()
+                        speech_detected = False
+                        silence_ms = 0
+                        speech_start_time = None
+        finally:
+            # Always clean up audio buffer when stream ends (disconnect, cancel, error)
+            self._clear_audio_buffer()
 
     def _detect_speech(self, samples: np.ndarray) -> bool:
         """Detect speech using WebRTC VAD or energy fallback.
@@ -399,7 +452,10 @@ class SessionRoom:
             return
 
         all_audio = np.concatenate(self._audio_buffer)
+        # Clear buffer immediately to free the numpy arrays before transcription
+        self._clear_audio_buffer()
         wav_bytes = _to_wav(all_audio, STT_SAMPLE_RATE)
+        del all_audio  # Release the concatenated array
 
         session = await self.registry.get(self.session_id)
 
@@ -453,7 +509,15 @@ class SessionRoom:
         # Forward transcription to Claude session via voice queue
         try:
             msg = f"[Voice from {participant.identity}]: {text}"
-            await session.voice_queue.put(msg)
+            try:
+                session.voice_queue.put_nowait(msg)
+            except asyncio.QueueFull:
+                print(f"[room:{self.room_name}] Voice queue full, dropping oldest message")
+                try:
+                    session.voice_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                session.voice_queue.put_nowait(msg)
             print(f"[room:{self.room_name}] Forwarded to session '{session.name}'")
             self._waiting_for_response = True
             await self._notify_status("thinking", "Waiting for Claude...")
@@ -462,7 +526,15 @@ class SessionRoom:
 
     async def handle_claude_response(self, text: str):
         """Queue a text response for serialized TTS playback."""
-        self._response_queue.put_nowait(text)
+        try:
+            self._response_queue.put_nowait(text)
+        except asyncio.QueueFull:
+            print(f"[room:{self.room_name}] TTS response queue full, dropping oldest")
+            try:
+                self._response_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            self._response_queue.put_nowait(text)
 
     async def _response_worker(self):
         """Process TTS responses one at a time to prevent state conflicts."""
@@ -526,7 +598,7 @@ class SessionRoom:
         finally:
             self._is_speaking = False
             self._speaking_ended_at = time.time()
-            self._audio_buffer = []
+            self._clear_audio_buffer()
 
             # If more responses are queued, stay in speaking/thinking — don't go idle.
             # Preserve _pending_listening so the last response can transition to idle.
@@ -579,19 +651,28 @@ class SessionRoom:
             return 0
 
         samples = np.frombuffer(pcm_bytes, dtype=np.int16)
+        total_samples = len(samples)
 
         frame_size = LIVEKIT_SAMPLE_RATE // 100  # 10ms frames
-        for i in range(0, len(samples), frame_size):
+
+        # Pre-allocate a reusable padding buffer to avoid per-iteration np.pad allocations
+        pad_buf = None
+
+        for i in range(0, total_samples, frame_size):
             chunk = samples[i:i + frame_size]
             if len(chunk) < frame_size:
-                chunk = np.pad(chunk, (0, frame_size - len(chunk)))
+                if pad_buf is None:
+                    pad_buf = np.zeros(frame_size, dtype=np.int16)
+                pad_buf[:len(chunk)] = chunk
+                pad_buf[len(chunk):] = 0
+                chunk = pad_buf
 
             frame = rtc.AudioFrame.create(LIVEKIT_SAMPLE_RATE, NUM_CHANNELS, frame_size)
             audio_data = np.frombuffer(frame.data, dtype=np.int16)
             np.copyto(audio_data, chunk)
             await self.audio_source.capture_frame(frame)
 
-        return len(samples)
+        return total_samples
 
     async def _notify_status(self, state: str, activity: Optional[str] = None, *, disable_auto_listen: bool = False):
         """Notify connected client of agent status change."""
@@ -691,24 +772,24 @@ class RelayAgent:
 
 
 def _to_wav(samples: np.ndarray, sample_rate: int) -> bytes:
-    """Convert numpy int16 samples to WAV bytes."""
-    buf = io.BytesIO()
+    """Convert numpy int16 samples to WAV bytes.
+
+    Pre-allocates the output buffer to avoid intermediate copies.
+    """
     num_samples = len(samples)
     data_size = num_samples * 2
+    # Pre-allocate the exact output size: 44-byte WAV header + raw PCM data
+    buf = bytearray(44 + data_size)
 
-    buf.write(b"RIFF")
-    buf.write(struct.pack("<I", 36 + data_size))
-    buf.write(b"WAVE")
-    buf.write(b"fmt ")
-    buf.write(struct.pack("<I", 16))
-    buf.write(struct.pack("<H", 1))
-    buf.write(struct.pack("<H", 1))
-    buf.write(struct.pack("<I", sample_rate))
-    buf.write(struct.pack("<I", sample_rate * 2))
-    buf.write(struct.pack("<H", 2))
-    buf.write(struct.pack("<H", 16))
-    buf.write(b"data")
-    buf.write(struct.pack("<I", data_size))
-    buf.write(samples.tobytes())
+    # WAV header (44 bytes)
+    struct.pack_into("<4sI4s", buf, 0, b"RIFF", 36 + data_size, b"WAVE")
+    struct.pack_into("<4sIHHIIHH", buf, 12,
+                     b"fmt ", 16, 1, 1, sample_rate, sample_rate * 2, 2, 16)
+    struct.pack_into("<4sI", buf, 36, b"data", data_size)
 
-    return buf.getvalue()
+    # Copy PCM data directly into the buffer
+    raw = samples.tobytes()
+    buf[44:] = raw
+    del raw  # Release the temporary bytes object
+
+    return bytes(buf)

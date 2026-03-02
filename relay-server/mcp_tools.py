@@ -267,7 +267,10 @@ async def relay_notify(ctx: Context, message: str, source: str = "") -> str:
 
     prefix = f"[Background agent{': ' + source if source else ''}]"
     full_message = f"{prefix} {message}"
-    await session.voice_queue.put(full_message)
+    try:
+        session.voice_queue.put_nowait(full_message)
+    except asyncio.QueueFull:
+        return "Session voice queue is full. Message not delivered."
 
     # Broadcast to web transcript so the notification is visible in real time
     if _app["notify_transcript"]:
@@ -608,6 +611,38 @@ async def generate_auth_code() -> str:
         )
     except Exception as e:
         return f"Failed to generate auth code: {e}"
+
+
+def cleanup_stale_connections(active_session_ids: set[str]) -> int:
+    """Remove stale MCP connection mappings for sessions that no longer exist.
+
+    Called periodically by the server's memory cleanup loop.
+    Returns the number of stale mappings removed.
+    """
+    removed = 0
+
+    # Find MCP session IDs that map to dead relay sessions
+    stale_mcp_sids = [
+        mcp_sid for mcp_sid, relay_sid in _connection_map.items()
+        if relay_sid not in active_session_ids
+    ]
+    for mcp_sid in stale_mcp_sids:
+        _connection_map.pop(mcp_sid, None)
+        _connection_cwd.pop(mcp_sid, None)
+        removed += 1
+
+    # Cancel heartbeat tasks for dead sessions
+    stale_hb_sids = [
+        sid for sid in _session_heartbeats
+        if sid not in active_session_ids
+    ]
+    for sid in stale_hb_sids:
+        hb = _session_heartbeats.pop(sid, None)
+        if hb and not hb.done():
+            hb.cancel()
+        removed += 1
+
+    return removed
 
 
 def create_mcp_app():

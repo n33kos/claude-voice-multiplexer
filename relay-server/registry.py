@@ -28,7 +28,7 @@ class Session:
     created_at: float = field(default_factory=time.time)
     last_heartbeat: float = field(default_factory=time.time)
     connected_clients: dict[str, str] = field(default_factory=dict)  # client_id → device_name
-    voice_queue: asyncio.Queue = field(default_factory=asyncio.Queue)  # voice messages for MCP relay_standby
+    voice_queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=100))  # voice messages for MCP relay_standby
 
     @property
     def room_name(self) -> str:
@@ -92,7 +92,15 @@ class SessionRegistry:
 
     async def unregister(self, session_id: str):
         async with self._lock:
-            self._sessions.pop(session_id, None)
+            session = self._sessions.pop(session_id, None)
+            if session:
+                # Drain the voice queue to release any held message references
+                while not session.voice_queue.empty():
+                    try:
+                        session.voice_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                session.connected_clients.clear()
 
     async def heartbeat(self, session_id: str):
         async with self._lock:
@@ -135,4 +143,12 @@ class SessionRegistry:
         async with self._lock:
             stale = [sid for sid, s in self._sessions.items() if s.is_stale]
             for sid in stale:
-                del self._sessions[sid]
+                session = self._sessions.pop(sid, None)
+                if session:
+                    # Drain the voice queue to release held references
+                    while not session.voice_queue.empty():
+                        try:
+                            session.voice_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                    session.connected_clients.clear()

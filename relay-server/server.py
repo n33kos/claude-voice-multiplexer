@@ -9,6 +9,7 @@ Bridges web clients (phone/browser) with Claude Code sessions via:
 """
 
 import asyncio
+import gc
 import json
 import os
 import resource
@@ -181,6 +182,7 @@ _agent: Optional[RelayAgent] = None
 # Transcript buffer per session (keyed by session_id)
 # Holds the last N entries so reconnecting clients can catch up.
 MAX_TRANSCRIPT_BUFFER = 100
+MAX_TRANSCRIPT_ENTRY_SIZE = 50_000  # Truncate individual entries larger than 50KB
 _transcript_buffers: dict[str, list[dict]] = {}  # session_id → [entry, ...]
 _transcript_seq: dict[str, int] = {}  # session_id → next sequence number
 
@@ -305,6 +307,9 @@ async def _notify_client_transcript(session_id: str, speaker: str, text: str, **
     # Don't buffer image entries — base64 data is large and images
     # don't need to be replayed to reconnecting clients.
     if speaker != "image":
+        # Truncate oversized text to prevent individual entries from bloating memory
+        if len(text) > MAX_TRANSCRIPT_ENTRY_SIZE:
+            entry = {**entry, "text": text[:MAX_TRANSCRIPT_ENTRY_SIZE] + "... [truncated]"}
         buf = _transcript_buffers.setdefault(session_id, [])
         buf.append(entry)
         if len(buf) > MAX_TRANSCRIPT_BUFFER:
@@ -366,10 +371,14 @@ async def lifespan(app: FastAPI):
     # Start FD monitoring task
     _fd_monitor_task = asyncio.create_task(_fd_monitor_loop())
 
+    # Start periodic memory cleanup task
+    _mem_cleanup_task = asyncio.create_task(_memory_cleanup_loop())
+
     # Warm up Kokoro TTS in the background (non-blocking)
     asyncio.create_task(_warmup_kokoro())
     yield
     _fd_monitor_task.cancel()
+    _mem_cleanup_task.cancel()
     if _agent:
         await _agent.stop()
     await metadata_store.close()
@@ -407,6 +416,52 @@ async def _fd_monitor_loop():
             break
         except Exception:
             pass
+
+
+async def _memory_cleanup_loop():
+    """Periodically clean up stale data structures to prevent memory leaks.
+
+    Runs every 5 minutes and:
+    - Removes transcript buffers for sessions that no longer exist
+    - Cleans up stale MCP connection mappings
+    - Prunes stale auth rate-limit entries
+    - Forces a garbage collection cycle to reclaim fragmented numpy allocations
+    """
+    while True:
+        try:
+            await asyncio.sleep(300)  # 5 minutes
+
+            # Clean up transcript buffers and seq counters for dead sessions
+            active_session_ids = {s["session_id"] for s in await registry.list_sessions()}
+
+            stale_transcript_ids = [
+                sid for sid in _transcript_buffers
+                if sid not in active_session_ids
+            ]
+            for sid in stale_transcript_ids:
+                _transcript_buffers.pop(sid, None)
+                _transcript_seq.pop(sid, None)
+
+            if stale_transcript_ids:
+                print(f"[mem-cleanup] Removed {len(stale_transcript_ids)} stale transcript buffer(s)")
+
+            # Clean up stale MCP connection maps
+            stale_mcp = mcp_tools.cleanup_stale_connections(active_session_ids)
+            if stale_mcp > 0:
+                print(f"[mem-cleanup] Removed {stale_mcp} stale MCP connection mapping(s)")
+
+            # Prune empty auth rate-limit entries
+            auth.cleanup_stale_rate_limits()
+
+            # Force GC to reclaim numpy/audio buffer fragments
+            collected = gc.collect()
+            if collected > 100:
+                print(f"[mem-cleanup] GC collected {collected} objects")
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[mem-cleanup] Error: {e}")
 
 
 app = FastAPI(title="Claude Voice Multiplexer", lifespan=lifespan)
@@ -817,7 +872,10 @@ async def send_message_to_session(session_id: str, request: Request):
     # Identify the caller
     caller = device.get("device_name", "cli")
     msg = f"[Voice from {caller}]: {text}"
-    await session.voice_queue.put(msg)
+    try:
+        session.voice_queue.put_nowait(msg)
+    except asyncio.QueueFull:
+        return JSONResponse({"error": "Session voice queue is full"}, status_code=429)
 
     # Set agent to thinking state
     if _agent:
@@ -1223,7 +1281,11 @@ async def client_ws(ws: WebSocket):
                         else:
                             try:
                                 msg = f"[Voice from {client_id}]: {text}"
-                                await session.voice_queue.put(msg)
+                                try:
+                                    session.voice_queue.put_nowait(msg)
+                                except asyncio.QueueFull:
+                                    print(f"Voice queue full for session {connected_session_id}")
+                                    continue
                                 # Set agent to thinking state
                                 if _agent:
                                     asyncio.create_task(_agent.handle_text_message(connected_session_id, text, client_id))

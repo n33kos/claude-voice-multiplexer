@@ -71,6 +71,21 @@ def check_pair_rate_limit(client_ip: str) -> bool:
     return True
 
 
+def cleanup_stale_rate_limits():
+    """Remove stale rate-limit entries where all timestamps have expired.
+
+    Called periodically by the server's memory cleanup loop to prevent
+    _pair_attempts from growing without bound.
+    """
+    now = time.time()
+    stale_ips = [
+        ip for ip, timestamps in _pair_attempts.items()
+        if not timestamps or all(now - t >= PAIR_RATE_WINDOW for t in timestamps)
+    ]
+    for ip in stale_ips:
+        del _pair_attempts[ip]
+
+
 def validate_pair_code(code: str) -> bool:
     """Validate and consume a pairing code. Returns True if valid."""
     entry = _pending_codes.pop(code, None)
