@@ -48,6 +48,7 @@ class SpawnedSession:
     daemon_id: str
     tmux_session: str
     cwd: str
+    session_name: str = ""
     relay_session_id: Optional[str] = None
     pid: Optional[int] = None
     status: str = "spawning"  # spawning, standby, active, zombie, dead, spawn_failed
@@ -59,6 +60,7 @@ class SpawnedSession:
             "daemon_id": self.daemon_id,
             "tmux_session": self.tmux_session,
             "cwd": self.cwd,
+            "session_name": self.session_name,
             "relay_session_id": self.relay_session_id,
             "pid": self.pid,
             "status": self.status,
@@ -87,7 +89,7 @@ class SessionManager:
             except asyncio.CancelledError:
                 pass
 
-    async def spawn(self, cwd: str) -> dict:
+    async def spawn(self, cwd: str, session_name: str = "") -> dict:
         """Spawn a new Claude session in the given directory.
 
         If a managed session already exists for this CWD, it is killed first
@@ -115,15 +117,17 @@ class SessionManager:
                 self._sessions.pop(daemon_id_old, None)
 
         daemon_id = uuid.uuid4().hex[:8]
-        basename = os.path.basename(os.path.abspath(cwd)) or "home"
-        # Sanitize basename for tmux session names (no dots, colons, etc.)
-        basename = "".join(c if c.isalnum() or c in "-_" else "-" for c in basename)[:20]
-        tmux_session = f"vmux-{basename}-{daemon_id}"
+        # Use custom name if provided, otherwise fall back to directory basename
+        display_name = session_name or os.path.basename(os.path.abspath(cwd)) or "home"
+        # Sanitize for tmux session names (no dots, colons, etc.)
+        display_name = "".join(c if c.isalnum() or c in "-_" else "-" for c in display_name)[:20]
+        tmux_session = f"vmux-{display_name}-{daemon_id}"
 
         session = SpawnedSession(
             daemon_id=daemon_id,
             tmux_session=tmux_session,
             cwd=cwd,
+            session_name=session_name,
         )
 
         async with self._lock:
@@ -204,6 +208,11 @@ class SessionManager:
                     session.relay_session_id = relay_session_id
                     session.status = "standby"
                 logger.info(f"[sessions] {tmux_session} registered as {relay_session_id}")
+
+                # Set custom display name on the relay if provided
+                if session_name:
+                    await self._set_relay_session_name(relay_session_id, session_name)
+
                 return {
                     "ok": True,
                     "daemon_id": daemon_id,
@@ -694,6 +703,22 @@ class SessionManager:
             except Exception:
                 pass
         return None
+
+    async def _set_relay_session_name(self, session_id: str, name: str):
+        """Update a session's display name on the relay server."""
+        try:
+            client = await _get_session_client()
+            resp = await client.patch(
+                f"{self._relay_url}/api/sessions/{session_id}/name",
+                json={"name": name},
+                headers={"X-Daemon-Secret": self._daemon_secret},
+            )
+            if resp.status_code == 200:
+                logger.info(f"[sessions] set relay display name: {session_id} → {name}")
+            else:
+                logger.warning(f"[sessions] failed to set relay name: {resp.status_code}")
+        except Exception as e:
+            logger.warning(f"[sessions] failed to set relay name: {e}")
 
     def _find_session(self, session_id: str) -> Optional[SpawnedSession]:
         """Find by relay_session_id or daemon_id. Must be called with lock held."""

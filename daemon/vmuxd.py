@@ -402,7 +402,8 @@ class VmuxDaemon:
                 cwd = request.get("cwd", "")
                 if not cwd:
                     return {"ok": False, "error": "cwd is required"}
-                return await self._session_manager.spawn(cwd)
+                session_name = request.get("session_name", "")
+                return await self._session_manager.spawn(cwd, session_name=session_name)
             elif cmd == "kill":
                 session_id = request.get("session_id", "")
                 if not session_id:

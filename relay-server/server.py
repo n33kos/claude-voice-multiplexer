@@ -766,7 +766,11 @@ async def spawn_session(request: Request):
     cwd = body.get("cwd", "").strip()
     if not cwd:
         return JSONResponse({"error": "cwd is required"}, status_code=400)
-    result = await _daemon_ipc({"cmd": "spawn", "cwd": cwd})
+    payload = {"cmd": "spawn", "cwd": cwd}
+    session_name = body.get("session_name", "").strip()
+    if session_name:
+        payload["session_name"] = session_name
+    result = await _daemon_ipc(payload)
     if result.get("ok"):
         return JSONResponse(result)
     return JSONResponse({"error": result.get("error", "Spawn failed")}, status_code=500)
@@ -843,6 +847,20 @@ async def restart_session_endpoint(session_id: str, request: Request):
     if result.get("ok"):
         return JSONResponse(result)
     return JSONResponse({"error": result.get("error", "Restart failed")}, status_code=500)
+
+
+@app.patch("/api/sessions/{session_id}/name")
+async def rename_session(session_id: str, request: Request):
+    """Update a session's display name."""
+    _require_auth(request)
+    body = await request.json()
+    name = body.get("name", "").strip()
+    if not name:
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    if await registry.rename(session_id, name):
+        await _broadcast_sessions()
+        return JSONResponse({"ok": True})
+    return JSONResponse({"error": "Session not found"}, status_code=404)
 
 @app.post("/api/sessions/reconnect")
 async def reconnect_session_endpoint(request: Request):

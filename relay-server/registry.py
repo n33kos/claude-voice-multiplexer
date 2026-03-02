@@ -102,6 +102,14 @@ class SessionRegistry:
     async def get(self, session_id: str) -> Optional[Session]:
         return self._sessions.get(session_id)
 
+    async def rename(self, session_id: str, name: str) -> bool:
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            if session:
+                session.name = name
+                return True
+            return False
+
     async def list_sessions(self) -> list[dict]:
         await self._prune_stale()
         return [s.to_dict() for s in self._sessions.values()]

@@ -3,7 +3,7 @@
 
 Usage:
   vmux status                     print service + session status
-  vmux spawn <path>               spawn new Claude session in directory
+  vmux spawn <path> [--name <n>]  spawn new Claude session in directory
   vmux kill <session-id>          kill a session
   vmux attach <session-id>        attach to a session's tmux terminal
   vmux sessions                   list sessions
@@ -86,15 +86,20 @@ def cmd_status():
             cwd = s.get("cwd", "")
             status = s.get("status", "?")
             tmux = s.get("tmux_session", "")
-            print(f"  [{status}] {relay_id}  {cwd}  ({tmux})")
+            name = s.get("session_name", "")
+            label = f"{name} " if name else ""
+            print(f"  [{status}] {label}{relay_id}  {cwd}  ({tmux})")
     else:
         print("No active sessions.")
 
 
-def cmd_spawn(path: str):
+def cmd_spawn(path: str, name: str = ""):
     path = os.path.abspath(os.path.expanduser(path))
     print(f"Spawning session in {path}...")
-    r = _send({"cmd": "spawn", "cwd": path}, timeout=150)
+    payload = {"cmd": "spawn", "cwd": path}
+    if name:
+        payload["session_name"] = name
+    r = _send(payload, timeout=150)
     if not _ok(r):
         return
     print(f"Session spawned:")
@@ -135,7 +140,9 @@ def cmd_sessions():
         status = s.get("status", "?")
         cwd = s.get("cwd", "")
         tmux = s.get("tmux_session", "")
-        print(f"  [{status}] {relay_id}")
+        name = s.get("session_name", "")
+        header = f"  [{status}] {name} ({relay_id})" if name else f"  [{status}] {relay_id}"
+        print(header)
         print(f"            cwd:  {cwd}")
         print(f"            tmux: {tmux}")
 
@@ -239,8 +246,17 @@ def main():
         cmd_status()
     elif sub == "spawn":
         if len(sys.argv) < 3:
-            _die("Usage: vmux spawn <path>")
-        cmd_spawn(sys.argv[2])
+            _die("Usage: vmux spawn <path> [--name <name>]")
+        spawn_args = sys.argv[2:]
+        spawn_path = spawn_args[0]
+        spawn_name = ""
+        if "--name" in spawn_args:
+            idx = spawn_args.index("--name")
+            if idx + 1 < len(spawn_args):
+                spawn_name = spawn_args[idx + 1]
+            else:
+                _die("--name requires a value")
+        cmd_spawn(spawn_path, name=spawn_name)
     elif sub == "kill":
         if len(sys.argv) < 3:
             _die("Usage: vmux kill <session-id>")
