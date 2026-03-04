@@ -274,7 +274,7 @@ async def relay_notify(ctx: Context, message: str, source: str = "") -> str:
 
     # Broadcast to web transcript so the notification is visible in real time
     if _app["notify_transcript"]:
-        await _app["notify_transcript"](session_id, "user", message, source=source)
+        await _app["notify_transcript"](session_id, "system", full_message)
 
     return "Notification sent to parent session."
 
