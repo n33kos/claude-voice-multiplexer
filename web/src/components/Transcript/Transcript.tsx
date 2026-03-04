@@ -204,8 +204,16 @@ export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, o
         {entries.map((entry, i) => {
           if (entry.speaker === "system") {
             return (
-              <div key={i} className={styles.SystemMessage}>
-                <span className={styles.SystemBadge}>{entry.text}</span>
+              <div key={i} className={styles.MessageRow}>
+                <span className={styles.SpeakerLabel}>
+                  <svg className={styles.AgentIcon} viewBox="0 0 24 24" fill="none" strokeWidth={2} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h9a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0015.75 4.5h-9A2.25 2.25 0 004.5 6.75v10.5A2.25 2.25 0 006.75 19.5z" />
+                  </svg>
+                  Background Agent
+                </span>
+                <div className={classNames(styles.Bubble, styles.BubbleSystem)}>
+                  <p className={styles.Paragraph}>{entry.text}</p>
+                </div>
               </div>
             );
           }

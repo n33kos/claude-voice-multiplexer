@@ -57,17 +57,20 @@
   }
 }
 
-.SystemMessage {
-  display: flex;
-  justify-content: center;
+.BubbleSystem {
+  background-color: var(--color-bubble-claude);
+  color: var(--color-bubble-claude-text);
+  opacity: 0.65;
+  border-bottom-left-radius: 0.375rem;
+  font-size: 0.8125rem;
 }
 
-.SystemBadge {
-  font-size: 0.75rem;
-  color: rgba(245, 158, 11, 0.8);
-  background-color: rgba(245, 158, 11, 0.1);
-  padding: 0.25rem 0.75rem;
-  border-radius: 9999px;
+.AgentIcon {
+  width: 0.6875rem;
+  height: 0.6875rem;
+  display: inline;
+  vertical-align: -1px;
+  margin-right: 0.1875rem;
 }
 
 .ActivityMessage {
