@@ -56,13 +56,15 @@ When running background work, follow this pattern:
 
 1. Tell the user what you're starting via `relay_respond`
 2. Launch the background task with `Agent(run_in_background=True, ...)`
-3. **In your Agent prompt, instruct the agent to call `relay_activity` for progress updates**, e.g.:
+3. **In your Agent prompt, include these MCP tool instructions:**
    > "As you work, call the `relay_activity` MCP tool with short status updates. Pass `source='<task-name>'` so the status is labeled. Example: `relay_activity(activity='Found 3 matching files, analyzing...', source='code-search')`"
+   >
+   > "When you are FINISHED with your task, call `relay_notify` with a brief summary of the results. This wakes up the parent session so it can immediately relay your results to the user. Example: `relay_notify(message='Completed: found and fixed 3 issues in auth module')`"
 4. Immediately call `relay_standby` to keep listening for voice input
-5. When the background agent completes, you will be automatically notified — summarize the results to the user via `relay_respond`, then re-enter `relay_standby`
-6. If a voice message arrives before the background task finishes, handle it conversationally — you will still be notified when the agent completes
+5. When `relay_standby` returns a `[Notify]` message from a background agent, summarize the results to the user via `relay_respond`, then re-enter `relay_standby`
+6. If a voice message arrives before the background task finishes, handle it conversationally — the agent will notify you when it completes
 
-**Important:** Background agents must ONLY use `relay_activity` for status bar updates. They must NOT use `relay_notify` or `relay_respond` — all user-facing communication goes through the parent session.
+**Important:** Background agents must NOT use `relay_respond` — only the parent session speaks to the user. Agents use `relay_activity` for progress updates and `relay_notify` once at completion to wake up the parent.
 
 ### MCP Reconnection During Standby
 
