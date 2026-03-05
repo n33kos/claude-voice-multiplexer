@@ -184,7 +184,7 @@ export default function App() {
   if (auth.authEnabled && !auth.authenticated) {
     return (
       <>
-        <ParticleNetwork />
+        {settings.showParticles && <ParticleNetwork />}
         <PairScreen onPair={auth.pairDevice} />
       </>
     );
@@ -192,15 +192,17 @@ export default function App() {
 
   return (
     <>
-      <ParticleNetwork
-        sessionId={relay.connectedSessionId}
-        hueOverride={
-          relay.sessions.find((s) => s.session_id === relay.connectedSessionId)
-            ?.hue_override
-        }
-        analyserRef={particleAnalyserRef}
-        audioReactive={settings.audioReactiveParticles}
-      />
+      {settings.showParticles && (
+        <ParticleNetwork
+          sessionId={relay.connectedSessionId}
+          hueOverride={
+            relay.sessions.find((s) => s.session_id === relay.connectedSessionId)
+              ?.hue_override
+          }
+          analyserRef={particleAnalyserRef}
+          audioReactive={settings.audioReactiveParticles}
+        />
+      )}
       <div className={styles.Layout}>
         <Header
           onSettingsOpen={() => setSettingsOpen(true)}

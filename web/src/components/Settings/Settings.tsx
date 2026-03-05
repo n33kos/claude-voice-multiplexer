@@ -235,6 +235,23 @@ export function Settings({
 
           <label className={styles.SettingRow}>
             <div className={styles.SettingLabel}>
+              <span className={styles.SettingTitle}>Particle effect</span>
+              <span className={styles.SettingDescription}>
+                Show the animated particle network background
+              </span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.showParticles}
+              onClick={() => onUpdate({ showParticles: !settings.showParticles })}
+              className={classNames(styles.Toggle, { [styles.ToggleActive]: settings.showParticles })}
+            >
+              <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.showParticles })} />
+            </button>
+          </label>
+
+          <label className={styles.SettingRow}>
+            <div className={styles.SettingLabel}>
               <span className={styles.SettingTitle}>Audio-reactive particles</span>
               <span className={styles.SettingDescription}>
                 Particle network pulses with voice amplitude

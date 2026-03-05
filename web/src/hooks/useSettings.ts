@@ -6,6 +6,7 @@ export interface Settings {
   autoListen: boolean
   speakerMuted: boolean
   showStatusPill: boolean
+  showParticles: boolean
   theme: ThemeMode
   audioReactiveParticles: boolean
 }
@@ -16,6 +17,7 @@ const DEFAULTS: Settings = {
   autoListen: true,
   speakerMuted: false,
   showStatusPill: true,
+  showParticles: true,
   theme: 'system',
   audioReactiveParticles: false,
 }
