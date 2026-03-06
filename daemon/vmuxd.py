@@ -50,6 +50,11 @@ PLUGIN_CACHE_DIR = Path.home() / ".claude" / "plugins" / "cache" / "n33kos" / "v
 RELAY_URL = "http://127.0.0.1:3100"
 AUTO_UPDATE_INTERVAL = 60  # seconds between version checks
 
+# Kokoro memory watchdog settings
+KOKORO_MAX_RSS_MB = int(os.environ.get("KOKORO_MAX_RSS_MB", "5120"))
+KOKORO_WATCHDOG_INTERVAL = 30  # seconds between RSS checks
+KOKORO_WATCHDOG_COOLDOWN = 300  # minimum seconds between memory-triggered restarts
+
 # Configure logging before imports
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
@@ -315,6 +320,8 @@ class VmuxDaemon:
         self._shutdown_event: Optional[asyncio.Event] = None  # created in run() on the correct loop
         self._update_task: Optional[asyncio.Task] = None
         self._state_task: Optional[asyncio.Task] = None
+        self._watchdog_task: Optional[asyncio.Task] = None
+        self._last_kokoro_memory_restart: float = 0.0  # monotonic timestamp
 
     async def run(self):
         # Create Event inside the coroutine so it binds to asyncio.run()'s loop.
@@ -360,6 +367,7 @@ class VmuxDaemon:
         # Background tasks
         self._update_task = asyncio.create_task(self._auto_update_loop())
         self._state_task = asyncio.create_task(self._state_writer_loop())
+        self._watchdog_task = asyncio.create_task(self._memory_watchdog_loop())
 
         # Set up signal handlers
         loop = asyncio.get_running_loop()
@@ -373,7 +381,7 @@ class VmuxDaemon:
     async def _shutdown(self):
         logger.info("vmuxd shutting down...")
 
-        for task in (self._update_task, self._state_task):
+        for task in (self._update_task, self._state_task, self._watchdog_task):
             if task and not task.done():
                 task.cancel()
                 try:
@@ -713,6 +721,114 @@ class VmuxDaemon:
                 break
             except Exception:
                 pass
+
+    async def _memory_watchdog_loop(self):
+        """Monitor kokoro process RSS and restart it when it exceeds the threshold.
+
+        The kokoro TTS service (using MPS Metal GPU) has an intractable native
+        memory leak from the C-level MPS allocator. This watchdog periodically
+        checks the RSS of the kokoro process tree and triggers a graceful restart
+        when it exceeds KOKORO_MAX_RSS_MB (default 5120 MB / 5 GB).
+        """
+        threshold_kb = KOKORO_MAX_RSS_MB * 1024
+        logger.info(
+            f"[watchdog] kokoro memory watchdog started "
+            f"(threshold={KOKORO_MAX_RSS_MB}MB, interval={KOKORO_WATCHDOG_INTERVAL}s, "
+            f"cooldown={KOKORO_WATCHDOG_COOLDOWN}s)"
+        )
+        while True:
+            try:
+                await asyncio.sleep(KOKORO_WATCHDOG_INTERVAL)
+
+                pids = self._service_manager.get_pids()
+                kokoro_pid = pids.get("kokoro")
+                if not kokoro_pid:
+                    continue
+
+                rss_kb = await self._get_process_tree_rss(kokoro_pid)
+                if rss_kb is None:
+                    continue
+
+                rss_mb = rss_kb / 1024
+                if rss_kb > threshold_kb:
+                    now = time.monotonic()
+                    elapsed = now - self._last_kokoro_memory_restart
+                    if elapsed < KOKORO_WATCHDOG_COOLDOWN:
+                        remaining = int(KOKORO_WATCHDOG_COOLDOWN - elapsed)
+                        logger.warning(
+                            f"[watchdog] kokoro RSS={rss_mb:.0f}MB exceeds "
+                            f"{KOKORO_MAX_RSS_MB}MB but cooldown active "
+                            f"({remaining}s remaining) — skipping restart"
+                        )
+                        continue
+
+                    logger.warning(
+                        f"[watchdog] kokoro RSS={rss_mb:.0f}MB exceeds "
+                        f"{KOKORO_MAX_RSS_MB}MB threshold — restarting"
+                    )
+                    self._last_kokoro_memory_restart = now
+                    ok = await self._service_manager.restart("kokoro")
+                    if ok:
+                        logger.info("[watchdog] kokoro restarted successfully")
+                    else:
+                        logger.error("[watchdog] kokoro restart failed")
+                else:
+                    # Log periodically at debug level for observability
+                    logger.debug(f"[watchdog] kokoro RSS={rss_mb:.0f}MB (ok)")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"[watchdog] error: {e}")
+
+    @staticmethod
+    async def _get_process_tree_rss(root_pid: int) -> Optional[int]:
+        """Get total RSS in KB for a process and all its descendants.
+
+        Uses `ps` to find all processes whose parent PID is in the tree,
+        then sums their RSS. This catches the actual Python/uvicorn process
+        spawned by `uv run`.
+        """
+        try:
+            # Get all processes with their PID, PPID, and RSS
+            proc = await asyncio.create_subprocess_exec(
+                "ps", "-eo", "pid=,ppid=,rss=",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode != 0:
+                return None
+
+            # Parse ps output into a dict: pid -> (ppid, rss_kb)
+            processes: dict[int, tuple[int, int]] = {}
+            for line in stdout.decode().strip().splitlines():
+                parts = line.split()
+                if len(parts) != 3:
+                    continue
+                try:
+                    pid, ppid, rss = int(parts[0]), int(parts[1]), int(parts[2])
+                    processes[pid] = (ppid, rss)
+                except ValueError:
+                    continue
+
+            if root_pid not in processes:
+                return None
+
+            # BFS to find all descendants
+            tree_pids = {root_pid}
+            frontier = [root_pid]
+            while frontier:
+                parent = frontier.pop()
+                for pid, (ppid, _) in processes.items():
+                    if ppid == parent and pid not in tree_pids:
+                        tree_pids.add(pid)
+                        frontier.append(pid)
+
+            # Sum RSS across all processes in the tree
+            total_rss = sum(processes[pid][1] for pid in tree_pids if pid in processes)
+            return total_rss
+        except Exception:
+            return None
 
 
 def _detect_cache_version(cache_entry: Path) -> str:
