@@ -12,6 +12,7 @@ joins that room. When a phone client connects to a session, the agent in that ro
 """
 
 import asyncio
+import collections
 import gc
 import io
 import re
@@ -48,6 +49,10 @@ VAD_FRAME_MS = 30  # WebRTC VAD frame size (10, 20, or 30ms)
 # samples each), MAX_RECORDING_S (180s) = ~6000 frames.  We add 10%
 # headroom and hard-cap to prevent unbounded growth if VAD misbehaves.
 _MAX_AUDIO_BUFFER_FRAMES = int(MAX_RECORDING_S / (VAD_FRAME_MS / 1000) * 1.1)
+
+# Pre-roll buffer: keep the last N frames (~300ms at 30ms/frame) during
+# non-speech periods so the onset of speech is preserved when VAD triggers.
+_PREROLL_FRAMES = 10
 
 # Whisper noise/hallucination filtering.
 #
@@ -186,6 +191,7 @@ class SessionRoom:
 
         # Audio/VAD state
         self._audio_buffer: list[np.ndarray] = []
+        self._preroll_buffer: collections.deque[np.ndarray] = collections.deque(maxlen=_PREROLL_FRAMES)
         self._vad = None
         self._is_speaking = False
         self._waiting_for_response = False
@@ -342,8 +348,9 @@ class SessionRoom:
             self._audio_stream_tasks[identity] = task
 
     def _clear_audio_buffer(self):
-        """Clear the audio buffer and release memory."""
+        """Clear the audio buffer and pre-roll buffer, releasing memory."""
         self._audio_buffer.clear()
+        self._preroll_buffer.clear()
 
     async def _process_audio_stream(
         self,
@@ -381,7 +388,29 @@ class SessionRoom:
                         int(len(samples) * STT_SAMPLE_RATE / frame.sample_rate),
                     ).astype(np.int16)
 
-                self._audio_buffer.append(samples)
+                # Samples are already at STT_SAMPLE_RATE (16kHz) which matches
+                # what WebRTC VAD needs — no second resample required.
+                is_speech = self._detect_speech(samples)
+
+                if is_speech:
+                    if not speech_detected:
+                        # Speech onset: seed the main buffer from pre-roll
+                        # to preserve the beginning of the utterance.
+                        speech_detected = True
+                        speech_start_time = time.time()
+                        self._audio_buffer.extend(self._preroll_buffer)
+                        self._preroll_buffer.clear()
+                        print(f"[room:{self.room_name}] Speech detected from {participant.identity}")
+                    self._audio_buffer.append(samples)
+                    silence_ms = 0
+                elif speech_detected:
+                    # Still in a speech region (post-speech silence)
+                    self._audio_buffer.append(samples)
+                    silence_ms += VAD_FRAME_MS
+                else:
+                    # No speech — accumulate in the rolling pre-roll buffer only
+                    self._preroll_buffer.append(samples)
+                    continue
 
                 # Hard cap: prevent unbounded buffer growth if VAD never triggers end-of-speech
                 if len(self._audio_buffer) > _MAX_AUDIO_BUFFER_FRAMES:
@@ -391,19 +420,6 @@ class SessionRoom:
                     silence_ms = 0
                     speech_start_time = None
                     continue
-
-                # Samples are already at STT_SAMPLE_RATE (16kHz) which matches
-                # what WebRTC VAD needs — no second resample required.
-                is_speech = self._detect_speech(samples)
-
-                if is_speech:
-                    if not speech_detected:
-                        speech_detected = True
-                        speech_start_time = time.time()
-                        print(f"[room:{self.room_name}] Speech detected from {participant.identity}")
-                    silence_ms = 0
-                elif speech_detected:
-                    silence_ms += VAD_FRAME_MS
 
                 # Check both silence-based end-of-speech and max recording timeout
                 if speech_detected and speech_start_time:
@@ -454,6 +470,8 @@ class SessionRoom:
         all_audio = np.concatenate(self._audio_buffer)
         # Clear buffer immediately to free the numpy arrays before transcription
         self._clear_audio_buffer()
+        duration_s = len(all_audio) / STT_SAMPLE_RATE
+        print(f"[room:{self.room_name}] Sending {duration_s:.1f}s of audio to Whisper")
         wav_bytes = _to_wav(all_audio, STT_SAMPLE_RATE)
         del all_audio  # Release the concatenated array
 
