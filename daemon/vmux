@@ -101,7 +101,7 @@ def cmd_spawn(path: str, name: str = ""):
         payload["session_name"] = name
     r = _send(payload, timeout=150)
     if not _ok(r):
-        return
+        sys.exit(1)
     print(f"Session spawned:")
     print(f"  session_id:   {r.get('session_id', '?')}")
     print(f"  tmux_session: {r.get('tmux_session', '?')}")

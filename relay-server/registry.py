@@ -24,7 +24,7 @@ class Session:
     name: str
     cwd: str
     dir_name: str
-    ws: Optional[object] = None  # WebSocket connection (legacy, None for SSE MCP sessions)
+    ws: Optional[object] = None  # Reserved for future use
     created_at: float = field(default_factory=time.time)
     last_heartbeat: float = field(default_factory=time.time)
     connected_clients: dict[str, str] = field(default_factory=dict)  # client_id → device_name

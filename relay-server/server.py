@@ -2,7 +2,7 @@
 """Claude Voice Multiplexer - Relay Server
 
 Bridges web clients (phone/browser) with Claude Code sessions via:
-- WebSocket for MCP plugin session registration and text relay
+- SSE/MCP for Claude Code session registration and tool relay
 - WebSocket for web client events and session switching
 - REST API for session listing and LiveKit token generation
 - LiveKit agent for audio I/O with Whisper STT and Kokoro TTS
@@ -181,7 +181,7 @@ _agent: Optional[RelayAgent] = None
 
 # Transcript buffer per session (keyed by session_id)
 # Holds the last N entries so reconnecting clients can catch up.
-MAX_TRANSCRIPT_BUFFER = 100
+MAX_TRANSCRIPT_BUFFER = 50
 MAX_TRANSCRIPT_ENTRY_SIZE = 50_000  # Truncate individual entries larger than 50KB
 _transcript_buffers: dict[str, list[dict]] = {}  # session_id → [entry, ...]
 _transcript_seq: dict[str, int] = {}  # session_id → next sequence number
@@ -362,6 +362,10 @@ async def lifespan(app: FastAPI):
         broadcast_sessions=_broadcast_sessions,
     )
     print("[server] MCP tools initialized (SSE endpoint at /mcp)")
+
+    # Eagerly initialize metadata store DB connection at startup
+    metadata_store._ensure_db()
+    print("[server] Metadata store initialized")
 
     if AUTH_ENABLED:
         print("[server] Authentication enabled")
@@ -1027,153 +1031,6 @@ async def get_token(request: Request, room: str = "multiplexer", identity: str =
     })
 
 
-# --- WebSocket: MCP Plugin Sessions ---
-
-@app.websocket("/ws/session")
-async def session_ws(ws: WebSocket):
-    """WebSocket endpoint for MCP plugin connections.
-
-    Protocol:
-    - Plugin sends: {type: "register", session_id, name, cwd, dir_name}
-    - Server sends: {type: "registered"}
-    - Plugin sends: {type: "heartbeat", session_id, timestamp}
-    - Server sends: {type: "voice_message", text, caller}
-    - Plugin sends: {type: "response", session_id, text}
-    """
-    await ws.accept()
-    session_id = None
-
-    try:
-        while True:
-            raw = await ws.receive_text()
-            data = json.loads(raw)
-            msg_type = data.get("type")
-
-            if msg_type == "register":
-                session_id = data["session_id"]
-                session, is_reconnect = await registry.register(
-                    session_id=session_id,
-                    name=data.get("name", "unnamed"),
-                    cwd=data.get("cwd", ""),
-                    dir_name=data.get("dir_name", ""),
-                    ws=ws,
-                )
-                await ws.send_text(json.dumps({"type": "registered", "session_id": session_id}))
-                label = "reconnected" if is_reconnect else "registered"
-                print(f"Session {label}: {session.name} ({session_id}) → room {session.room_name}")
-
-                # Recycle the LiveKit room on reconnect, or create a new one
-                if _agent:
-                    if is_reconnect:
-                        try:
-                            await _agent.remove_session(session_id)
-                        except Exception as e:
-                            print(f"[server] Error removing old room (continuing): {e}")
-                    try:
-                        await _agent.add_session(session_id, session.room_name)
-                    except Exception as e:
-                        print(f"[server] Failed to create room for session: {e}")
-
-                # Notify all clients of session list change
-                await _broadcast_sessions()
-
-            elif msg_type == "heartbeat":
-                sid = data.get("session_id", session_id)
-                if sid:
-                    await registry.heartbeat(sid)
-
-            elif msg_type == "response":
-                # Claude's text response — synthesize and relay to connected client
-                text = data.get("text", "")
-                sid = data.get("session_id", session_id)
-
-                if text and sid:
-                    # Route through LiveKit agent if available (publishes audio to room)
-                    if _agent:
-                        asyncio.create_task(_agent.handle_claude_response(sid, text))
-
-                    # Broadcast transcript to all connected web clients
-                    await _notify_client_transcript(sid, "claude", text)
-
-            elif msg_type == "listening":
-                # Claude called relay_standby again — ready for next message
-                sid = data.get("session_id", session_id)
-                if sid and _agent:
-                    asyncio.create_task(_agent.handle_claude_listening(sid))
-
-            elif msg_type == "code_block":
-                # Claude pushing a code snippet into the transcript
-                sid = data.get("session_id", session_id)
-                code = data.get("code", "")
-                if code and sid:
-                    await _notify_client_transcript(
-                        sid, "code", code,
-                        filename=data.get("filename", ""),
-                        language=data.get("language", ""),
-                    )
-
-            elif msg_type == "status_update":
-                # Claude reporting current activity
-                sid = data.get("session_id", session_id)
-                activity = data.get("activity", "")
-                if sid and _agent and activity:
-                    asyncio.create_task(_agent.handle_status_update(sid, activity))
-
-            elif msg_type == "relay_file":
-                # Claude relaying a file directly
-                sid = data.get("session_id", session_id)
-                content = data.get("content", "")
-                read_aloud = data.get("read_aloud", False)
-                
-                if content and sid and read_aloud and _agent:
-                    asyncio.create_task(_agent.handle_claude_response(sid, content))
-
-                # Route through LiveKit agent if available (publishes audio to room)
-                if content and sid:
-                    await _notify_client_transcript(
-                        sid, "file", content,
-                        filename=data.get("filename", ""),
-                        language=data.get("language", ""),
-                    )
-
-            elif msg_type == "generate_code":
-                # MCP plugin requesting a pairing code
-                if AUTH_ENABLED:
-                    code = auth.generate_pair_code()
-                    await ws.send_text(json.dumps({
-                        "type": "auth_code",
-                        "code": code,
-                        "expires_in": auth.CODE_TTL_S,
-                    }))
-                else:
-                    await ws.send_text(json.dumps({
-                        "type": "auth_code",
-                        "code": None,
-                        "message": "Authentication is not enabled",
-                    }))
-
-            elif msg_type == "pong":
-                pass
-
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        print(f"Session WebSocket error: {e}")
-    finally:
-        if session_id:
-            # Remove the LiveKit room for this session
-            if _agent:
-                try:
-                    await _agent.remove_session(session_id)
-                except Exception as e:
-                    print(f"[server] Error removing room: {e}")
-            await registry.unregister(session_id)
-            _transcript_buffers.pop(session_id, None)
-            _transcript_seq.pop(session_id, None)
-            print(f"Session unregistered: {session_id}")
-            await _broadcast_sessions()
-
-
 # --- WebSocket: Web Clients ---
 
 @app.websocket("/ws/client")
@@ -1430,19 +1287,31 @@ async def client_ws(ws: WebSocket):
         await _broadcast_sessions()
 
 
+_daemon_health_cache: dict[str, str] = {}
+_daemon_health_cache_ts: float = 0.0
+_DAEMON_HEALTH_CACHE_TTL = 8.0  # seconds
+
+
 async def _get_daemon_session_health() -> dict[str, str]:
-    """Fetch session health info from the daemon. Returns {relay_session_id: health_status}."""
+    """Fetch session health info from the daemon (cached, 8s TTL). Returns {relay_session_id: health_status}."""
+    global _daemon_health_cache, _daemon_health_cache_ts
+    now = time.time()
+    if _daemon_health_cache and (now - _daemon_health_cache_ts) < _DAEMON_HEALTH_CACHE_TTL:
+        return _daemon_health_cache
     try:
         result = await _daemon_ipc({"cmd": "list"})
         if result.get("ok"):
-            return {
+            _daemon_health_cache = {
                 s["relay_session_id"]: s["status"]
                 for s in result.get("sessions", [])
                 if s.get("relay_session_id")
             }
+            _daemon_health_cache_ts = now
+            return _daemon_health_cache
     except Exception:
         pass
-    return {}
+    # Return stale cache if available
+    return _daemon_health_cache
 
 
 async def _broadcast_sessions():

@@ -54,12 +54,13 @@ def _file_uri_to_path(uri: str) -> str:
 
 
 # --- Per-connection session mapping ---
-# Maps FastMCP session_id (unique per SSE connection) → relay session_id
-_connection_map: dict[str, str] = {}
-# Maps FastMCP session_id → working directory path (for display)
-_connection_cwd: dict[str, str] = {}
+# Maps FastMCP session_id → (relay_session_id, cwd)
+_connection_map: dict[str, tuple[str, str]] = {}
 # Maps relay session_id → persistent heartbeat task (runs for entire MCP connection lifetime)
 _session_heartbeats: dict[str, "asyncio.Task[None]"] = {}
+# Throttle relay_activity: maps relay session_id → (last_time, last_activity)
+_ACTIVITY_MIN_INTERVAL = 3.0  # seconds
+_last_activity: dict[str, tuple[float, str]] = {}
 
 
 async def _resolve_session(ctx: Context) -> tuple[Optional[str], Optional[str]]:
@@ -69,13 +70,12 @@ async def _resolve_session(ctx: Context) -> tuple[Optional[str], Optional[str]]:
     Returns (session_id, error_message).
     """
     mcp_sid = ctx.session_id
-    session_id = _connection_map.get(mcp_sid)
-    if session_id:
+    entry = _connection_map.get(mcp_sid)
+    if entry:
+        session_id, _cwd = entry
         # Fast path — verify session still exists in registry.
-        # If it was pruned while Claude was processing, we must re-register
-        # rather than silently returning a dead session_id.
         registry = _app["registry"]
-        if registry and await registry.get(session_id):
+        if await registry.get(session_id):
             # Session is alive — ensure the persistent heartbeat is still running.
             hb = _session_heartbeats.get(session_id)
             if not hb or hb.done():
@@ -83,19 +83,18 @@ async def _resolve_session(ctx: Context) -> tuple[Optional[str], Optional[str]]:
             return session_id, None
         # Session was pruned — clear stale mapping and fall through to re-registration.
         _connection_map.pop(mcp_sid, None)
-        _connection_cwd.pop(mcp_sid, None)
 
     # First call from this connection (or session was pruned) — detect cwd via MCP roots
     cwd = await _detect_cwd(ctx)
     if not cwd:
-        return None, "Could not detect working directory from MCP roots."
+        return None, "No working directory detected."
 
     session_id = _make_session_id(cwd)
 
     # Register the session in the relay registry
     registry = _app["registry"]
     if not registry:
-        return None, "Relay server not initialized. Registry unavailable."
+        return None, "Registry unavailable."
 
     session, is_reconnect = await registry.register(
         session_id=session_id,
@@ -107,8 +106,7 @@ async def _resolve_session(ctx: Context) -> tuple[Optional[str], Optional[str]]:
     print(f"[mcp] Session {label}: {cwd} ({session_id}) → room {session.room_name}")
 
     # Cache the mapping only after successful registration
-    _connection_map[mcp_sid] = session_id
-    _connection_cwd[mcp_sid] = cwd
+    _connection_map[mcp_sid] = (session_id, cwd)
 
     # Start (or restart) a persistent per-session heartbeat that keeps the session
     # alive for the entire MCP connection lifetime — including while Claude is
@@ -171,22 +169,16 @@ def init(registry, get_agent, notify_transcript, notify_status, broadcast_sessio
 
 @mcp.tool()
 async def relay_standby(ctx: Context, session_name: str = "") -> str:
-    """Register this Claude session with the voice relay server and enter standby mode.
-
-    The session becomes available for remote voice interaction through the
-    web client. Voice input is transcribed and delivered as text messages.
-    Respond conversationally to each message.
+    """Enter voice relay standby. Blocks until a voice message arrives. Respond conversationally.
 
     Args:
-        session_name: Optional friendly name for this session (defaults to directory name)
+        session_name: Optional display name for this session
     """
-    registry = _app["registry"]
-    if not registry:
-        return "Relay server not initialized."
-
     session_id, err = await _resolve_session(ctx)
     if err:
         return err
+
+    registry = _app["registry"]
 
     # Override display name if provided
     if session_name:
@@ -208,7 +200,7 @@ async def relay_standby(ctx: Context, session_name: str = "") -> str:
     # between standby calls — no separate per-standby heartbeat needed.
     session = await registry.get(session_id)
     if not session:
-        return "Session not found in registry."
+        return "Session not found."
 
     try:
         msg = await asyncio.wait_for(
@@ -218,14 +210,13 @@ async def relay_standby(ctx: Context, session_name: str = "") -> str:
         await registry.heartbeat(session_id)
         return msg
     except asyncio.TimeoutError:
-        return "[Standby]: No voice input received. Still listening."
+        return "[Standby timeout]"
     except asyncio.CancelledError:
         print(f"[mcp] Session cancelled (SSE disconnect): {session_id}")
         # Clean up the stale MCP connection mapping so the next SSE connection
         # from Claude Code starts fresh and re-registers properly.
         mcp_sid = ctx.session_id
         _connection_map.pop(mcp_sid, None)
-        _connection_cwd.pop(mcp_sid, None)
         # Cancel the persistent heartbeat — let SESSION_TIMEOUT handle
         # natural expiry.  If Claude reconnects within the timeout window,
         # _resolve_session will start a fresh heartbeat.
@@ -234,33 +225,22 @@ async def relay_standby(ctx: Context, session_name: str = "") -> str:
             hb.cancel()
         raise
     except Exception as e:
-        return f"[Standby error]: {e}"
+        return f"Error: {e}"
 
 
 @mcp.tool()
 async def relay_notify(ctx: Context, message: str, source: str = "") -> str:
-    """Inject a notification message into the relay session's voice queue.
-
-    Use this from a background agent to wake up the parent Claude session's
-    relay_standby call when work is complete. The parent Claude will receive
-    this message as if it were a voice input, so it can summarize results
-    and respond to the user.
-
-    This is event-driven — no polling needed. relay_standby wakes up exactly
-    once when you call this.
+    """Wake the parent session's relay_standby with a message. Use from background agents on completion.
 
     Args:
-        message: The notification message, e.g. "Background task complete: <summary>"
-        source: Optional label identifying the background agent, e.g. "code-search-agent"
+        message: Notification text delivered as voice input to the parent session
+        source: Optional agent label
     """
     session_id, err = await _resolve_session(ctx)
     if err:
         return err
 
     registry = _app["registry"]
-    if not registry:
-        return "Relay server not initialized."
-
     session = await registry.get(session_id)
     if not session:
         return "Session not found."
@@ -270,26 +250,22 @@ async def relay_notify(ctx: Context, message: str, source: str = "") -> str:
     try:
         session.voice_queue.put_nowait(full_message)
     except asyncio.QueueFull:
-        return "Session voice queue is full. Message not delivered."
+        return "Queue full."
 
     # Broadcast to web transcript so the notification is visible in real time
     if _app["notify_transcript"]:
         await _app["notify_transcript"](session_id, "system", full_message)
 
-    return "Notification sent to parent session."
+    return "Sent."
 
 
 @mcp.tool()
 async def relay_activity(ctx: Context, activity: str, source: str = "") -> str:
-    """Update the voice relay with Claude's current activity.
-
-    Call this before significant operations so the remote user
-    can see what you're working on (e.g. "Reading files...",
-    "Running tests...", "Searching codebase...").
+    """Show the remote user what you're working on. Call before significant operations.
 
     Args:
-        activity: Short description of current activity
-        source: Optional label for background agents, e.g. "code-search-agent"
+        activity: Short status, e.g. "Reading files..."
+        source: Optional agent label
     """
     session_id, err = await _resolve_session(ctx)
     if err:
@@ -301,23 +277,30 @@ async def relay_activity(ctx: Context, activity: str, source: str = "") -> str:
         await registry.heartbeat(session_id)
 
     labeled = f"[{source}] {activity}" if source else activity
+
+    # Throttle: skip if same activity within min interval
+    import time as _time
+    now = _time.monotonic()
+    prev = _last_activity.get(session_id)
+    if prev:
+        prev_time, prev_text = prev
+        if labeled == prev_text and (now - prev_time) < _ACTIVITY_MIN_INTERVAL:
+            return "OK"
+    _last_activity[session_id] = (now, labeled)
+
     agent = _app["get_agent"]()
     if agent and labeled:
         asyncio.create_task(agent.handle_status_update(session_id, labeled))
 
-    return "Status updated."
+    return "OK"
 
 
 @mcp.tool()
 async def relay_respond(ctx: Context, text: str) -> str:
-    """Send a response back to the relay server for TTS synthesis.
-
-    After receiving a voice message via relay_standby, use this tool to send
-    your conversational response back. The relay server will synthesize it
-    as speech and play it to the remote user.
+    """Send a spoken response to the remote user via TTS.
 
     Args:
-        text: Your conversational response to be spoken aloud
+        text: Response text to synthesize as speech
     """
     session_id, err = await _resolve_session(ctx)
     if err:
@@ -339,35 +322,17 @@ async def relay_respond(ctx: Context, text: str) -> str:
     if _app["notify_transcript"]:
         await _app["notify_transcript"](session_id, "claude", text)
 
-    return "Response sent."
+    return "OK"
 
 
 @mcp.tool()
 async def relay_code_block(ctx: Context, code: str, filename: str = "", language: str = "") -> str:
-    """Push a code snippet or diff into the voice relay transcript.
-
-    Use this to show the remote user code changes, file contents, or diffs
-    in the transcript with syntax highlighting. Call it after editing files
-    or when the user asks to see code.
-
-    IMPORTANT: When in voice relay mode, the user is viewing a chat-style
-    transcript on their phone/browser. Use this tool whenever the user asks
-    you to show, display, or output structured content — including:
-    - Code snippets or file contents
-    - Diffs or patches
-    - Tables (use markdown table syntax, language="markdown")
-    - Structured data (JSON, YAML, etc.)
-    - Command output or logs
-    - Any content that benefits from monospace formatting
-
-    If the user asks to "see" something, "show" something, or requests
-    output that would be hard to read as spoken text, use this tool to
-    surface it visually in the transcript.
+    """Display code, diffs, tables, or structured content in the web transcript. Use when the user asks to see or show something.
 
     Args:
-        code: The code snippet, diff, or file content to display
-        filename: Optional filename for context (e.g. "src/App.tsx")
-        language: Optional language hint for syntax highlighting (e.g. "typescript", "python", "diff")
+        code: Content to display (code, diff, markdown table, JSON, logs, etc.)
+        filename: Optional filename for context
+        language: Optional language hint for syntax highlighting
     """
     session_id, err = await _resolve_session(ctx)
     if err:
@@ -388,12 +353,12 @@ async def relay_code_block(ctx: Context, code: str, filename: str = "", language
             language=language,
         )
 
-    return "Code block sent."
+    return "OK"
 
 
 @mcp.tool()
 async def relay_disconnect(ctx: Context) -> str:
-    """Disconnect from the voice relay server and exit standby mode."""
+    """Disconnect from the voice relay and exit standby."""
     session_id, err = await _resolve_session(ctx)
     if err:
         return err
@@ -417,58 +382,43 @@ async def relay_disconnect(ctx: Context) -> str:
     # Clean up connection mapping
     mcp_sid = ctx.session_id
     _connection_map.pop(mcp_sid, None)
-    _connection_cwd.pop(mcp_sid, None)
 
     if _app["broadcast_sessions"]:
         await _app["broadcast_sessions"]()
 
-    return "Disconnected from relay. Standby ended."
+    return "Disconnected."
 
 
 @mcp.tool()
 async def relay_status(ctx: Context) -> str:
-    """Show current voice relay connection status."""
+    """Show relay connection status."""
     registry = _app["registry"]
     if not registry:
-        return "Relay server not initialized."
+        return "Not initialized."
 
     session_id, err = await _resolve_session(ctx)
     if not err and session_id:
         session = await registry.get(session_id)
         if session:
             queued = session.voice_queue.qsize()
-            return (
-                f"Connected to relay server\n"
-                f"  Session: {session.name}\n"
-                f"  Session ID: {session_id}\n"
-                f"  Queued messages: {queued}"
-            )
+            return f"Connected: {session.name} ({session_id}) queued={queued}"
 
-    # Not connected or session resolution failed — list all sessions
     sessions = await registry.list_sessions()
     if not sessions:
-        return "Not connected. No active sessions."
+        return "Not connected. No sessions."
 
-    lines = ["Not connected. Active sessions:"]
+    lines = ["Not connected. Sessions:"]
     for s in sessions:
-        lines.append(f"  - {s['name']} ({s['session_id']})")
+        lines.append(f"- {s['name']} ({s['session_id']})")
     return "\n".join(lines)
 
 
 @mcp.tool()
 async def relay_image(ctx: Context, file_path: str) -> str:
-    """Relay an image directly to the web app without passing through Claude.
-
-    Reads a local image file and sends its contents directly to the relay server,
-    bypassing Claude entirely. The image is displayed inline in the transcript.
-
-    Supported formats: JPEG, PNG, GIF, WebP, SVG, BMP.
+    """Send a local image to the web transcript (JPEG, PNG, GIF, WebP, SVG, BMP).
 
     Args:
-        file_path: Path to the image file to relay (relative or absolute)
-
-    Returns:
-        Confirmation message or error
+        file_path: Path to the image file
     """
     session_id, err = await _resolve_session(ctx)
     if err:
@@ -499,7 +449,7 @@ async def relay_image(ctx: Context, file_path: str) -> str:
     }
     mime_type = mime_map.get(suffix)
     if not mime_type:
-        return f"Unsupported image format: {suffix}. Supported: jpg, png, gif, webp, svg, bmp"
+        return f"Unsupported format: {suffix}"
 
     # Read and base64 encode
     try:
@@ -517,23 +467,16 @@ async def relay_image(ctx: Context, file_path: str) -> str:
             mime_type=mime_type,
         )
 
-    return f"Image relayed: {p.name} ({len(data):,} bytes)"
+    return f"OK: {p.name}"
 
 
 @mcp.tool()
 async def relay_file(ctx: Context, file_path: str, read_aloud: bool = False) -> str:
-    """Relay a file directly to the web app without passing through Claude.
-
-    Reads a file and sends its contents directly to the relay server,
-    bypassing Claude entirely. This saves tokens when you want to show
-    large files to the web client.
+    """Send a file's contents to the web transcript with syntax highlighting. Bypasses Claude to save tokens.
 
     Args:
-        file_path: Path to the file to relay (relative or absolute)
-        read_aloud: Whether to read the file aloud as well (default: false).
-
-    Returns:
-        Confirmation message or error
+        file_path: Path to the file
+        read_aloud: Also synthesize as speech (default: false)
     """
     session_id, err = await _resolve_session(ctx)
     if err:
@@ -587,30 +530,20 @@ async def relay_file(ctx: Context, file_path: str, read_aloud: bool = False) -> 
             language=language,
         )
 
-    return f"File relayed: {p.name} ({len(content)} chars)"
+    return f"OK: {p.name}"
 
 
 @mcp.tool()
 async def generate_auth_code() -> str:
-    """Generate a one-time pairing code for authorizing a new device.
-
-    The code is valid for 60 seconds. Enter it on the web app's pairing
-    screen to authorize the device for voice interaction.
-
-    Requires an active connection to the relay server (call relay_standby first).
-    """
+    """Generate a one-time device pairing code (valid 60s)."""
     if not AUTH_ENABLED:
-        return "Authentication is not enabled."
+        return "Auth disabled."
 
     try:
         code = auth.generate_pair_code()
-        return (
-            f"Pairing code: {code}\n"
-            f"Enter this code on the web app to authorize the device.\n"
-            f"Code expires in {auth.CODE_TTL_S} seconds."
-        )
+        return f"Code: {code} (expires {auth.CODE_TTL_S}s)"
     except Exception as e:
-        return f"Failed to generate auth code: {e}"
+        return f"Error: {e}"
 
 
 def cleanup_stale_connections(active_session_ids: set[str]) -> int:
@@ -623,12 +556,11 @@ def cleanup_stale_connections(active_session_ids: set[str]) -> int:
 
     # Find MCP session IDs that map to dead relay sessions
     stale_mcp_sids = [
-        mcp_sid for mcp_sid, relay_sid in _connection_map.items()
+        mcp_sid for mcp_sid, (relay_sid, _cwd) in _connection_map.items()
         if relay_sid not in active_session_ids
     ]
     for mcp_sid in stale_mcp_sids:
         _connection_map.pop(mcp_sid, None)
-        _connection_cwd.pop(mcp_sid, None)
         removed += 1
 
     # Cancel heartbeat tasks for dead sessions
@@ -641,6 +573,11 @@ def cleanup_stale_connections(active_session_ids: set[str]) -> int:
         if hb and not hb.done():
             hb.cancel()
         removed += 1
+
+    # Clean up activity throttle entries for dead sessions
+    for sid in list(_last_activity):
+        if sid not in active_session_ids:
+            _last_activity.pop(sid, None)
 
     return removed
 
