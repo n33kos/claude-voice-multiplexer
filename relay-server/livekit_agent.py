@@ -54,6 +54,11 @@ _MAX_AUDIO_BUFFER_FRAMES = int(MAX_RECORDING_S / (VAD_FRAME_MS / 1000) * 1.1)
 # non-speech periods so the onset of speech is preserved when VAD triggers.
 _PREROLL_FRAMES = 10
 
+# Speech onset debounce: require N consecutive VAD-positive frames before
+# declaring speech onset.  Prevents background noise spikes from triggering
+# speech detection and filling the buffer with noise.
+_SPEECH_ONSET_FRAMES = 3  # ~90ms at 30ms/frame
+
 # Whisper noise/hallucination filtering.
 #
 # When Whisper processes silence or ambient noise it frequently hallucinates
@@ -360,6 +365,7 @@ class SessionRoom:
         """Process incoming audio frames with VAD and transcription."""
         self._clear_audio_buffer()
         speech_detected = False
+        consecutive_speech = 0  # consecutive VAD-positive frames (for onset debounce)
         silence_ms = 0
         speech_start_time = None
 
@@ -394,14 +400,21 @@ class SessionRoom:
 
                 if is_speech:
                     if not speech_detected:
-                        # Speech onset: seed the main buffer from pre-roll
-                        # to preserve the beginning of the utterance.
+                        # Debounce: require _SPEECH_ONSET_FRAMES consecutive
+                        # VAD-positive frames before declaring speech onset.
+                        # This prevents noise spikes from triggering recording.
+                        consecutive_speech += 1
+                        self._preroll_buffer.append(samples)
+                        if consecutive_speech < _SPEECH_ONSET_FRAMES:
+                            continue
+                        # Confirmed speech onset: seed buffer from pre-roll
                         speech_detected = True
                         speech_start_time = time.time()
                         self._audio_buffer.extend(self._preroll_buffer)
                         self._preroll_buffer.clear()
                         print(f"[room:{self.room_name}] Speech detected from {participant.identity}")
-                    self._audio_buffer.append(samples)
+                    else:
+                        self._audio_buffer.append(samples)
                     silence_ms = 0
                 elif speech_detected:
                     # Still in a speech region (post-speech silence)
@@ -409,6 +422,7 @@ class SessionRoom:
                     silence_ms += VAD_FRAME_MS
                 else:
                     # No speech — accumulate in the rolling pre-roll buffer only
+                    consecutive_speech = 0
                     self._preroll_buffer.append(samples)
                     continue
 
@@ -417,6 +431,7 @@ class SessionRoom:
                     print(f"[room:{self.room_name}] Audio buffer exceeded {_MAX_AUDIO_BUFFER_FRAMES} frames, force-flushing")
                     self._clear_audio_buffer()
                     speech_detected = False
+                    consecutive_speech = 0
                     silence_ms = 0
                     speech_start_time = None
                     continue
@@ -439,6 +454,7 @@ class SessionRoom:
 
                         self._clear_audio_buffer()
                         speech_detected = False
+                        consecutive_speech = 0
                         silence_ms = 0
                         speech_start_time = None
         finally:
