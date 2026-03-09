@@ -230,7 +230,7 @@ class SessionRoom:
             import webrtcvad
             self._vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
         except ImportError:
-            print(f"[room:{self.room_name}] webrtcvad not installed, using energy-based VAD")
+            print(f"[room:{self.room_name}] ERROR: webrtcvad not installed — speech detection disabled")
 
         self.room = rtc.Room()
 
