@@ -75,7 +75,7 @@ def _persist_settings():
         logging.getLogger("relay.config").error(f"Failed to persist settings: {e}")
 
 
-STT_SAMPLE_RATE = int(os.environ.get("STT_SAMPLE_RATE", "16000"))  # Incoming audio (capture/VAD/Whisper)
+STT_SAMPLE_RATE = int(os.environ.get("STT_SAMPLE_RATE", "16000"))  # Whisper transcription sample rate
 TTS_SAMPLE_RATE = int(os.environ.get("TTS_SAMPLE_RATE", "24000"))  # Outgoing audio (Kokoro TTS)
 
 # --- Authentication ---
@@ -90,7 +90,7 @@ DAEMON_SECRET = os.environ.get("VMUX_DAEMON_SECRET", "")
 
 # --- VAD (Voice Activity Detection) ---
 VAD_AGGRESSIVENESS = int(os.environ.get("VAD_AGGRESSIVENESS", "2"))  # 0=permissive, 3=strict
-SILENCE_THRESHOLD_MS = int(os.environ.get("SILENCE_THRESHOLD_MS", "2500"))
+SILENCE_THRESHOLD_MS = int(os.environ.get("SILENCE_THRESHOLD_MS", "1000"))
 MIN_SPEECH_DURATION_S = float(os.environ.get("MIN_SPEECH_DURATION_S", "0.5"))
 ECHO_COOLDOWN_S = float(os.environ.get("ECHO_COOLDOWN_S", "0.8"))
 MAX_RECORDING_S = float(os.environ.get("MAX_RECORDING_S", "180"))  # 3 minutes
