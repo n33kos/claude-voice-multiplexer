@@ -428,6 +428,10 @@ class VmuxDaemon:
                 session_id = request.get("session_id", "")
                 ok = await self._session_manager.hard_interrupt(session_id)
                 return {"ok": ok}
+            elif cmd == "clear-context":
+                session_id = request.get("session_id", "")
+                ok = await self._session_manager.clear_context(session_id)
+                return {"ok": ok}
             elif cmd == "restart-session":
                 session_id = request.get("session_id", "")
                 return await self._session_manager.restart_session(session_id)

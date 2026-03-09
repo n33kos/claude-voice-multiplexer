@@ -160,3 +160,29 @@
     border-color: var(--color-toggle-active);
   }
 }
+
+.Toast {
+  position: fixed;
+  bottom: 5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: var(--color-surface-secondary);
+  border: 1px solid var(--color-border-secondary);
+  color: var(--color-text-secondary);
+  padding: 0.4rem 0.75rem;
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  z-index: 200;
+  animation: toastIn 0.15s ease-out, toastOut 0.3s ease-in 1.7s forwards;
+  pointer-events: none;
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(0.5rem); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+@keyframes toastOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}

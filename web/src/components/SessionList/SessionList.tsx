@@ -110,6 +110,7 @@ export function SessionList({
   onKillSession,
   onRestartSession,
   onHardInterrupt,
+  onClearContext,
 }: SessionListProps) {
   const [showNewSession, setShowNewSession] = useState(false);
 
@@ -292,6 +293,7 @@ export function SessionList({
                       onRestartSession={onRestartSession}
                       onHardInterrupt={onHardInterrupt}
                       onSpawnSession={onSpawnSession}
+                      onClearContext={onClearContext}
                     />
                   </div>
                 </div>

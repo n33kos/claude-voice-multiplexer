@@ -298,6 +298,29 @@ class SessionManager:
             logger.error(f"[sessions] hard_interrupt failed: {e}")
             return False
 
+    async def clear_context(self, session_id: str) -> bool:
+        """Send /clear to a Claude session to reset its conversation context."""
+        async with self._lock:
+            session = self._find_session(session_id)
+            if not session:
+                return False
+            tmux_session = session.tmux_session
+        try:
+            # First interrupt any ongoing operation
+            await self.interrupt(session_id)
+            await asyncio.sleep(0.5)
+            # Send /clear slash command — needs two Enters (autocomplete select + submit)
+            await self._run(["tmux", "send-keys", "-t", tmux_session,
+                             "-l", "/clear"])
+            await asyncio.sleep(0.3)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(0.5)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            return True
+        except Exception as e:
+            logger.error(f"[sessions] clear_context failed: {e}")
+            return False
+
     async def restart_session(self, session_id: str) -> dict:
         """Kill and respawn a session in the same directory."""
         async with self._lock:

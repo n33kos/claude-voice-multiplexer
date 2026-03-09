@@ -15,6 +15,7 @@ interface SessionMenuProps {
   onHardInterrupt: (sessionId: string) => Promise<boolean>;
   onSpawnSession: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
   onReconnectSession: (sessionId: string, cwd?: string) => Promise<{ ok: boolean; error?: string }>;
+  onClearContext: (sessionId: string) => Promise<boolean>;
   onMenuOpenChange?: (open: boolean) => void;
 }
 
@@ -29,6 +30,7 @@ export function SessionMenu({
   onHardInterrupt,
   onSpawnSession,
   onReconnectSession,
+  onClearContext,
   onMenuOpenChange,
 }: SessionMenuProps) {
   const [open, setOpen] = useState(false);
@@ -37,6 +39,7 @@ export function SessionMenu({
   const [renameValue, setRenameValue] = useState("");
   const [hueValue, setHueValue] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   function handleOpenChange(nextOpen: boolean) {
@@ -59,6 +62,7 @@ export function SessionMenu({
   }
 
   return (
+    <>
     <DropdownMenu.Root open={open} onOpenChange={handleOpenChange}>
       <DropdownMenu.Trigger asChild>
         <button data-session-menu className={styles.MenuButton} disabled={busy}>
@@ -180,6 +184,22 @@ export function SessionMenu({
               >
                 Clear transcripts
               </DropdownMenu.Item>
+              <DropdownMenu.Item
+                className={styles.MenuItem}
+                onSelect={() => {
+                  setOpen(false);
+                  setBusy(true);
+                  onClearContext(session.session_id).then((ok) => {
+                    setBusy(false);
+                    if (ok) {
+                      setToast("Context cleared");
+                      setTimeout(() => setToast(null), 2000);
+                    }
+                  });
+                }}
+              >
+                Clear context
+              </DropdownMenu.Item>
               <DropdownMenu.Separator className={styles.Divider} />
               <DropdownMenu.Item
                 className={styles.MenuItem}
@@ -240,5 +260,7 @@ export function SessionMenu({
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
+      {toast && <div className={styles.Toast}>{toast}</div>}
+    </>
   );
 }

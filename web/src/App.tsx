@@ -227,6 +227,7 @@ export default function App() {
           onKillSession={relay.killSession}
           onRestartSession={relay.restartSession}
           onHardInterrupt={relay.hardInterruptSession}
+          onClearContext={relay.clearContextSession}
         />
 
         {relay.connectedSessionId && (

@@ -919,6 +919,16 @@ async def interrupt_session(session_id: str, request: Request):
     return JSONResponse({"error": result.get("error", "Interrupt failed")}, status_code=500)
 
 
+@app.post("/api/sessions/{session_id}/clear-context")
+async def clear_context_session(session_id: str, request: Request):
+    """Send /clear to a Claude session to reset conversation context."""
+    _require_auth(request)
+    result = await _daemon_ipc({"cmd": "clear-context", "session_id": session_id})
+    if result.get("ok"):
+        return JSONResponse({"success": True})
+    return JSONResponse({"error": result.get("error", "Clear context failed")}, status_code=500)
+
+
 @app.post("/api/sessions/{session_id}/restart")
 async def restart_session_endpoint(session_id: str, request: Request):
     """Kill + respawn a session via daemon."""

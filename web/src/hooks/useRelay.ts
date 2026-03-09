@@ -832,6 +832,21 @@ export function useRelay(authenticated: boolean = true) {
     [],
   );
 
+  const clearContextSession = useCallback(
+    async (sessionId: string): Promise<boolean> => {
+      try {
+        const resp = await authFetch(
+          `/api/sessions/${sessionId}/clear-context`,
+          { method: "POST" },
+        );
+        return resp.ok;
+      } catch {
+        return false;
+      }
+    },
+    [],
+  );
+
   const requestTerminalCapture = useCallback((lines = 50) => {
     setState((s) => ({ ...s, terminalSnapshotLoading: true }));
     wsRef.current?.send(JSON.stringify({ type: "capture_terminal", lines }));
@@ -932,6 +947,7 @@ export function useRelay(authenticated: boolean = true) {
     killSession,
     restartSession,
     hardInterruptSession,
+    clearContextSession,
     requestTerminalCapture,
     dismissTerminalSnapshot,
     sendTerminalKeys,
