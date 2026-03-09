@@ -42,9 +42,11 @@ LIVEKIT_SAMPLE_RATE = TTS_SAMPLE_RATE  # Publish at Kokoro's native rate to avoi
 NUM_CHANNELS = 1
 
 # VAD internals (not user-configurable)
-# LiveKit SDK sends 10ms frames (160 samples at 16kHz).  We match VAD to
-# the same frame size so every incoming frame goes directly to WebRTC VAD
-# without rechunking.
+# LiveKit delivers 10ms frames at 48kHz (480 samples).  WebRTC VAD natively
+# supports 48kHz with 10ms frames, so we pass raw frames directly — no
+# resampling needed for VAD.  Audio is only resampled to 16kHz (STT_SAMPLE_RATE)
+# when building the WAV for Whisper transcription.
+LIVEKIT_INPUT_RATE = 48000  # LiveKit always delivers 48kHz audio
 VAD_FRAME_MS = 10  # WebRTC VAD frame size — matches LiveKit's 10ms frames
 
 # Maximum audio buffer size in frames.  At 10ms/frame, 180s = 18000 frames.
@@ -365,14 +367,17 @@ class SessionRoom:
     ):
         """Process incoming audio frames with VAD and transcription.
 
-        LiveKit sends 10ms frames (160 samples at 16kHz).  VAD_FRAME_MS is set
-        to 10 so each incoming frame goes directly to WebRTC VAD — no rechunking.
+        LiveKit delivers 10ms frames at 48kHz (480 samples).  WebRTC VAD
+        supports 48kHz natively, so we pass raw frames directly — no
+        resampling in the hot loop.  Audio is resampled to 16kHz only when
+        building the WAV for Whisper in _handle_utterance().
         """
         self._clear_audio_buffer()
         speech_detected = False
-        consecutive_speech = 0  # consecutive VAD-positive frames (for onset debounce)
+        consecutive_speech = 0
         silence_ms = 0
         speech_start_time = None
+        _frame_logged = False
 
         try:
             async for event in stream:
@@ -389,14 +394,14 @@ class SessionRoom:
                 frame = event.frame
                 samples = np.array(frame.data, dtype=np.int16)
 
-                if frame.sample_rate != STT_SAMPLE_RATE:
-                    from scipy import signal as scipy_signal
-                    samples = scipy_signal.resample(
-                        samples,
-                        int(len(samples) * STT_SAMPLE_RATE / frame.sample_rate),
-                    ).astype(np.int16)
+                if not _frame_logged:
+                    rms = np.sqrt(np.mean(samples.astype(np.float64) ** 2))
+                    print(f"[room:{self.room_name}] Audio stream: {len(samples)} samples @ "
+                          f"{frame.sample_rate}Hz ({len(samples)*1000/frame.sample_rate:.0f}ms) rms={rms:.0f}")
+                    _frame_logged = True
 
-                is_speech = self._detect_speech(samples)
+                # VAD runs directly on raw 48kHz frames — no resampling needed
+                is_speech = self._detect_speech(samples, frame.sample_rate)
 
                 if is_speech:
                     if not speech_detected:
@@ -422,8 +427,8 @@ class SessionRoom:
 
                 # Hard cap: transcribe accumulated audio instead of discarding
                 if len(self._audio_buffer) > _MAX_AUDIO_BUFFER_FRAMES:
-                    print(f"[room:{self.room_name}] Audio buffer exceeded {_MAX_AUDIO_BUFFER_FRAMES} frames, "
-                          f"force-transcribing {len(self._audio_buffer)} frames")
+                    print(f"[room:{self.room_name}] Buffer overflow ({len(self._audio_buffer)} frames), "
+                          f"force-transcribing")
                     try:
                         await self._handle_utterance(participant)
                     except Exception as e:
@@ -435,17 +440,14 @@ class SessionRoom:
                     speech_start_time = None
                     continue
 
-                # Check both silence-based end-of-speech and max recording timeout
                 if speech_detected and speech_start_time:
                     speech_duration = time.time() - speech_start_time
                     timed_out = speech_duration >= MAX_RECORDING_S
                     silence_ended = silence_ms >= SILENCE_THRESHOLD_MS and speech_duration >= MIN_SPEECH_DURATION_S
 
                     if timed_out or silence_ended:
-                        if timed_out:
-                            print(f"[room:{self.room_name}] Max recording timeout ({speech_duration:.1f}s), transcribing...")
-                        else:
-                            print(f"[room:{self.room_name}] End of speech ({speech_duration:.1f}s), transcribing...")
+                        reason = "timeout" if timed_out else "silence"
+                        print(f"[room:{self.room_name}] End of speech ({speech_duration:.1f}s, {reason}), transcribing...")
                         try:
                             await self._handle_utterance(participant)
                         except Exception as e:
@@ -457,24 +459,23 @@ class SessionRoom:
                         silence_ms = 0
                         speech_start_time = None
         finally:
-            # Always clean up audio buffer when stream ends (disconnect, cancel, error)
             self._clear_audio_buffer()
 
-    def _detect_speech(self, samples: np.ndarray) -> bool:
-        """Detect speech using WebRTC VAD.
+    def _detect_speech(self, samples: np.ndarray, sample_rate: int) -> bool:
+        """Detect speech using WebRTC VAD on raw audio frames.
 
-        Expects 10ms frames (160 samples at 16kHz) matching VAD_FRAME_MS.
-        No energy fallback — if VAD fails, we log and return False so
-        failures are visible instead of silently degrading.
+        WebRTC VAD supports 8/16/32/48kHz with 10/20/30ms frames.  We pass
+        raw 48kHz frames directly — VAD internally downsamples to 8kHz.
+        No energy fallback; failures are logged explicitly.
         """
         if not self._vad:
             return False
 
         try:
-            frame_samples = int(STT_SAMPLE_RATE * VAD_FRAME_MS / 1000)
+            frame_samples = int(sample_rate * VAD_FRAME_MS / 1000)
             if len(samples) >= frame_samples:
                 chunk = samples[:frame_samples]
-                return self._vad.is_speech(chunk.tobytes(), STT_SAMPLE_RATE)
+                return self._vad.is_speech(chunk.tobytes(), sample_rate)
             else:
                 print(f"[room:{self.room_name}] WARNING: frame too small for VAD "
                       f"({len(samples)} samples, need {frame_samples})")
@@ -489,12 +490,20 @@ class SessionRoom:
             return
 
         all_audio = np.concatenate(self._audio_buffer)
-        # Clear buffer immediately to free the numpy arrays before transcription
         self._clear_audio_buffer()
+
+        # Resample from 48kHz to 16kHz for Whisper
+        if LIVEKIT_INPUT_RATE != STT_SAMPLE_RATE:
+            from scipy import signal as scipy_signal
+            all_audio = scipy_signal.resample(
+                all_audio.astype(np.float64),  # float64 avoids int16 precision loss
+                int(len(all_audio) * STT_SAMPLE_RATE / LIVEKIT_INPUT_RATE),
+            ).astype(np.int16)
+
         duration_s = len(all_audio) / STT_SAMPLE_RATE
         print(f"[room:{self.room_name}] Sending {duration_s:.1f}s of audio to Whisper")
         wav_bytes = _to_wav(all_audio, STT_SAMPLE_RATE)
-        del all_audio  # Release the concatenated array
+        del all_audio
 
         session = await self.registry.get(self.session_id)
 

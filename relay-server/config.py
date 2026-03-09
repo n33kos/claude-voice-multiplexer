@@ -89,9 +89,8 @@ AUTH_ENABLED = bool(AUTH_SECRET)
 DAEMON_SECRET = os.environ.get("VMUX_DAEMON_SECRET", "")
 
 # --- VAD (Voice Activity Detection) ---
-VAD_AGGRESSIVENESS = int(os.environ.get("VAD_AGGRESSIVENESS", "3"))  # 0=permissive, 3=strict
+VAD_AGGRESSIVENESS = int(os.environ.get("VAD_AGGRESSIVENESS", "2"))  # 0=permissive, 3=strict
 SILENCE_THRESHOLD_MS = int(os.environ.get("SILENCE_THRESHOLD_MS", "2500"))
 MIN_SPEECH_DURATION_S = float(os.environ.get("MIN_SPEECH_DURATION_S", "0.5"))
 ECHO_COOLDOWN_S = float(os.environ.get("ECHO_COOLDOWN_S", "0.8"))
-ENERGY_THRESHOLD = int(os.environ.get("ENERGY_THRESHOLD", "500"))
 MAX_RECORDING_S = float(os.environ.get("MAX_RECORDING_S", "180"))  # 3 minutes
