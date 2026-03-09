@@ -299,19 +299,49 @@ class SessionManager:
             return False
 
     async def clear_context(self, session_id: str) -> bool:
-        """Send /clear to a Claude session to reset its conversation context."""
+        """Send /clear to a Claude session to reset its conversation context.
+
+        Performs a hard interrupt first (Ctrl-C + Escape) to break Claude out of
+        any current operation (standby, active work, tool use, etc.), then sends
+        /clear, reconnects the MCP plugin, and re-enters voice standby.
+        """
         async with self._lock:
             session = self._find_session(session_id)
             if not session:
                 return False
             tmux_session = session.tmux_session
         try:
-            # First interrupt any ongoing operation
+            # Step 1: Hard interrupt — Ctrl-C to cancel, then Escape to dismiss
+            # any prompts or autocomplete menus that may be open.
             await self.interrupt(session_id)
             await asyncio.sleep(0.5)
-            # Send /clear slash command — needs two Enters (autocomplete select + submit)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Escape", ""])
+            await asyncio.sleep(0.5)
+            # Second Ctrl-C in case the first was absorbed by a confirmation prompt
+            await self.interrupt(session_id)
+            await asyncio.sleep(1.0)
+
+            # Step 2: Send /clear slash command — two Enters (autocomplete select + submit)
             await self._run(["tmux", "send-keys", "-t", tmux_session,
                              "-l", "/clear"])
+            await asyncio.sleep(0.3)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(0.5)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(2.0)
+
+            # Step 3: Reconnect MCP plugin (clearing stale session state)
+            await self._run(["tmux", "send-keys", "-t", tmux_session,
+                             "-l", "/mcp reconnect plugin:voice-multiplexer:voice-multiplexer"])
+            await asyncio.sleep(0.3)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(0.5)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(2.0)
+
+            # Step 4: Re-enter voice standby
+            await self._run(["tmux", "send-keys", "-t", tmux_session,
+                             "-l", "/voice-multiplexer:standby"])
             await asyncio.sleep(0.3)
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             await asyncio.sleep(0.5)
