@@ -34,7 +34,6 @@ from config import (
     SILENCE_THRESHOLD_MS,
     MIN_SPEECH_DURATION_S,
     ECHO_COOLDOWN_S,
-    ENERGY_THRESHOLD,
     MAX_RECORDING_S,
 )
 
@@ -43,21 +42,23 @@ LIVEKIT_SAMPLE_RATE = TTS_SAMPLE_RATE  # Publish at Kokoro's native rate to avoi
 NUM_CHANNELS = 1
 
 # VAD internals (not user-configurable)
-VAD_FRAME_MS = 30  # WebRTC VAD frame size (10, 20, or 30ms)
+# LiveKit SDK sends 10ms frames (160 samples at 16kHz).  We match VAD to
+# the same frame size so every incoming frame goes directly to WebRTC VAD
+# without rechunking.
+VAD_FRAME_MS = 10  # WebRTC VAD frame size — matches LiveKit's 10ms frames
 
-# Maximum audio buffer size in 30ms frames.  After rechunking incoming
-# 10ms LiveKit frames to 30ms, MAX_RECORDING_S (180s) = ~6000 frames.
+# Maximum audio buffer size in frames.  At 10ms/frame, 180s = 18000 frames.
 # We add 10% headroom.  On overflow we TRANSCRIBE (not discard) audio.
 _MAX_AUDIO_BUFFER_FRAMES = int(MAX_RECORDING_S / (VAD_FRAME_MS / 1000) * 1.1)
 
-# Pre-roll buffer: keep the last N frames (~300ms at 30ms/frame) during
+# Pre-roll buffer: keep the last N frames (~100ms at 10ms/frame) during
 # non-speech periods so the onset of speech is preserved when VAD triggers.
 _PREROLL_FRAMES = 10
 
 # Speech onset debounce: require N consecutive VAD-positive frames before
 # declaring speech onset.  Prevents background noise spikes from triggering
 # speech detection and filling the buffer with noise.
-_SPEECH_ONSET_FRAMES = 3  # ~90ms at 30ms/frame
+_SPEECH_ONSET_FRAMES = 5  # ~50ms at 10ms/frame
 
 # Whisper noise/hallucination filtering.
 #
@@ -364,11 +365,8 @@ class SessionRoom:
     ):
         """Process incoming audio frames with VAD and transcription.
 
-        LiveKit sends 10ms frames (160 samples at 16kHz) but WebRTC VAD needs
-        30ms frames (480 samples). We rechunk incoming frames to 30ms before
-        VAD and buffering so that:
-        - VAD gets proper 30ms frames instead of falling back to energy-only
-        - Buffer frame count maps correctly to real time (180s = ~6000 frames)
+        LiveKit sends 10ms frames (160 samples at 16kHz).  VAD_FRAME_MS is set
+        to 10 so each incoming frame goes directly to WebRTC VAD — no rechunking.
         """
         self._clear_audio_buffer()
         speech_detected = False
@@ -376,17 +374,12 @@ class SessionRoom:
         silence_ms = 0
         speech_start_time = None
 
-        # Rechunk buffer: accumulate small incoming frames into VAD_FRAME_MS chunks
-        vad_frame_samples = int(STT_SAMPLE_RATE * VAD_FRAME_MS / 1000)  # 480 for 30ms@16kHz
-        rechunk_buf = np.empty(0, dtype=np.int16)
-
         try:
             async for event in stream:
                 if not self._running:
                     break
 
                 if self._waiting_for_response or self._is_speaking:
-                    rechunk_buf = np.empty(0, dtype=np.int16)
                     continue
                 if time.time() - self._speaking_ended_at < ECHO_COOLDOWN_S:
                     continue
@@ -403,93 +396,92 @@ class SessionRoom:
                         int(len(samples) * STT_SAMPLE_RATE / frame.sample_rate),
                     ).astype(np.int16)
 
-                # Rechunk: accumulate samples until we have a full VAD frame
-                rechunk_buf = np.concatenate([rechunk_buf, samples])
+                is_speech = self._detect_speech(samples)
 
-                while len(rechunk_buf) >= vad_frame_samples:
-                    chunk = rechunk_buf[:vad_frame_samples]
-                    rechunk_buf = rechunk_buf[vad_frame_samples:]
-
-                    is_speech = self._detect_speech(chunk)
-
-                    if is_speech:
-                        if not speech_detected:
-                            consecutive_speech += 1
-                            self._preroll_buffer.append(chunk)
-                            if consecutive_speech < _SPEECH_ONSET_FRAMES:
-                                continue
-                            speech_detected = True
-                            speech_start_time = time.time()
-                            self._audio_buffer.extend(self._preroll_buffer)
-                            self._preroll_buffer.clear()
-                            print(f"[room:{self.room_name}] Speech detected from {participant.identity}")
-                        else:
-                            self._audio_buffer.append(chunk)
-                        silence_ms = 0
-                    elif speech_detected:
-                        self._audio_buffer.append(chunk)
-                        silence_ms += VAD_FRAME_MS
+                if is_speech:
+                    if not speech_detected:
+                        consecutive_speech += 1
+                        self._preroll_buffer.append(samples)
+                        if consecutive_speech < _SPEECH_ONSET_FRAMES:
+                            continue
+                        speech_detected = True
+                        speech_start_time = time.time()
+                        self._audio_buffer.extend(self._preroll_buffer)
+                        self._preroll_buffer.clear()
+                        print(f"[room:{self.room_name}] Speech detected from {participant.identity}")
                     else:
-                        consecutive_speech = 0
-                        self._preroll_buffer.append(chunk)
-                        continue
+                        self._audio_buffer.append(samples)
+                    silence_ms = 0
+                elif speech_detected:
+                    self._audio_buffer.append(samples)
+                    silence_ms += VAD_FRAME_MS
+                else:
+                    consecutive_speech = 0
+                    self._preroll_buffer.append(samples)
+                    continue
 
-                    # Hard cap: transcribe accumulated audio instead of discarding
-                    if len(self._audio_buffer) > _MAX_AUDIO_BUFFER_FRAMES:
-                        print(f"[room:{self.room_name}] Audio buffer exceeded {_MAX_AUDIO_BUFFER_FRAMES} frames, "
-                              f"force-transcribing {len(self._audio_buffer)} frames")
+                # Hard cap: transcribe accumulated audio instead of discarding
+                if len(self._audio_buffer) > _MAX_AUDIO_BUFFER_FRAMES:
+                    print(f"[room:{self.room_name}] Audio buffer exceeded {_MAX_AUDIO_BUFFER_FRAMES} frames, "
+                          f"force-transcribing {len(self._audio_buffer)} frames")
+                    try:
+                        await self._handle_utterance(participant)
+                    except Exception as e:
+                        print(f"[room:{self.room_name}] Error in force-flush transcription: {e}")
+                    self._clear_audio_buffer()
+                    speech_detected = False
+                    consecutive_speech = 0
+                    silence_ms = 0
+                    speech_start_time = None
+                    continue
+
+                # Check both silence-based end-of-speech and max recording timeout
+                if speech_detected and speech_start_time:
+                    speech_duration = time.time() - speech_start_time
+                    timed_out = speech_duration >= MAX_RECORDING_S
+                    silence_ended = silence_ms >= SILENCE_THRESHOLD_MS and speech_duration >= MIN_SPEECH_DURATION_S
+
+                    if timed_out or silence_ended:
+                        if timed_out:
+                            print(f"[room:{self.room_name}] Max recording timeout ({speech_duration:.1f}s), transcribing...")
+                        else:
+                            print(f"[room:{self.room_name}] End of speech ({speech_duration:.1f}s), transcribing...")
                         try:
                             await self._handle_utterance(participant)
                         except Exception as e:
-                            print(f"[room:{self.room_name}] Error in force-flush transcription: {e}")
+                            print(f"[room:{self.room_name}] Error handling utterance: {e}")
+
                         self._clear_audio_buffer()
                         speech_detected = False
                         consecutive_speech = 0
                         silence_ms = 0
                         speech_start_time = None
-                        continue
-
-                    # Check both silence-based end-of-speech and max recording timeout
-                    if speech_detected and speech_start_time:
-                        speech_duration = time.time() - speech_start_time
-                        timed_out = speech_duration >= MAX_RECORDING_S
-                        silence_ended = silence_ms >= SILENCE_THRESHOLD_MS and speech_duration >= MIN_SPEECH_DURATION_S
-
-                        if timed_out or silence_ended:
-                            if timed_out:
-                                print(f"[room:{self.room_name}] Max recording timeout ({speech_duration:.1f}s), transcribing...")
-                            else:
-                                print(f"[room:{self.room_name}] End of speech ({speech_duration:.1f}s), transcribing...")
-                            try:
-                                await self._handle_utterance(participant)
-                            except Exception as e:
-                                print(f"[room:{self.room_name}] Error handling utterance: {e}")
-
-                            self._clear_audio_buffer()
-                            speech_detected = False
-                            consecutive_speech = 0
-                            silence_ms = 0
-                            speech_start_time = None
         finally:
             # Always clean up audio buffer when stream ends (disconnect, cancel, error)
             self._clear_audio_buffer()
 
     def _detect_speech(self, samples: np.ndarray) -> bool:
-        """Detect speech using WebRTC VAD or energy fallback.
+        """Detect speech using WebRTC VAD.
 
-        Expects samples at STT_SAMPLE_RATE (16kHz), matching WebRTC VAD requirements.
+        Expects 10ms frames (160 samples at 16kHz) matching VAD_FRAME_MS.
+        No energy fallback — if VAD fails, we log and return False so
+        failures are visible instead of silently degrading.
         """
-        if self._vad:
-            try:
-                frame_samples = int(STT_SAMPLE_RATE * VAD_FRAME_MS / 1000)
-                if len(samples) >= frame_samples:
-                    chunk = samples[:frame_samples]
-                    return self._vad.is_speech(chunk.tobytes(), STT_SAMPLE_RATE)
-            except Exception:
-                pass
+        if not self._vad:
+            return False
 
-        energy = np.sqrt(np.mean(samples.astype(np.float64) ** 2))
-        return energy > ENERGY_THRESHOLD
+        try:
+            frame_samples = int(STT_SAMPLE_RATE * VAD_FRAME_MS / 1000)
+            if len(samples) >= frame_samples:
+                chunk = samples[:frame_samples]
+                return self._vad.is_speech(chunk.tobytes(), STT_SAMPLE_RATE)
+            else:
+                print(f"[room:{self.room_name}] WARNING: frame too small for VAD "
+                      f"({len(samples)} samples, need {frame_samples})")
+                return False
+        except Exception as e:
+            print(f"[room:{self.room_name}] VAD error: {e}")
+            return False
 
     async def _handle_utterance(self, participant: rtc.RemoteParticipant):
         """Transcribe buffered audio and forward to the connected Claude session."""
