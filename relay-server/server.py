@@ -740,6 +740,9 @@ async def get_settings(request: Request):
     return JSONResponse({
         "kokoro_voice": get_setting("kokoro_voice"),
         "kokoro_speed": get_setting("kokoro_speed"),
+        "vad_aggressiveness": get_setting("vad_aggressiveness"),
+        "silence_threshold_ms": get_setting("silence_threshold_ms"),
+        "min_speech_duration_s": get_setting("min_speech_duration_s"),
         "available_voices": voices,
     })
 
@@ -759,6 +762,21 @@ async def update_settings(request: Request):
         speed = float(body["kokoro_speed"])
         update_setting("kokoro_speed", speed)
         updated["kokoro_speed"] = speed
+    if "vad_aggressiveness" in body:
+        val = int(body["vad_aggressiveness"])
+        val = max(0, min(3, val))  # clamp to 0-3
+        update_setting("vad_aggressiveness", val)
+        updated["vad_aggressiveness"] = val
+    if "silence_threshold_ms" in body:
+        val = int(body["silence_threshold_ms"])
+        val = max(0, val)
+        update_setting("silence_threshold_ms", val)
+        updated["silence_threshold_ms"] = val
+    if "min_speech_duration_s" in body:
+        val = float(body["min_speech_duration_s"])
+        val = max(0.0, val)
+        update_setting("min_speech_duration_s", val)
+        updated["min_speech_duration_s"] = val
 
     if updated:
         _persist_settings()

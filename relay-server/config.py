@@ -37,44 +37,6 @@ KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
 KOKORO_MODEL = os.environ.get("KOKORO_MODEL", "tts-1")
 KOKORO_SPEED = float(os.environ.get("KOKORO_SPEED", "1.0"))
 
-# --- Mutable runtime settings (can be updated via API) ---
-_runtime_settings = {
-    "kokoro_voice": KOKORO_VOICE,
-    "kokoro_speed": KOKORO_SPEED,
-}
-
-
-def get_setting(key: str):
-    return _runtime_settings.get(key)
-
-
-def update_setting(key: str, value):
-    _runtime_settings[key] = value
-
-
-def _persist_settings():
-    """Write current runtime settings back to the env file."""
-    env_path = Path.home() / ".claude" / "voice-multiplexer" / "voice-multiplexer.env"
-    _env_mapping = {
-        "kokoro_voice": "KOKORO_VOICE",
-        "kokoro_speed": "KOKORO_SPEED",
-    }
-    try:
-        content = env_path.read_text()
-        import re
-        for key, env_var in _env_mapping.items():
-            value = str(_runtime_settings[key])
-            pattern = rf'^{re.escape(env_var)}=.*$'
-            if re.search(pattern, content, re.MULTILINE):
-                content = re.sub(pattern, f'{env_var}={value}', content, flags=re.MULTILINE)
-            else:
-                content = content.rstrip() + f'\n{env_var}={value}\n'
-        env_path.write_text(content)
-    except Exception as e:
-        import logging
-        logging.getLogger("relay.config").error(f"Failed to persist settings: {e}")
-
-
 STT_SAMPLE_RATE = int(os.environ.get("STT_SAMPLE_RATE", "16000"))  # Whisper transcription sample rate
 TTS_SAMPLE_RATE = int(os.environ.get("TTS_SAMPLE_RATE", "24000"))  # Outgoing audio (Kokoro TTS)
 
@@ -94,3 +56,46 @@ SILENCE_THRESHOLD_MS = int(os.environ.get("SILENCE_THRESHOLD_MS", "1000"))
 MIN_SPEECH_DURATION_S = float(os.environ.get("MIN_SPEECH_DURATION_S", "0.5"))
 ECHO_COOLDOWN_S = float(os.environ.get("ECHO_COOLDOWN_S", "0.8"))
 MAX_RECORDING_S = float(os.environ.get("MAX_RECORDING_S", "180"))  # 3 minutes
+
+# --- Mutable runtime settings (can be updated via API) ---
+_runtime_settings = {
+    "kokoro_voice": KOKORO_VOICE,
+    "kokoro_speed": KOKORO_SPEED,
+    "vad_aggressiveness": VAD_AGGRESSIVENESS,
+    "silence_threshold_ms": SILENCE_THRESHOLD_MS,
+    "min_speech_duration_s": MIN_SPEECH_DURATION_S,
+}
+
+
+def get_setting(key: str):
+    return _runtime_settings.get(key)
+
+
+def update_setting(key: str, value):
+    _runtime_settings[key] = value
+
+
+def _persist_settings():
+    """Write current runtime settings back to the env file."""
+    env_path = Path.home() / ".claude" / "voice-multiplexer" / "voice-multiplexer.env"
+    _env_mapping = {
+        "kokoro_voice": "KOKORO_VOICE",
+        "kokoro_speed": "KOKORO_SPEED",
+        "vad_aggressiveness": "VAD_AGGRESSIVENESS",
+        "silence_threshold_ms": "SILENCE_THRESHOLD_MS",
+        "min_speech_duration_s": "MIN_SPEECH_DURATION_S",
+    }
+    try:
+        content = env_path.read_text()
+        import re
+        for key, env_var in _env_mapping.items():
+            value = str(_runtime_settings[key])
+            pattern = rf'^{re.escape(env_var)}=.*$'
+            if re.search(pattern, content, re.MULTILINE):
+                content = re.sub(pattern, f'{env_var}={value}', content, flags=re.MULTILINE)
+            else:
+                content = content.rstrip() + f'\n{env_var}={value}\n'
+        env_path.write_text(content)
+    except Exception as e:
+        import logging
+        logging.getLogger("relay.config").error(f"Failed to persist settings: {e}")

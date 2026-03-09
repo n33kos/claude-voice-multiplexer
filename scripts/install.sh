@@ -384,9 +384,6 @@ MIN_SPEECH_DURATION_S=0.5
 # Seconds to ignore mic input after TTS finishes (echo suppression)
 # ECHO_COOLDOWN_S=0.8
 
-# Energy threshold for fallback VAD (higher = less sensitive to quiet sounds)
-# ENERGY_THRESHOLD=500
-
 # Max recording duration in seconds
 # MAX_RECORDING_S=180
 

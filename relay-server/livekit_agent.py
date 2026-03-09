@@ -30,11 +30,9 @@ from config import (
     LIVEKIT_API_SECRET,
     STT_SAMPLE_RATE,
     TTS_SAMPLE_RATE,
-    VAD_AGGRESSIVENESS,
-    SILENCE_THRESHOLD_MS,
-    MIN_SPEECH_DURATION_S,
     ECHO_COOLDOWN_S,
     MAX_RECORDING_S,
+    get_setting,
 )
 
 AGENT_IDENTITY_PREFIX = "relay-agent"
@@ -201,6 +199,7 @@ class SessionRoom:
         self._audio_buffer: list[np.ndarray] = []
         self._preroll_buffer: collections.deque[np.ndarray] = collections.deque(maxlen=_PREROLL_FRAMES)
         self._vad = None
+        self._vad_aggressiveness: int = 0
         self._is_speaking = False
         self._waiting_for_response = False
         self._speaking_ended_at: float = 0.0
@@ -228,7 +227,8 @@ class SessionRoom:
         # Initialize VAD
         try:
             import webrtcvad
-            self._vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
+            self._vad_aggressiveness = get_setting("vad_aggressiveness")
+            self._vad = webrtcvad.Vad(self._vad_aggressiveness)
         except ImportError:
             print(f"[room:{self.room_name}] ERROR: webrtcvad not installed — speech detection disabled")
 
@@ -440,10 +440,24 @@ class SessionRoom:
                     speech_start_time = None
                     continue
 
+                # Recreate VAD if aggressiveness setting changed
+                if self._vad:
+                    current_agg = get_setting("vad_aggressiveness")
+                    if current_agg != self._vad_aggressiveness:
+                        try:
+                            import webrtcvad
+                            self._vad_aggressiveness = current_agg
+                            self._vad = webrtcvad.Vad(current_agg)
+                            print(f"[room:{self.room_name}] VAD aggressiveness updated to {current_agg}")
+                        except Exception as e:
+                            print(f"[room:{self.room_name}] Failed to update VAD aggressiveness: {e}")
+
                 if speech_detected and speech_start_time:
                     speech_duration = time.time() - speech_start_time
+                    current_silence_threshold = get_setting("silence_threshold_ms")
+                    current_min_speech = get_setting("min_speech_duration_s")
                     timed_out = speech_duration >= MAX_RECORDING_S
-                    silence_ended = silence_ms >= SILENCE_THRESHOLD_MS and speech_duration >= MIN_SPEECH_DURATION_S
+                    silence_ended = silence_ms >= current_silence_threshold and speech_duration >= current_min_speech
 
                     if timed_out or silence_ended:
                         reason = "timeout" if timed_out else "silence"
