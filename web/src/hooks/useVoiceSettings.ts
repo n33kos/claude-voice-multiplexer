@@ -12,6 +12,9 @@ export interface VoiceSettings {
   kokoro_voice: string;
   kokoro_speed: number;
   available_voices: VoiceOption[];
+  vad_aggressiveness: number;
+  silence_threshold_ms: number;
+  min_speech_duration_s: number;
 }
 
 export interface ServiceStatus {

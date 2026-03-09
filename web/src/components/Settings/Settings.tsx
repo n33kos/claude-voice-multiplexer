@@ -336,6 +336,92 @@ export function Settings({
           <div className={styles.Divider} />
 
           <div className={styles.SectionHeader}>
+            <span className={styles.SectionTitle}>Voice Detection</span>
+            {saveStatus === "saved" && (
+              <span className={styles.SaveIndicator}>Saved</span>
+            )}
+            {saveStatus === "saving" && (
+              <span className={styles.SaveIndicator}>Saving...</span>
+            )}
+          </div>
+
+          {voiceLoading && !voiceSettings && (
+            <span className={styles.NoDevices}>Loading voice detection settings...</span>
+          )}
+
+          {voiceSettings && (
+            <>
+              <div className={styles.VoiceSettingRow}>
+                <div className={styles.SettingLabel}>
+                  <span className={styles.SettingTitle}>VAD Aggressiveness</span>
+                  <span className={styles.SettingDescription}>
+                    Voice activity detection sensitivity ({voiceSettings.vad_aggressiveness})
+                  </span>
+                </div>
+                <div className={styles.SliderContainer}>
+                  <span className={styles.SliderLabel}>0</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={3}
+                    step={1}
+                    value={voiceSettings.vad_aggressiveness}
+                    onChange={(e) => updateSetting("vad_aggressiveness", parseInt(e.target.value))}
+                    className={styles.Slider}
+                  />
+                  <span className={styles.SliderLabel}>3</span>
+                </div>
+              </div>
+
+              <div className={styles.VoiceSettingRow}>
+                <div className={styles.SettingLabel}>
+                  <span className={styles.SettingTitle}>Silence Threshold</span>
+                  <span className={styles.SettingDescription}>
+                    Silence duration before ending speech ({voiceSettings.silence_threshold_ms}ms)
+                  </span>
+                </div>
+                <div className={styles.SliderContainer}>
+                  <span className={styles.SliderLabel}>500</span>
+                  <input
+                    type="range"
+                    min={500}
+                    max={3000}
+                    step={100}
+                    value={voiceSettings.silence_threshold_ms}
+                    onChange={(e) => updateSetting("silence_threshold_ms", parseInt(e.target.value))}
+                    className={styles.Slider}
+                  />
+                  <span className={styles.SliderLabel}>3000</span>
+                </div>
+              </div>
+
+              <div className={styles.VoiceSettingRow}>
+                <div className={styles.SettingLabel}>
+                  <span className={styles.SettingTitle}>Min Speech Duration</span>
+                  <span className={styles.SettingDescription}>
+                    Minimum duration to register as speech ({voiceSettings.min_speech_duration_s.toFixed(1)}s)
+                  </span>
+                </div>
+                <div className={styles.SliderContainer}>
+                  <span className={styles.SliderLabel}>0.1s</span>
+                  <input
+                    type="range"
+                    min={0.1}
+                    max={2.0}
+                    step={0.1}
+                    value={voiceSettings.min_speech_duration_s}
+                    onChange={(e) => updateSetting("min_speech_duration_s", parseFloat(e.target.value))}
+                    className={styles.Slider}
+                  />
+                  <span className={styles.SliderLabel}>2.0s</span>
+                </div>
+              </div>
+            </>
+          )}
+
+          <div className={styles.Divider} />
+
+          <div className={styles.SectionHeader}>
             <span className={styles.SectionTitle}>
               Services
               {health?.version && (
