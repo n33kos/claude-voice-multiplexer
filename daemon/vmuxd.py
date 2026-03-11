@@ -726,14 +726,15 @@ class VmuxDaemon:
                 pass
 
     async def _memory_watchdog_loop(self):
-        """Monitor kokoro process RSS and restart it when it exceeds the threshold.
+        """Monitor kokoro process memory footprint and restart when it exceeds threshold.
 
         The kokoro TTS service (using MPS Metal GPU) has an intractable native
-        memory leak from the C-level MPS allocator. This watchdog periodically
-        checks the RSS of the kokoro process tree and triggers a graceful restart
-        when it exceeds KOKORO_MAX_RSS_MB (default 5120 MB / 5 GB).
+        memory leak from the C-level MPS allocator. macOS `ps` RSS only reports
+        ~2GB even when the actual dirty memory footprint is 20GB+ (due to MPS GPU
+        memory and malloc regions). This watchdog uses the macOS `footprint` command
+        to get the real dirty memory and triggers a graceful restart when it exceeds
+        KOKORO_MAX_RSS_MB (default 5120 MB / 5 GB).
         """
-        threshold_kb = KOKORO_MAX_RSS_MB * 1024
         logger.info(
             f"[watchdog] kokoro memory watchdog started "
             f"(threshold={KOKORO_MAX_RSS_MB}MB, interval={KOKORO_WATCHDOG_INTERVAL}s, "
@@ -748,25 +749,26 @@ class VmuxDaemon:
                 if not kokoro_pid:
                     continue
 
-                rss_kb = await self._get_process_tree_rss(kokoro_pid)
-                if rss_kb is None:
+                footprint_mb = await self._get_process_tree_footprint(kokoro_pid)
+                if footprint_mb is None:
                     continue
 
-                rss_mb = rss_kb / 1024
-                if rss_kb > threshold_kb:
+                logger.info(f"[watchdog] kokoro footprint={footprint_mb:.0f}MB")
+
+                if footprint_mb > KOKORO_MAX_RSS_MB:
                     now = time.monotonic()
                     elapsed = now - self._last_kokoro_memory_restart
                     if elapsed < KOKORO_WATCHDOG_COOLDOWN:
                         remaining = int(KOKORO_WATCHDOG_COOLDOWN - elapsed)
                         logger.warning(
-                            f"[watchdog] kokoro RSS={rss_mb:.0f}MB exceeds "
+                            f"[watchdog] kokoro footprint={footprint_mb:.0f}MB exceeds "
                             f"{KOKORO_MAX_RSS_MB}MB but cooldown active "
                             f"({remaining}s remaining) — skipping restart"
                         )
                         continue
 
                     logger.warning(
-                        f"[watchdog] kokoro RSS={rss_mb:.0f}MB exceeds "
+                        f"[watchdog] kokoro footprint={footprint_mb:.0f}MB exceeds "
                         f"{KOKORO_MAX_RSS_MB}MB threshold — restarting"
                     )
                     self._last_kokoro_memory_restart = now
@@ -775,26 +777,27 @@ class VmuxDaemon:
                         logger.info("[watchdog] kokoro restarted successfully")
                     else:
                         logger.error("[watchdog] kokoro restart failed")
-                else:
-                    # Log periodically at debug level for observability
-                    logger.debug(f"[watchdog] kokoro RSS={rss_mb:.0f}MB (ok)")
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.warning(f"[watchdog] error: {e}")
 
     @staticmethod
-    async def _get_process_tree_rss(root_pid: int) -> Optional[int]:
-        """Get total RSS in KB for a process and all its descendants.
+    async def _get_process_tree_footprint(root_pid: int) -> Optional[float]:
+        """Get total dirty memory footprint in MB for a process tree.
 
-        Uses `ps` to find all processes whose parent PID is in the tree,
-        then sums their RSS. This catches the actual Python/uvicorn process
-        spawned by `uv run`.
+        Uses the macOS `footprint --pid` command which reports the actual dirty
+        memory including MPS GPU allocations and malloc regions — unlike `ps` RSS
+        which dramatically underreports for processes using Metal/MPS.
+
+        Walks the process tree (root + descendants) and sums footprints.
         """
+        import re
+
         try:
-            # Get all processes with their PID, PPID, and RSS
+            # First, find all PIDs in the process tree via ps
             proc = await asyncio.create_subprocess_exec(
-                "ps", "-eo", "pid=,ppid=,rss=",
+                "ps", "-eo", "pid=,ppid=",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )
@@ -802,19 +805,19 @@ class VmuxDaemon:
             if proc.returncode != 0:
                 return None
 
-            # Parse ps output into a dict: pid -> (ppid, rss_kb)
-            processes: dict[int, tuple[int, int]] = {}
+            # Parse ps output into a dict: pid -> ppid
+            children: dict[int, int] = {}
             for line in stdout.decode().strip().splitlines():
                 parts = line.split()
-                if len(parts) != 3:
+                if len(parts) != 2:
                     continue
                 try:
-                    pid, ppid, rss = int(parts[0]), int(parts[1]), int(parts[2])
-                    processes[pid] = (ppid, rss)
+                    pid, ppid = int(parts[0]), int(parts[1])
+                    children[pid] = ppid
                 except ValueError:
                     continue
 
-            if root_pid not in processes:
+            if root_pid not in children:
                 return None
 
             # BFS to find all descendants
@@ -822,14 +825,32 @@ class VmuxDaemon:
             frontier = [root_pid]
             while frontier:
                 parent = frontier.pop()
-                for pid, (ppid, _) in processes.items():
+                for pid, ppid in children.items():
                     if ppid == parent and pid not in tree_pids:
                         tree_pids.add(pid)
                         frontier.append(pid)
 
-            # Sum RSS across all processes in the tree
-            total_rss = sum(processes[pid][1] for pid in tree_pids if pid in processes)
-            return total_rss
+            # Run footprint on each PID in the tree and sum
+            total_mb = 0.0
+            footprint_re = re.compile(r"^Footprint:\s+([\d.]+)\s+MB", re.MULTILINE)
+
+            for pid in tree_pids:
+                try:
+                    fp_proc = await asyncio.create_subprocess_exec(
+                        "footprint", "--pid", str(pid),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    fp_stdout, _ = await fp_proc.communicate()
+                    if fp_proc.returncode != 0:
+                        continue
+                    match = footprint_re.search(fp_stdout.decode())
+                    if match:
+                        total_mb += float(match.group(1))
+                except Exception:
+                    continue
+
+            return total_mb if total_mb > 0 else None
         except Exception:
             return None
 
