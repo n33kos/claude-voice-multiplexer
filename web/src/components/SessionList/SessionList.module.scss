@@ -376,6 +376,27 @@
   flex-shrink: 0;
 }
 
+// --- Header unread dot indicators ---
+
+.UnreadDotsContainer {
+  display: flex;
+  align-items: center;
+  position: relative;
+  height: 1.125rem;
+}
+
+.UnreadDotStacked {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  flex-shrink: 0;
+  margin-right: -3px;
+
+  &:last-child {
+    margin-right: 0;
+  }
+}
+
 .UnreadBadge {
   font-size: 10px;
   font-weight: 600;

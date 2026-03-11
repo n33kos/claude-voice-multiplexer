@@ -217,7 +217,25 @@ export function SessionList({
           </div>
           <div className={styles.HeaderRight}>
             {unreadSessions.size > 0 && (
-              <span className={styles.UnreadBadge}>{unreadSessions.size}</span>
+              <>
+                <span className={styles.UnreadDotsContainer}>
+                  {sessions
+                    .filter((s) => unreadSessions.has(s.session_id))
+                    .map((s) => {
+                      const h = s.hue_override ?? sessionHue(s.session_id);
+                      return (
+                        <span
+                          key={s.session_id}
+                          className={styles.UnreadDotStacked}
+                          style={{
+                            backgroundColor: `hsla(${h}, 70%, 55%, 0.85)`,
+                          }}
+                        />
+                      );
+                    })}
+                </span>
+                <span className={styles.UnreadBadge}>{unreadSessions.size}</span>
+              </>
             )}
             {sessions.length > 1 && (
               <span className={styles.SessionCount}>
@@ -297,7 +315,14 @@ export function SessionList({
                 <div className={styles.SessionContent}>
                   <div className={styles.SessionInfo}>
                     <div className={styles.SessionNameRow}>
-                      {hasUnread && <span className={styles.UnreadDot} />}
+                      {hasUnread && (
+                        <span
+                          className={styles.UnreadDot}
+                          style={{
+                            backgroundColor: `hsla(${hue}, 70%, 55%, 0.85)`,
+                          }}
+                        />
+                      )}
                       <span
                         className={classNames(styles.NameText, {
                           [styles.NameTextOffline]: !session.online,
