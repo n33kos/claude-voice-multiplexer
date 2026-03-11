@@ -217,25 +217,30 @@ export function SessionList({
           </div>
           <div className={styles.HeaderRight}>
             {unreadSessions.size > 0 && (
-              <>
-                <span className={styles.UnreadDotsContainer}>
-                  {sessions
-                    .filter((s) => unreadSessions.has(s.session_id))
-                    .map((s) => {
-                      const h = s.hue_override ?? sessionHue(s.session_id);
-                      return (
-                        <span
-                          key={s.session_id}
-                          className={styles.UnreadDotStacked}
-                          style={{
-                            backgroundColor: `hsla(${h}, 70%, 55%, 0.85)`,
-                          }}
-                        />
-                      );
-                    })}
-                </span>
-                <span className={styles.UnreadBadge}>{unreadSessions.size}</span>
-              </>
+              <span className={styles.UnreadDotsContainer}>
+                {/* Most recent unread sessions sorted by last_interaction desc.
+                    Render oldest first (leftmost/bottom z), newest last (rightmost/top z). */}
+                {[...sessions]
+                  .filter((s) => unreadSessions.has(s.session_id))
+                  .sort((a, b) => (a.last_interaction ?? 0) - (b.last_interaction ?? 0))
+                  .map((s, i, arr) => {
+                    const h = s.hue_override ?? sessionHue(s.session_id);
+                    const isTop = i === arr.length - 1;
+                    return (
+                      <span
+                        key={s.session_id}
+                        className={styles.UnreadDotStacked}
+                        style={{
+                          backgroundColor: `hsla(${h}, 70%, 55%, 1)`,
+                        }}
+                      >
+                        {isTop && (
+                          <span className={styles.UnreadCount}>{unreadSessions.size}</span>
+                        )}
+                      </span>
+                    );
+                  })}
+              </span>
             )}
             {sessions.length > 1 && (
               <span className={styles.SessionCount}>
