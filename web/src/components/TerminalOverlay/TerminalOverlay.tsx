@@ -146,31 +146,7 @@ export function TerminalOverlay({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, containerEl]);
 
-  // Handle resize events
-  useEffect(() => {
-    if (!open) return;
-
-    const handleResize = () => {
-      try {
-        fitAddonRef.current?.fit();
-      } catch {
-        // Ignore errors if terminal was disposed
-      }
-    };
-
-    window.addEventListener("resize", handleResize);
-    // Fit multiple times to handle dialog animation (200ms) and late layout
-    const timer1 = setTimeout(handleResize, 100);
-    const timer2 = setTimeout(handleResize, 300);
-    const timer3 = setTimeout(handleResize, 600);
-
-    return () => {
-      window.removeEventListener("resize", handleResize);
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-      clearTimeout(timer3);
-    };
-  }, [open]);
+  // No automatic resize — refit is manual only via the button
 
   const handleRefit = useCallback(() => {
     try {
@@ -229,7 +205,7 @@ export function TerminalOverlay({
             <div className={styles.Actions}>
               <button className={styles.CloseButton} title="Refit terminal" onClick={handleRefit}>
                 <svg className={styles.CloseIcon} viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
+                  <path fillRule="evenodd" d="M3 4a1 1 0 011-1h4a1 1 0 010 2H6.414l2.293 2.293a1 1 0 01-1.414 1.414L5 6.414V8a1 1 0 01-2 0V4zm9 1a1 1 0 110-2h4a1 1 0 011 1v4a1 1 0 11-2 0V6.414l-2.293 2.293a1 1 0 11-1.414-1.414L13.586 5H12zm-8 7a1 1 0 112 0v1.586l2.293-2.293a1 1 0 011.414 1.414L6.414 15H8a1 1 0 110 2H4a1 1 0 01-1-1v-4zm13 0a1 1 0 10-2 0v1.586l-2.293-2.293a1 1 0 00-1.414 1.414L13.586 15H12a1 1 0 100 2h4a1 1 0 001-1v-4z" clipRule="evenodd" />
                 </svg>
               </button>
               <Dialog.Close asChild>
