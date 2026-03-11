@@ -159,13 +159,26 @@ export function TerminalOverlay({
     };
 
     window.addEventListener("resize", handleResize);
-    const timer = setTimeout(handleResize, 300);
+    // Fit multiple times to handle dialog animation (200ms) and late layout
+    const timer1 = setTimeout(handleResize, 100);
+    const timer2 = setTimeout(handleResize, 300);
+    const timer3 = setTimeout(handleResize, 600);
 
     return () => {
       window.removeEventListener("resize", handleResize);
-      clearTimeout(timer);
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+      clearTimeout(timer3);
     };
   }, [open]);
+
+  const handleRefit = useCallback(() => {
+    try {
+      fitAddonRef.current?.fit();
+    } catch {
+      // Ignore fit errors
+    }
+  }, []);
 
   const handleQuickKey = useCallback(
     (key: string) => {
@@ -214,6 +227,11 @@ export function TerminalOverlay({
               <span className={styles.LiveBadge}>LIVE</span>
             </div>
             <div className={styles.Actions}>
+              <button className={styles.CloseButton} title="Refit terminal" onClick={handleRefit}>
+                <svg className={styles.CloseIcon} viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
+                </svg>
+              </button>
               <Dialog.Close asChild>
                 <button className={styles.CloseButton} title="Close">
                   <svg
