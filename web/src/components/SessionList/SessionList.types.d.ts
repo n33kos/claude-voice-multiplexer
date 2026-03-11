@@ -5,6 +5,7 @@ export interface SessionListProps {
   connectedSessionId: string | null;
   connectedSessionName: string | null;
   expanded: boolean;
+  unreadSessions: Set<string>;
   onToggleExpanded: () => void;
   onConnect: (sessionId: string) => void;
   onDisconnect: () => void;

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRelay } from "./hooks/useRelay";
 import { useLiveKit } from "./hooks/useLiveKit";
 import {
@@ -101,6 +101,62 @@ export default function App() {
   const [sessionsExpanded, setSessionsExpanded] = useState(
     !relay.connectedSessionId,
   );
+  // --- Unread message tracking (in-memory only) ---
+  const [unreadSessions, setUnreadSessions] = useState<Set<string>>(new Set());
+  const prevTranscriptLengths = useRef<Record<string, number>>({});
+
+  // Track new transcript entries arriving in non-viewed sessions
+  useEffect(() => {
+    const currentLengths: Record<string, number> = {};
+    for (const [sid, entries] of Object.entries(relay.transcripts)) {
+      currentLengths[sid] = entries.length;
+    }
+    // Compare with previous lengths to detect new messages
+    for (const [sid, len] of Object.entries(currentLengths)) {
+      const prevLen = prevTranscriptLengths.current[sid] ?? 0;
+      if (len > prevLen && sid !== relay.connectedSessionId) {
+        // Check if any new entry is from user/claude (not system/activity)
+        const newEntries = relay.transcripts[sid]?.slice(prevLen) ?? [];
+        const hasContent = newEntries.some(
+          (e) =>
+            e.speaker === "user" ||
+            e.speaker === "claude" ||
+            e.speaker === "code",
+        );
+        if (hasContent) {
+          setUnreadSessions((prev) => {
+            if (prev.has(sid)) return prev;
+            const next = new Set(prev);
+            next.add(sid);
+            return next;
+          });
+        }
+      }
+    }
+    prevTranscriptLengths.current = currentLengths;
+  }, [relay.transcripts, relay.connectedSessionId]);
+
+  // Clear unread when switching to a session
+  useEffect(() => {
+    if (relay.connectedSessionId) {
+      setUnreadSessions((prev) => {
+        if (!prev.has(relay.connectedSessionId!)) return prev;
+        const next = new Set(prev);
+        next.delete(relay.connectedSessionId!);
+        return next;
+      });
+    }
+  }, [relay.connectedSessionId]);
+
+  const clearUnread = useCallback((sessionId: string) => {
+    setUnreadSessions((prev) => {
+      if (!prev.has(sessionId)) return prev;
+      const next = new Set(prev);
+      next.delete(sessionId);
+      return next;
+    });
+  }, []);
+
   useChime(relay.agentStatus, settings.autoListen);
   useTheme(settings.theme);
 
@@ -215,8 +271,12 @@ export default function App() {
           connectedSessionId={relay.connectedSessionId}
           connectedSessionName={relay.connectedSessionName}
           expanded={sessionsExpanded}
+          unreadSessions={unreadSessions}
           onToggleExpanded={() => setSessionsExpanded((e) => !e)}
-          onConnect={relay.connectSession}
+          onConnect={(sessionId) => {
+            clearUnread(sessionId);
+            relay.connectSession(sessionId);
+          }}
           onDisconnect={relay.disconnectSession}
           onClearTranscript={relay.clearTranscript}
           onReconnectSession={relay.reconnectSession}

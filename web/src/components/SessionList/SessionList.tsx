@@ -1,5 +1,5 @@
 import classNames from "classnames";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { initAudio } from "../../hooks/useChime";
 import type { SessionHealth } from "../../hooks/useRelay";
 import { sessionHue } from "../../utils/sessionHue";
@@ -98,6 +98,7 @@ export function SessionList({
   sessions,
   connectedSessionId,
   expanded,
+  unreadSessions,
   onToggleExpanded,
   onConnect,
   onDisconnect,
@@ -113,6 +114,32 @@ export function SessionList({
   onClearContext,
 }: SessionListProps) {
   const [showNewSession, setShowNewSession] = useState(false);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const headerRowRef = useRef<HTMLDivElement>(null);
+
+  // Click outside to close overlay
+  useEffect(() => {
+    if (!expanded) return;
+    function handleClick(e: MouseEvent) {
+      const target = e.target as Node;
+      if (
+        overlayRef.current &&
+        !overlayRef.current.contains(target) &&
+        headerRowRef.current &&
+        !headerRowRef.current.contains(target)
+      ) {
+        onToggleExpanded();
+      }
+    }
+    // Delay adding listener to avoid the toggle click itself closing it
+    const id = requestAnimationFrame(() => {
+      document.addEventListener("mousedown", handleClick);
+    });
+    return () => {
+      cancelAnimationFrame(id);
+      document.removeEventListener("mousedown", handleClick);
+    };
+  }, [expanded, onToggleExpanded]);
 
   if (sessions.length === 0) {
     return (
@@ -142,14 +169,17 @@ export function SessionList({
     (s) => s.session_id === connectedSessionId && !!connectedSessionId,
   );
 
-  // Sort: connected session first, then preserve existing order
-  const sortedSessions = connectedSessionId
-    ? [...sessions].sort((a, b) => {
-        if (a.session_id === connectedSessionId) return -1;
-        if (b.session_id === connectedSessionId) return 1;
-        return 0;
-      })
-    : sessions;
+  // Sort: connected first, then unread, then preserve existing order
+  const sortedSessions = [...sessions].sort((a, b) => {
+    if (connectedSessionId) {
+      if (a.session_id === connectedSessionId) return -1;
+      if (b.session_id === connectedSessionId) return 1;
+    }
+    const aUnread = unreadSessions.has(a.session_id) ? 1 : 0;
+    const bUnread = unreadSessions.has(b.session_id) ? 1 : 0;
+    if (aUnread !== bUnread) return bUnread - aUnread;
+    return 0;
+  });
 
   const connectedSessionDisplayName = connectedSession
     ? connectedSession.display_name ||
@@ -164,7 +194,7 @@ export function SessionList({
         [styles.RootFull]: !connectedSessionId,
       })}
     >
-      <div className={styles.HeaderRow}>
+      <div className={styles.HeaderRow} ref={headerRowRef}>
         <button
           onClick={onToggleExpanded}
           className={styles.HeaderBar}
@@ -186,6 +216,9 @@ export function SessionList({
             )}
           </div>
           <div className={styles.HeaderRight}>
+            {unreadSessions.size > 0 && (
+              <span className={styles.UnreadBadge}>{unreadSessions.size}</span>
+            )}
             {sessions.length > 1 && (
               <span className={styles.SessionCount}>
                 {sessions.length} sessions
@@ -215,10 +248,14 @@ export function SessionList({
 
       {expanded && (
         <div
-          className={classNames(styles.ExpandedList, {
-            [styles.ExpandedListFull]: !connectedSessionId,
-          })}
+          ref={overlayRef}
+          className={styles.OverlayPanel}
         >
+          <div
+            className={classNames(styles.ExpandedList, {
+              [styles.ExpandedListFull]: !connectedSessionId,
+            })}
+          >
           {sortedSessions.map((session) => {
             const isConnected =
               session.session_id === connectedSessionId && !!connectedSessionId;
@@ -228,6 +265,8 @@ export function SessionList({
               session.display_name ||
               session.dir_name.split("/").slice(-1)[0] ||
               session.session_name;
+
+            const hasUnread = unreadSessions.has(session.session_id);
 
             return (
               <div
@@ -258,6 +297,7 @@ export function SessionList({
                 <div className={styles.SessionContent}>
                   <div className={styles.SessionInfo}>
                     <div className={styles.SessionNameRow}>
+                      {hasUnread && <span className={styles.UnreadDot} />}
                       <span
                         className={classNames(styles.NameText, {
                           [styles.NameTextOffline]: !session.online,
@@ -300,6 +340,7 @@ export function SessionList({
               </div>
             );
           })}
+          </div>
         </div>
       )}
     </div>

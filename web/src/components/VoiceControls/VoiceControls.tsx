@@ -19,6 +19,8 @@ function AgentAudioRenderer({ muted }: { muted: boolean }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const gainRef = useRef<GainNode | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
   const tracks = useTracks([Track.Source.Microphone]);
 
   const agentTrack = tracks.find(
@@ -42,6 +44,9 @@ function AgentAudioRenderer({ muted }: { muted: boolean }) {
     const ctx = new AudioContext();
     const source = ctx.createMediaStreamSource(stream);
     const gain = ctx.createGain();
+    // Respect current mute state when initializing the gain node —
+    // prevents audio burst on channel switch while muted
+    gain.gain.value = mutedRef.current ? 0 : 1;
     source.connect(gain);
     gain.connect(ctx.destination);
     ctxRef.current = ctx;
