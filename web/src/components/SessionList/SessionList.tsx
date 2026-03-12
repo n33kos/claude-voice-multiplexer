@@ -222,7 +222,10 @@ export function SessionList({
                     Render oldest first (leftmost/bottom z), newest last (rightmost/top z). */}
                 {[...sessions]
                   .filter((s) => unreadSessions.has(s.session_id))
-                  .sort((a, b) => (a.last_interaction ?? 0) - (b.last_interaction ?? 0))
+                  .sort(
+                    (a, b) =>
+                      (a.last_interaction ?? 0) - (b.last_interaction ?? 0),
+                  )
                   .map((s, i, arr) => {
                     const h = s.hue_override ?? sessionHue(s.session_id);
                     const isTop = i === arr.length - 1;
@@ -235,16 +238,13 @@ export function SessionList({
                         }}
                       >
                         {isTop && (
-                          <span className={styles.UnreadCount}>{unreadSessions.size}</span>
+                          <span className={styles.UnreadCount}>
+                            {unreadSessions.size}
+                          </span>
                         )}
                       </span>
                     );
                   })}
-              </span>
-            )}
-            {sessions.length > 1 && (
-              <span className={styles.SessionCount}>
-                {sessions.length} sessions
               </span>
             )}
             <ChevronIcon expanded={expanded} />
@@ -270,106 +270,105 @@ export function SessionList({
       )}
 
       {expanded && (
-        <div
-          ref={overlayRef}
-          className={styles.OverlayPanel}
-        >
+        <div ref={overlayRef} className={styles.OverlayPanel}>
           <div
             className={classNames(styles.ExpandedList, {
               [styles.ExpandedListFull]: !connectedSessionId,
             })}
           >
-          {sortedSessions.map((session) => {
-            const isConnected =
-              session.session_id === connectedSessionId && !!connectedSessionId;
-            const canConnect = session.online;
-            const hue = session.hue_override ?? sessionHue(session.session_id);
-            const sessionDisplayTitle =
-              session.display_name ||
-              session.dir_name.split("/").slice(-1)[0] ||
-              session.session_name;
+            {sortedSessions.map((session) => {
+              const isConnected =
+                session.session_id === connectedSessionId &&
+                !!connectedSessionId;
+              const canConnect = session.online;
+              const hue =
+                session.hue_override ?? sessionHue(session.session_id);
+              const sessionDisplayTitle =
+                session.display_name ||
+                session.dir_name.split("/").slice(-1)[0] ||
+                session.session_name;
 
-            const hasUnread = unreadSessions.has(session.session_id);
+              const hasUnread = unreadSessions.has(session.session_id);
 
-            return (
-              <div
-                key={session.session_id}
-                onClick={() => {
-                  if (!canConnect) return;
-                  initAudio();
-                  if (isConnected) {
-                    onDisconnect();
-                  } else {
-                    onConnect(session.session_id);
-                    onToggleExpanded();
-                  }
-                }}
-                className={classNames(
-                  styles.SessionCard,
-                  canConnect
-                    ? styles.SessionCardClickable
-                    : styles.SessionCardDisabled,
-                  isConnected && styles.SessionCardConnected,
-                  session.health === "zombie" && styles.SessionCardZombie,
-                  session.health === "dead" && styles.SessionCardDead,
-                )}
-                style={{
-                  borderLeftColor: `hsla(${hue}, 70%, 55%, ${session.online ? 0.7 : 0.3})`,
-                }}
-              >
-                <div className={styles.SessionContent}>
-                  <div className={styles.SessionInfo}>
-                    <div className={styles.SessionNameRow}>
-                      {hasUnread && (
-                        <span
-                          className={styles.UnreadDot}
-                          style={{
-                            backgroundColor: `hsla(${hue}, 70%, 55%, 0.85)`,
-                          }}
-                        />
-                      )}
-                      <span
-                        className={classNames(styles.NameText, {
-                          [styles.NameTextOffline]: !session.online,
-                        })}
-                      >
-                        {sessionDisplayTitle}
-                      </span>
-                      {!session.online && (
-                        <span className={styles.OfflineBadge}>offline</span>
-                      )}
-                      {session.health &&
-                        (session.health === "zombie" ||
-                          session.health === "dead") && (
-                          <HealthBadge health={session.health} />
+              return (
+                <div
+                  key={session.session_id}
+                  onClick={() => {
+                    if (!canConnect) return;
+                    initAudio();
+                    if (isConnected) {
+                      onDisconnect();
+                    } else {
+                      onConnect(session.session_id);
+                      onToggleExpanded();
+                    }
+                  }}
+                  className={classNames(
+                    styles.SessionCard,
+                    canConnect
+                      ? styles.SessionCardClickable
+                      : styles.SessionCardDisabled,
+                    isConnected && styles.SessionCardConnected,
+                    session.health === "zombie" && styles.SessionCardZombie,
+                    session.health === "dead" && styles.SessionCardDead,
+                  )}
+                  style={{
+                    borderLeftColor: `hsla(${hue}, 70%, 55%, ${session.online ? 0.7 : 0.3})`,
+                  }}
+                >
+                  <div className={styles.SessionContent}>
+                    <div className={styles.SessionInfo}>
+                      <div className={styles.SessionNameRow}>
+                        {hasUnread && (
+                          <span
+                            className={styles.UnreadDot}
+                            style={{
+                              backgroundColor: `hsla(${hue}, 70%, 55%, 0.85)`,
+                            }}
+                          />
                         )}
+                        <span
+                          className={classNames(styles.NameText, {
+                            [styles.NameTextOffline]: !session.online,
+                          })}
+                        >
+                          {sessionDisplayTitle}
+                        </span>
+                        {!session.online && (
+                          <span className={styles.OfflineBadge}>offline</span>
+                        )}
+                        {session.health &&
+                          (session.health === "zombie" ||
+                            session.health === "dead") && (
+                            <HealthBadge health={session.health} />
+                          )}
+                      </div>
+                      <div className={styles.DirName}>{session.cwd}</div>
                     </div>
-                    <div className={styles.DirName}>{session.cwd}</div>
-                  </div>
-                  <div className={styles.SessionMeta}>
-                    {session.last_interaction != null && (
-                      <span className={styles.TimeAgo}>
-                        {timeAgo(session.last_interaction / 1000)}
-                      </span>
-                    )}
-                    <SessionMenu
-                      session={session}
-                      onClearTranscript={onClearTranscript}
-                      onReconnectSession={onReconnectSession}
-                      onRemoveSession={onRemoveSession}
-                      onRenameSession={onRenameSession}
-                      onRecolorSession={onRecolorSession}
-                      onKillSession={onKillSession}
-                      onRestartSession={onRestartSession}
-                      onHardInterrupt={onHardInterrupt}
-                      onSpawnSession={onSpawnSession}
-                      onClearContext={onClearContext}
-                    />
+                    <div className={styles.SessionMeta}>
+                      {session.last_interaction != null && (
+                        <span className={styles.TimeAgo}>
+                          {timeAgo(session.last_interaction / 1000)}
+                        </span>
+                      )}
+                      <SessionMenu
+                        session={session}
+                        onClearTranscript={onClearTranscript}
+                        onReconnectSession={onReconnectSession}
+                        onRemoveSession={onRemoveSession}
+                        onRenameSession={onRenameSession}
+                        onRecolorSession={onRecolorSession}
+                        onKillSession={onKillSession}
+                        onRestartSession={onRestartSession}
+                        onHardInterrupt={onHardInterrupt}
+                        onSpawnSession={onSpawnSession}
+                        onClearContext={onClearContext}
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
           </div>
         </div>
       )}

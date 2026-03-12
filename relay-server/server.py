@@ -43,6 +43,12 @@ import mcp_tools
 registry = SessionRegistry()
 metadata_store = MetadataStore()
 
+# Tune GC thresholds for a long-running process with heavy numpy usage.
+# Default (700, 10, 10) means gen2 runs rarely — circular refs from LiveKit
+# rooms and numpy arrays accumulate.  Lower gen2 threshold = more frequent
+# full collections = less memory bloat over time.
+gc.set_threshold(700, 10, 5)
+
 # --- Shared HTTP client ---
 # Single httpx.AsyncClient reused for ALL outbound HTTP requests in the relay
 # server process. This prevents fd leaks from per-request connection pool churn.
@@ -178,6 +184,26 @@ _clients: dict[str, WebSocket] = {}
 
 # LiveKit agent (initialized on startup)
 _agent: Optional[RelayAgent] = None
+
+# Background task set — prevents fire-and-forget tasks from being GC'd before
+# completion and ensures exceptions are logged rather than silently swallowed.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro) -> asyncio.Task:
+    """Create a background task that self-removes on completion and logs exceptions."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+
+    def _done_callback(t: asyncio.Task):
+        _background_tasks.discard(t)
+        if not t.cancelled():
+            exc = t.exception()
+            if exc:
+                print(f"[background-task] Exception: {exc}")
+
+    task.add_done_callback(_done_callback)
+    return task
 
 # Transcript buffer per session (keyed by session_id)
 # Holds the last N entries so reconnecting clients can catch up.
@@ -379,7 +405,7 @@ async def lifespan(app: FastAPI):
     _mem_cleanup_task = asyncio.create_task(_memory_cleanup_loop())
 
     # Warm up Kokoro TTS in the background (non-blocking)
-    asyncio.create_task(_warmup_kokoro())
+    _spawn_background(_warmup_kokoro())
     yield
     _fd_monitor_task.cancel()
     _mem_cleanup_task.cancel()
@@ -425,15 +451,26 @@ async def _fd_monitor_loop():
 async def _memory_cleanup_loop():
     """Periodically clean up stale data structures to prevent memory leaks.
 
-    Runs every 5 minutes and:
+    Runs every 2 minutes and:
     - Removes transcript buffers for sessions that no longer exist
     - Cleans up stale MCP connection mappings
     - Prunes stale auth rate-limit entries
-    - Forces a garbage collection cycle to reclaim fragmented numpy allocations
+    - Forces a full garbage collection (all generations) to reclaim circular refs
+    - Logs RSS so memory growth is visible in logs
     """
     while True:
         try:
-            await asyncio.sleep(300)  # 5 minutes
+            await asyncio.sleep(120)  # 2 minutes (was 5m — tighter loop catches leaks faster)
+
+            # Log current RSS for memory trending
+            try:
+                rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+                # macOS reports in bytes, Linux in KB
+                import sys as _sys
+                rss_mb = rss_kb / (1024 * 1024) if _sys.platform == "darwin" else rss_kb / 1024
+                print(f"[mem-cleanup] RSS={rss_mb:.0f}MB")
+            except Exception:
+                pass
 
             # Clean up transcript buffers and seq counters for dead sessions
             active_session_ids = {s["session_id"] for s in await registry.list_sessions()}
@@ -457,10 +494,28 @@ async def _memory_cleanup_loop():
             # Prune empty auth rate-limit entries
             auth.cleanup_stale_rate_limits()
 
-            # Force GC to reclaim numpy/audio buffer fragments
-            collected = gc.collect()
-            if collected > 100:
-                print(f"[mem-cleanup] GC collected {collected} objects")
+            # Clean up stale LiveKit rooms that don't correspond to active sessions
+            if _agent:
+                stale_rooms = [
+                    sid for sid in list(_agent._rooms.keys())
+                    if sid not in active_session_ids
+                ]
+                for sid in stale_rooms:
+                    try:
+                        await _agent.remove_session(sid)
+                        print(f"[mem-cleanup] Removed stale LiveKit room for session {sid}")
+                    except Exception as e:
+                        print(f"[mem-cleanup] Error removing stale room {sid}: {e}")
+
+            # Force a FULL garbage collection (all 3 generations) to reclaim:
+            # - Circular references from LiveKit Room <-> SessionRoom callbacks
+            # - numpy array fragments
+            # - Unreachable asyncio Task objects with retained frame chains
+            gc.collect(0)
+            gc.collect(1)
+            collected = gc.collect(2)
+            if collected > 50:
+                print(f"[mem-cleanup] GC gen2 collected {collected} objects")
 
         except asyncio.CancelledError:
             break
@@ -722,11 +777,25 @@ async def diagnostics(request: Request):
         except Exception:
             pool_info = {"connections_in_pool": "unknown"}
 
+    # Get RSS
+    rss_mb = None
+    try:
+        rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        import sys as _sys
+        rss_mb = rss_bytes / (1024 * 1024) if _sys.platform == "darwin" else rss_bytes / 1024
+    except Exception:
+        pass
+
+    # Count background tasks
+    bg_task_count = len(_background_tasks)
+
     return JSONResponse({
         "fds": {"open": fd_count, "soft_limit": soft, "hard_limit": hard},
+        "rss_mb": rss_mb,
         "sessions": session_count,
         "web_clients": client_count,
         "livekit_rooms": room_count,
+        "background_tasks": bg_task_count,
         "http_client_pool": pool_info,
     })
 
@@ -901,7 +970,7 @@ async def send_message_to_session(session_id: str, request: Request):
 
     # Set agent to thinking state
     if _agent:
-        asyncio.create_task(_agent.handle_text_message(session_id, text, caller))
+        _spawn_background(_agent.handle_text_message(session_id, text, caller))
 
     # Broadcast transcript
     await _notify_client_transcript(session_id, "user", text)
@@ -1173,7 +1242,7 @@ async def client_ws(ws: WebSocket):
                                     continue
                                 # Set agent to thinking state
                                 if _agent:
-                                    asyncio.create_task(_agent.handle_text_message(connected_session_id, text, client_id))
+                                    _spawn_background(_agent.handle_text_message(connected_session_id, text, client_id))
                                 # Broadcast transcript
                                 await _notify_client_transcript(connected_session_id, "user", text)
                             except Exception as e:
@@ -1189,7 +1258,7 @@ async def client_ws(ws: WebSocket):
             elif msg_type == "interrupt":
                 # User pressed interrupt — force agent to idle
                 if connected_session_id and _agent:
-                    asyncio.create_task(_agent.handle_claude_listening(connected_session_id))
+                    _spawn_background(_agent.handle_claude_listening(connected_session_id))
 
             elif msg_type == "terminal_input":
                 # Send keystrokes to the connected session's tmux pane

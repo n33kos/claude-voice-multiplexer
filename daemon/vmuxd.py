@@ -55,6 +55,7 @@ KOKORO_MAX_RSS_MB = int(os.environ.get("KOKORO_MAX_RSS_MB", "5120"))
 KOKORO_WATCHDOG_INTERVAL = 30  # seconds between RSS checks
 KOKORO_WATCHDOG_COOLDOWN = 300  # minimum seconds between memory-triggered restarts
 
+
 # Configure logging before imports
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
@@ -726,57 +727,61 @@ class VmuxDaemon:
                 pass
 
     async def _memory_watchdog_loop(self):
-        """Monitor kokoro process memory footprint and restart when it exceeds threshold.
+        """Monitor kokoro process memory and restart when exceeding threshold.
 
         The kokoro TTS service (using MPS Metal GPU) has an intractable native
-        memory leak from the C-level MPS allocator. macOS `ps` RSS only reports
-        ~2GB even when the actual dirty memory footprint is 20GB+ (due to MPS GPU
-        memory and malloc regions). This watchdog uses the macOS `footprint` command
-        to get the real dirty memory and triggers a graceful restart when it exceeds
-        KOKORO_MAX_RSS_MB (default 5120 MB / 5 GB).
+        memory leak from the C-level MPS allocator that cannot be fixed in our code.
+
+        Uses macOS `footprint` for kokoro (captures MPS GPU memory).
+        Also logs relay server RSS for observability (no auto-restart).
         """
         logger.info(
-            f"[watchdog] kokoro memory watchdog started "
-            f"(threshold={KOKORO_MAX_RSS_MB}MB, interval={KOKORO_WATCHDOG_INTERVAL}s, "
-            f"cooldown={KOKORO_WATCHDOG_COOLDOWN}s)"
+            f"[watchdog] memory watchdog started "
+            f"(kokoro={KOKORO_MAX_RSS_MB}MB, "
+            f"interval={KOKORO_WATCHDOG_INTERVAL}s)"
         )
         while True:
             try:
                 await asyncio.sleep(KOKORO_WATCHDOG_INTERVAL)
 
                 pids = self._service_manager.get_pids()
+
+                # --- Kokoro watchdog ---
                 kokoro_pid = pids.get("kokoro")
-                if not kokoro_pid:
-                    continue
+                if kokoro_pid:
+                    footprint_mb = await self._get_process_tree_footprint(kokoro_pid)
+                    if footprint_mb is not None:
+                        logger.info(f"[watchdog] kokoro footprint={footprint_mb:.0f}MB")
 
-                footprint_mb = await self._get_process_tree_footprint(kokoro_pid)
-                if footprint_mb is None:
-                    continue
+                        if footprint_mb > KOKORO_MAX_RSS_MB:
+                            now = time.monotonic()
+                            elapsed = now - self._last_kokoro_memory_restart
+                            if elapsed < KOKORO_WATCHDOG_COOLDOWN:
+                                remaining = int(KOKORO_WATCHDOG_COOLDOWN - elapsed)
+                                logger.warning(
+                                    f"[watchdog] kokoro footprint={footprint_mb:.0f}MB exceeds "
+                                    f"{KOKORO_MAX_RSS_MB}MB but cooldown active "
+                                    f"({remaining}s remaining) — skipping restart"
+                                )
+                            else:
+                                logger.warning(
+                                    f"[watchdog] kokoro footprint={footprint_mb:.0f}MB exceeds "
+                                    f"{KOKORO_MAX_RSS_MB}MB threshold — restarting"
+                                )
+                                self._last_kokoro_memory_restart = now
+                                ok = await self._service_manager.restart("kokoro")
+                                if ok:
+                                    logger.info("[watchdog] kokoro restarted successfully")
+                                else:
+                                    logger.error("[watchdog] kokoro restart failed")
 
-                logger.info(f"[watchdog] kokoro footprint={footprint_mb:.0f}MB")
+                # --- Relay server RSS logging (observability only, no auto-restart) ---
+                relay_pid = pids.get("relay")
+                if relay_pid:
+                    relay_rss_mb = await self._get_process_tree_rss(relay_pid)
+                    if relay_rss_mb is not None:
+                        logger.info(f"[watchdog] relay RSS={relay_rss_mb:.0f}MB")
 
-                if footprint_mb > KOKORO_MAX_RSS_MB:
-                    now = time.monotonic()
-                    elapsed = now - self._last_kokoro_memory_restart
-                    if elapsed < KOKORO_WATCHDOG_COOLDOWN:
-                        remaining = int(KOKORO_WATCHDOG_COOLDOWN - elapsed)
-                        logger.warning(
-                            f"[watchdog] kokoro footprint={footprint_mb:.0f}MB exceeds "
-                            f"{KOKORO_MAX_RSS_MB}MB but cooldown active "
-                            f"({remaining}s remaining) — skipping restart"
-                        )
-                        continue
-
-                    logger.warning(
-                        f"[watchdog] kokoro footprint={footprint_mb:.0f}MB exceeds "
-                        f"{KOKORO_MAX_RSS_MB}MB threshold — restarting"
-                    )
-                    self._last_kokoro_memory_restart = now
-                    ok = await self._service_manager.restart("kokoro")
-                    if ok:
-                        logger.info("[watchdog] kokoro restarted successfully")
-                    else:
-                        logger.error("[watchdog] kokoro restart failed")
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -851,6 +856,56 @@ class VmuxDaemon:
                     continue
 
             return total_mb if total_mb > 0 else None
+        except Exception:
+            return None
+
+
+    @staticmethod
+    async def _get_process_tree_rss(root_pid: int) -> Optional[float]:
+        """Get total RSS in MB for a process tree using `ps`.
+
+        Simpler and more reliable than `footprint` (which may need root).
+        Walks the process tree and sums RSS for all descendants.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ps", "-eo", "pid=,ppid=,rss=",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode != 0:
+                return None
+
+            # Parse ps output: pid, ppid, rss (in KB)
+            children: dict[int, int] = {}
+            rss_map: dict[int, int] = {}
+            for line in stdout.decode().strip().splitlines():
+                parts = line.split()
+                if len(parts) != 3:
+                    continue
+                try:
+                    pid, ppid, rss = int(parts[0]), int(parts[1]), int(parts[2])
+                    children[pid] = ppid
+                    rss_map[pid] = rss
+                except ValueError:
+                    continue
+
+            if root_pid not in children:
+                return None
+
+            # BFS to find all descendants
+            tree_pids = {root_pid}
+            frontier = [root_pid]
+            while frontier:
+                parent = frontier.pop()
+                for pid, ppid in children.items():
+                    if ppid == parent and pid not in tree_pids:
+                        tree_pids.add(pid)
+                        frontier.append(pid)
+
+            total_kb = sum(rss_map.get(pid, 0) for pid in tree_pids)
+            return total_kb / 1024.0 if total_kb > 0 else None
         except Exception:
             return None
 

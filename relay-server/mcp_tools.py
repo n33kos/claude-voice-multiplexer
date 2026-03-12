@@ -21,6 +21,17 @@ from fastmcp import FastMCP, Context
 import auth
 from config import AUTH_ENABLED
 
+# Background task set — prevents fire-and-forget tasks from being GC'd
+_bg_tasks: set[asyncio.Task] = set()
+
+
+def _bg(coro) -> asyncio.Task:
+    """Create a managed background task."""
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+    return task
+
 mcp = FastMCP("voice-multiplexer")
 
 STANDBY_LISTEN_TIMEOUT = 86400  # 24 hours
@@ -192,7 +203,7 @@ async def relay_standby(ctx: Context, session_name: str = "") -> str:
     # Signal that Claude is listening
     agent = _app["get_agent"]()
     if agent:
-        asyncio.create_task(agent.handle_claude_listening(session_id))
+        _bg(agent.handle_claude_listening(session_id))
 
     # Block waiting for a voice message.
     # The persistent per-session heartbeat (started in _resolve_session) keeps
@@ -290,7 +301,7 @@ async def relay_activity(ctx: Context, activity: str, source: str = "") -> str:
 
     agent = _app["get_agent"]()
     if agent and labeled:
-        asyncio.create_task(agent.handle_status_update(session_id, labeled))
+        _bg(agent.handle_status_update(session_id, labeled))
 
     return "OK"
 
@@ -316,7 +327,7 @@ async def relay_respond(ctx: Context, text: str) -> str:
 
     agent = _app["get_agent"]()
     if agent:
-        asyncio.create_task(agent.handle_claude_response(session_id, text))
+        _bg(agent.handle_claude_response(session_id, text))
 
     # Broadcast transcript
     if _app["notify_transcript"]:
@@ -520,7 +531,7 @@ async def relay_file(ctx: Context, file_path: str, read_aloud: bool = False) -> 
     if read_aloud:
         agent = _app["get_agent"]()
         if agent:
-            asyncio.create_task(agent.handle_claude_response(session_id, content))
+            _bg(agent.handle_claude_response(session_id, content))
 
     # Send to transcript
     if _app["notify_transcript"]:

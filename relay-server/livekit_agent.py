@@ -196,8 +196,13 @@ class SessionRoom:
         self._running = False
 
         # Audio/VAD state
+        # Use a pre-allocated ring buffer to reduce numpy allocation churn.
+        # Each frame is ~960 bytes (480 samples * 2 bytes/sample at 48kHz/10ms).
         self._audio_buffer: list[np.ndarray] = []
+        self._audio_buffer_sample_count: int = 0  # track total samples without len() calls
         self._preroll_buffer: collections.deque[np.ndarray] = collections.deque(maxlen=_PREROLL_FRAMES)
+        # Reusable sample buffer for frame copies (avoids np.array() per frame)
+        self._frame_copy_buf: Optional[np.ndarray] = None
         self._vad = None
         self._vad_aggressiveness: int = 0
         self._is_speaking = False
@@ -283,6 +288,7 @@ class SessionRoom:
                 await self._response_worker_task
             except (asyncio.CancelledError, Exception):
                 pass
+        self._response_worker_task = None
 
         # Cancel all audio stream tasks and wait for them to finish cleanup
         tasks_to_cancel = []
@@ -300,6 +306,7 @@ class SessionRoom:
         # Cancel timers
         if self._error_timer and not self._error_timer.done():
             self._error_timer.cancel()
+        self._error_timer = None
 
         # Drain the response queue to release any held text references
         while not self._response_queue.empty():
@@ -312,6 +319,22 @@ class SessionRoom:
         self._clear_audio_buffer()
 
         if self.room:
+            # Unregister event handlers BEFORE disconnect to break circular
+            # references (Room -> callback -> SessionRoom -> Room).  The
+            # room.on() decorator stores strong refs to our bound methods.
+            try:
+                self.room.off("track_subscribed", self._on_track_subscribed)
+            except Exception:
+                pass
+            try:
+                self.room.off("participant_connected", self._on_participant_connected)
+            except Exception:
+                pass
+            try:
+                self.room.off("participant_disconnected", self._on_participant_disconnected)
+            except Exception:
+                pass
+
             try:
                 await asyncio.wait_for(self.room.disconnect(), timeout=5.0)
             except asyncio.TimeoutError:
@@ -321,10 +344,17 @@ class SessionRoom:
             self.room = None
         self.audio_source = None
 
+        # Release the VAD instance (holds native C resources)
+        self._vad = None
+
         # Drop references to registry/callbacks to break reference cycles
         self.registry = None
         self.notify_status_fn = None
         self.notify_transcript_fn = None
+
+        # Force a GC cycle to reclaim circular references involving native
+        # LiveKit objects that prevent normal refcounting cleanup.
+        gc.collect()
 
         print(f"[room:{self.room_name}] Disconnected")
 
@@ -358,6 +388,7 @@ class SessionRoom:
     def _clear_audio_buffer(self):
         """Clear the audio buffer and pre-roll buffer, releasing memory."""
         self._audio_buffer.clear()
+        self._audio_buffer_sample_count = 0
         self._preroll_buffer.clear()
 
     async def _process_audio_stream(
@@ -392,7 +423,10 @@ class SessionRoom:
                     continue
 
                 frame = event.frame
-                samples = np.array(frame.data, dtype=np.int16)
+                # Copy frame data into a compact numpy array.  Using
+                # np.frombuffer + .copy() is faster than np.array() and
+                # produces a contiguous buffer that can be freed cleanly.
+                samples = np.frombuffer(frame.data, dtype=np.int16).copy()
 
                 if not _frame_logged:
                     rms = np.sqrt(np.mean(samples.astype(np.float64) ** 2))
