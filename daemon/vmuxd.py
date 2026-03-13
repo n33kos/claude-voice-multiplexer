@@ -837,7 +837,7 @@ class VmuxDaemon:
 
             # Run footprint on each PID in the tree and sum
             total_mb = 0.0
-            footprint_re = re.compile(r"^Footprint:\s+([\d.]+)\s+MB", re.MULTILINE)
+            footprint_re = re.compile(r"Footprint:\s+([\d.]+)\s+(MB|GB|KB)", re.MULTILINE)
 
             for pid in tree_pids:
                 try:
@@ -851,7 +851,13 @@ class VmuxDaemon:
                         continue
                     match = footprint_re.search(fp_stdout.decode())
                     if match:
-                        total_mb += float(match.group(1))
+                        value = float(match.group(1))
+                        unit = match.group(2)
+                        if unit == "GB":
+                            value *= 1024
+                        elif unit == "KB":
+                            value /= 1024
+                        total_mb += value
                 except Exception:
                     continue
 
