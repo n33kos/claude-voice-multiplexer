@@ -122,6 +122,11 @@ export function SessionList({
     if (!expanded) return;
     function handleClick(e: MouseEvent) {
       const target = e.target as Node;
+      // Don't close if clicking inside Radix dropdown portal
+      const radixPortal = (target as Element).closest?.(
+        "[data-radix-popper-content-wrapper]",
+      );
+      if (radixPortal) return;
       if (
         overlayRef.current &&
         !overlayRef.current.contains(target) &&
