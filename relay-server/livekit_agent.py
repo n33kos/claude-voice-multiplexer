@@ -193,6 +193,7 @@ class SessionRoom:
 
         self.room: rtc.Optional[Room] = None
         self.audio_source: rtc.Optional[AudioSource] = None
+        self._local_audio_track: Optional[rtc.LocalAudioTrack] = None
         self._running = False
 
         # Audio/VAD state
@@ -268,10 +269,10 @@ class SessionRoom:
 
         # Create audio source for publishing TTS
         self.audio_source = rtc.AudioSource(LIVEKIT_SAMPLE_RATE, NUM_CHANNELS)
-        track = rtc.LocalAudioTrack.create_audio_track("agent-voice", self.audio_source)
+        self._local_audio_track = rtc.LocalAudioTrack.create_audio_track("agent-voice", self.audio_source)
         opts = rtc.TrackPublishOptions()
         opts.source = rtc.TrackSource.SOURCE_MICROPHONE
-        await self.room.local_participant.publish_track(track, opts)
+        await self.room.local_participant.publish_track(self._local_audio_track, opts)
         print(f"[room:{self.room_name}] Published audio track")
 
         # Start the response worker to serialize TTS playback
@@ -318,6 +319,19 @@ class SessionRoom:
         # Clear audio buffer
         self._clear_audio_buffer()
 
+        # Close native AudioSource BEFORE disconnecting room — releases internal
+        # C++ frame queue and codec resources that Python GC cannot reclaim.
+        if self.audio_source:
+            try:
+                self.audio_source.clear_queue()
+                await self.audio_source.aclose()
+            except Exception as e:
+                print(f"[room:{self.room_name}] Error closing audio source: {e}")
+            self.audio_source = None
+
+        # Release the local track reference (unpublished automatically on disconnect)
+        self._local_audio_track = None
+
         if self.room:
             # Unregister event handlers BEFORE disconnect to break circular
             # references (Room -> callback -> SessionRoom -> Room).  The
@@ -342,7 +356,6 @@ class SessionRoom:
             except Exception as e:
                 print(f"[room:{self.room_name}] Error during disconnect: {e}")
             self.room = None
-        self.audio_source = None
 
         # Release the VAD instance (holds native C resources)
         self._vad = None
@@ -374,16 +387,30 @@ class SessionRoom:
         participant: rtc.RemoteParticipant,
     ):
         if track.kind == rtc.TrackKind.KIND_AUDIO:
-            identity = participant.identity
-            existing = self._audio_stream_tasks.get(identity)
-            if existing and not existing.done():
-                print(f"[room:{self.room_name}] Cancelling stale audio stream for {identity}")
-                existing.cancel()
+            # Schedule async handler so we can await the old task's cleanup
+            # (including stream.aclose()) before creating a new stream.
+            asyncio.ensure_future(self._replace_audio_stream(track, participant))
 
-            print(f"[room:{self.room_name}] Subscribed to audio from {identity}")
-            audio_stream = rtc.AudioStream(track)
-            task = asyncio.ensure_future(self._process_audio_stream(audio_stream, participant))
-            self._audio_stream_tasks[identity] = task
+    async def _replace_audio_stream(
+        self,
+        track: rtc.Track,
+        participant: rtc.RemoteParticipant,
+    ):
+        """Cancel the old audio stream task (if any), await its cleanup, then start a new one."""
+        identity = participant.identity
+        existing = self._audio_stream_tasks.pop(identity, None)
+        if existing and not existing.done():
+            print(f"[room:{self.room_name}] Cancelling stale audio stream for {identity}")
+            existing.cancel()
+            try:
+                await existing  # wait for finally block (stream.aclose()) to complete
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        print(f"[room:{self.room_name}] Subscribed to audio from {identity}")
+        audio_stream = rtc.AudioStream(track)
+        task = asyncio.create_task(self._process_audio_stream(audio_stream, participant))
+        self._audio_stream_tasks[identity] = task
 
     def _clear_audio_buffer(self):
         """Clear the audio buffer and pre-roll buffer, releasing memory."""
@@ -508,6 +535,13 @@ class SessionRoom:
                         speech_start_time = None
         finally:
             self._clear_audio_buffer()
+            # Close the native AudioStream to release C++ decoder/buffer
+            # resources.  Without this, each reconnecting participant leaks
+            # the entire native audio pipeline (~MBs of codec state).
+            try:
+                await stream.aclose()
+            except Exception as e:
+                print(f"[room:{self.room_name}] Error closing audio stream: {e}")
 
     def _detect_speech(self, samples: np.ndarray, sample_rate: int) -> bool:
         """Detect speech using WebRTC VAD on raw audio frames.

@@ -463,12 +463,17 @@ async def _memory_cleanup_loop():
             await asyncio.sleep(120)  # 2 minutes (was 5m — tighter loop catches leaks faster)
 
             # Log current RSS for memory trending
+            # Note: ru_maxrss on macOS reports PEAK RSS, not current.
+            # Use ps to get actual current RSS.
             try:
-                rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-                # macOS reports in bytes, Linux in KB
-                import sys as _sys
-                rss_mb = rss_kb / (1024 * 1024) if _sys.platform == "darwin" else rss_kb / 1024
-                print(f"[mem-cleanup] RSS={rss_mb:.0f}MB")
+                import subprocess as _sp
+                _ps = _sp.run(
+                    ["ps", "-o", "rss=", "-p", str(os.getpid())],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if _ps.returncode == 0 and _ps.stdout.strip():
+                    rss_mb = int(_ps.stdout.strip()) / 1024
+                    print(f"[mem-cleanup] RSS={rss_mb:.0f}MB (current)")
             except Exception:
                 pass
 
@@ -777,12 +782,16 @@ async def diagnostics(request: Request):
         except Exception:
             pool_info = {"connections_in_pool": "unknown"}
 
-    # Get RSS
+    # Get current RSS (not peak) via ps
     rss_mb = None
     try:
-        rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        import sys as _sys
-        rss_mb = rss_bytes / (1024 * 1024) if _sys.platform == "darwin" else rss_bytes / 1024
+        import subprocess as _sp
+        _ps = _sp.run(
+            ["ps", "-o", "rss=", "-p", str(os.getpid())],
+            capture_output=True, text=True, timeout=5,
+        )
+        if _ps.returncode == 0 and _ps.stdout.strip():
+            rss_mb = int(_ps.stdout.strip()) / 1024
     except Exception:
         pass
 
