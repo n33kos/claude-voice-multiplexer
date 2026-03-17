@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator
 from typing import Optional
 
 import httpx
+from httpx import Timeout
 
 import config
 from config import WHISPER_URL, KOKORO_URL, WHISPER_MODEL, KOKORO_MODEL
@@ -118,7 +119,9 @@ async def synthesize_pcm_stream(
 
     client = _get_client()
     try:
-        async with client.stream("POST", url, json=payload, timeout=60.0) as response:
+        # Use a generous per-phase timeout but no overall cap — long TTS
+        # responses can take minutes to stream, so a total timeout truncates audio.
+        async with client.stream("POST", url, json=payload, timeout=Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)) as response:
             response.raise_for_status()
             buffer = bytearray()
             async for raw_chunk in response.aiter_bytes():
