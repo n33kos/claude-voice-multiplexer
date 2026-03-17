@@ -237,6 +237,7 @@ def _build_service_configs():
                 "--threads", whisper_threads,
             ],
             health_url=f"http://127.0.0.1:{whisper_port}/",
+            cwd=str(DATA_DIR),  # whisper-server calls getcwd() at startup; avoid inheriting a deleted CWD
             log_dir=log_dir,
             startup_grace_s=20.0,
         ),
@@ -271,6 +272,7 @@ def _build_service_configs():
                 "--keys", f"{livekit_api_key}: {livekit_api_secret}",
             ],
             health_url=f"http://127.0.0.1:{livekit_port}/",
+            cwd=str(DATA_DIR),
             log_dir=log_dir,
             startup_grace_s=10.0,
         ),
