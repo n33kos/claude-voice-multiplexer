@@ -5,7 +5,7 @@ Usage:
   vmux status                     print service + session status
   vmux spawn <path> [--name <n>]  spawn new Claude session in directory
   vmux kill <session-id>          kill a session
-  vmux attach <session-id>        attach to a session's tmux terminal
+  vmux attach [session-id]        attach to a session (auto-detects by cwd if no ID given)
   vmux sessions                   list sessions
   vmux restart <session-id>       kill + respawn a session
   vmux restart <service>          restart an infrastructure service (whisper|kokoro|livekit|relay)
@@ -113,6 +113,45 @@ def cmd_kill(session_id: str):
     r = _send({"cmd": "kill", "session_id": session_id})
     if _ok(r):
         print(f"Session {session_id} killed.")
+
+
+def _resolve_session_by_cwd() -> str:
+    """Find a session whose cwd matches the current working directory."""
+    cwd = os.getcwd()
+    r = _send({"cmd": "list"})
+    if not _ok(r):
+        sys.exit(1)
+    sessions = r.get("sessions", [])
+    if not sessions:
+        _die("No active sessions. Spawn one first with: vmux spawn <path>")
+    matches = [s for s in sessions if s.get("cwd", "").rstrip("/") == cwd.rstrip("/")]
+    if len(matches) == 1:
+        sid = matches[0].get("relay_session_id") or matches[0].get("session_id", "")
+        name = matches[0].get("session_name", "")
+        label = f" ({name})" if name else ""
+        print(f"Auto-detected session{label} for {cwd}")
+        return sid
+    if len(matches) > 1:
+        print(f"Multiple sessions found for {cwd}:\n")
+        for s in matches:
+            relay_id = s.get("relay_session_id") or "(pending)"
+            name = s.get("session_name", "")
+            status = s.get("status", "?")
+            header = f"  [{status}] {name} ({relay_id})" if name else f"  [{status}] {relay_id}"
+            print(header)
+        print(f"\nSpecify one: vmux attach <session-id>")
+        sys.exit(1)
+    # No match — show available sessions to help the user
+    print(f"No session found for {cwd}\n")
+    print("Active sessions:")
+    for s in sessions:
+        relay_id = s.get("relay_session_id") or "(pending)"
+        name = s.get("session_name", "")
+        s_cwd = s.get("cwd", "")
+        label = f" {name}" if name else ""
+        print(f"  {relay_id}{label}  {s_cwd}")
+    print(f"\nAttach by ID: vmux attach <session-id>")
+    sys.exit(1)
 
 
 def cmd_attach(session_id: str):
@@ -263,8 +302,10 @@ def main():
         cmd_kill(sys.argv[2])
     elif sub == "attach":
         if len(sys.argv) < 3:
-            _die("Usage: vmux attach <session-id>")
-        cmd_attach(sys.argv[2])
+            session_id = _resolve_session_by_cwd()
+            cmd_attach(session_id)
+        else:
+            cmd_attach(sys.argv[2])
     elif sub == "sessions":
         cmd_sessions()
     elif sub == "restart":
