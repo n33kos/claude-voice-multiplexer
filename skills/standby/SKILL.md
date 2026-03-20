@@ -32,39 +32,54 @@ Then enter a continuous conversation loop:
 
 **Note:** No session identifiers or working directory paths need to be passed to any tool. The server auto-detects your session from the MCP connection.
 
-### Prefer Background Execution
+### Tiered Task Execution
 
-**While in standby, you MUST stay responsive to voice input at all times.** Any task that takes more than a few seconds should be run as a background agent so you can immediately re-enter `relay_standby` and keep listening.
+**While in standby, you MUST stay responsive to voice input.** Use the right execution tier for each task:
 
-**Run in background (default for non-trivial work):**
-- File edits and code changes
-- Codebase searches and exploration
-- Running commands (tests, builds, git operations)
-- Multi-step implementations
-- Research or analysis tasks
-
-**OK to do synchronously (quick inline work):**
+**Tier 1 — Inline (do synchronously, <15 seconds):**
 - Simple conversational answers (no tool calls needed)
 - Reading a single short file for immediate context
 - Quick one-line commands where the result is needed for the response
+- Single focused edits to one file
+- Quick git operations (status, add, commit)
 
-When in doubt, background it. The cost of backgrounding a fast task is negligible, but the cost of blocking standby on a slow task makes you completely unresponsive to the user.
+**Tier 2 — Foreground Agent (user waits, 15-60 seconds):**
+- Focused code edits across 2-3 files
+- Targeted codebase searches with analysis
+- Running a single test or build command
+- Any task where accuracy matters more than speed
+
+Tell the user "Working on that now, give me a moment" via `relay_respond`, then launch a **foreground** agent (default, NOT `run_in_background`). The parent blocks but gets the full result, enabling informed verification before responding.
+
+**Tier 3 — Background Agent (parallel work, >60 seconds):**
+- Multi-file refactors or large implementations
+- Research tasks requiring multiple web searches
+- Running long builds or test suites
+- Tasks the user explicitly asks to be backgrounded
+
+Use this tier sparingly. Background agents have known reliability issues with result retrieval.
 
 ### Background Agent Pattern
 
-When running background work, follow this pattern:
+When running background work (Tier 3 only), follow this pattern:
 
 1. Tell the user what you're starting via `relay_respond`
 2. Launch the background task with `Agent(run_in_background=True, ...)`
 3. **In your Agent prompt, include these MCP tool instructions:**
    > "As you work, call the `relay_activity` MCP tool with short status updates. Pass `source='<task-name>'` so the status is labeled. Example: `relay_activity(activity='Found 3 matching files, analyzing...', source='code-search')`"
    >
-   > "When you are FINISHED with your task, call `relay_notify` with a brief summary of the results. This wakes up the parent session so it can immediately relay your results to the user. Example: `relay_notify(message='Completed: found and fixed 3 issues in auth module')`"
+   > "When you are FINISHED with your task, call `relay_notify` with a DETAILED summary of what you did — include files changed, key decisions, and any concerns. This wakes up the parent session. Example: `relay_notify(message='Completed: edited auth.py lines 50-80 to add token validation, also updated tests in test_auth.py. Note: the existing mock may need updating for the new param.')`"
 4. Immediately call `relay_standby` to keep listening for voice input
-5. When `relay_standby` returns a `[Notify]` message from a background agent, summarize the results to the user via `relay_respond`, then re-enter `relay_standby`
+5. **When `relay_standby` returns a `[Notify]` message from a background agent, VERIFY before confirming:**
+   - Run `git diff` to see actual changes (if code was modified)
+   - Read key files that were changed
+   - Only THEN respond to the user with an informed summary
+   - Be honest about confidence: say "the agent reports X, and I've verified Y" rather than just "done!"
 6. If a voice message arrives before the background task finishes, handle it conversationally — the agent will notify you when it completes
 
 **Important:** Background agents must NOT use `relay_respond` — only the parent session speaks to the user. Agents use `relay_activity` for progress updates and `relay_notify` once at completion to wake up the parent.
+
+**NEVER say "it's done" based solely on a relay_notify message without verifying.** The relay_notify is a signal to start verification, not a confirmation to relay.
 
 ### MCP Reconnection During Standby
 
