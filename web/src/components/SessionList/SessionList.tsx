@@ -174,17 +174,7 @@ export function SessionList({
     (s) => s.session_id === connectedSessionId && !!connectedSessionId,
   );
 
-  // Sort: connected first, then unread, then preserve existing order
-  const sortedSessions = [...sessions].sort((a, b) => {
-    if (connectedSessionId) {
-      if (a.session_id === connectedSessionId) return -1;
-      if (b.session_id === connectedSessionId) return 1;
-    }
-    const aUnread = unreadSessions.has(a.session_id) ? 1 : 0;
-    const bUnread = unreadSessions.has(b.session_id) ? 1 : 0;
-    if (aUnread !== bUnread) return bUnread - aUnread;
-    return 0;
-  });
+  // Sessions arrive pre-sorted from useSortedSessions hook
 
   const connectedSessionDisplayName = connectedSession
     ? connectedSession.display_name ||
@@ -281,7 +271,7 @@ export function SessionList({
               [styles.ExpandedListFull]: !connectedSessionId,
             })}
           >
-            {sortedSessions.map((session) => {
+            {sessions.map((session) => {
               const isConnected =
                 session.session_id === connectedSessionId &&
                 !!connectedSessionId;

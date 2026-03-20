@@ -10,6 +10,8 @@ import { useSettings } from "./hooks/useSettings";
 import { useTheme } from "./hooks/useTheme";
 import { useAuth } from "./hooks/useAuth";
 import { SessionList } from "./components/SessionList/SessionList";
+import { useSortedSessions } from "./hooks/useSortedSessions";
+import { useSessionKeyboardNav } from "./hooks/useSessionKeyboardNav";
 import { Transcript } from "./components/Transcript/Transcript";
 import { StatusBar } from "./components/StatusBar/StatusBar";
 import { Settings } from "./components/Settings/Settings";
@@ -157,6 +159,22 @@ export default function App() {
     });
   }, []);
 
+  const sortedSessions = useSortedSessions(
+    relay.sessions,
+    relay.connectedSessionId,
+    unreadSessions,
+  );
+
+  const connectAndClearUnread = useCallback(
+    (sessionId: string) => {
+      clearUnread(sessionId);
+      relay.connectSession(sessionId);
+    },
+    [clearUnread, relay.connectSession],
+  );
+
+  useSessionKeyboardNav(sortedSessions, relay.connectedSessionId, unreadSessions, connectAndClearUnread);
+
   useChime(relay.agentStatus, settings.autoListen);
   useTheme(settings.theme);
 
@@ -267,16 +285,13 @@ export default function App() {
         />
 
         <SessionList
-          sessions={relay.sessions}
+          sessions={sortedSessions}
           connectedSessionId={relay.connectedSessionId}
           connectedSessionName={relay.connectedSessionName}
           expanded={sessionsExpanded}
           unreadSessions={unreadSessions}
           onToggleExpanded={() => setSessionsExpanded((e) => !e)}
-          onConnect={(sessionId) => {
-            clearUnread(sessionId);
-            relay.connectSession(sessionId);
-          }}
+          onConnect={connectAndClearUnread}
           onDisconnect={relay.disconnectSession}
           onClearTranscript={relay.clearTranscript}
           onReconnectSession={relay.reconnectSession}
