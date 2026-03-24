@@ -148,7 +148,7 @@ export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, o
   const sendButtonStyle = hue !== null ? { backgroundColor: `hsla(${hue}, 55%, 40%, 0.9)` } : undefined;
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
+    endRef.current?.scrollIntoView({ behavior: "instant" });
   }, [entries.length]);
 
   const handleSend = () => {
