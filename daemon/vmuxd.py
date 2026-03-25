@@ -191,6 +191,7 @@ def _build_service_configs():
     kokoro_port = int(os.environ.get("VMUX_KOKORO_PORT", "8101"))
     kokoro_device = os.environ.get("VMUX_KOKORO_DEVICE", "mps" if sys.platform == "darwin" else "cpu")
     livekit_port = int(os.environ.get("LIVEKIT_PORT", "7880"))
+    livekit_rtc_port = os.environ.get("LIVEKIT_RTC_PORT", "")
     relay_port = int(os.environ.get("RELAY_PORT", "3100"))
     livekit_api_key = os.environ.get("LIVEKIT_API_KEY", "devkey")
     livekit_api_secret = os.environ.get("LIVEKIT_API_SECRET", "secret")
@@ -270,7 +271,10 @@ def _build_service_configs():
                 "livekit-server",
                 "--bind", "0.0.0.0",
                 "--keys", f"{livekit_api_key}: {livekit_api_secret}",
-            ],
+            ] + ([
+                "--udp-port", livekit_rtc_port,
+                "--rtc.tcp_port", livekit_rtc_port,
+            ] if livekit_rtc_port else []),
             health_url=f"http://127.0.0.1:{livekit_port}/",
             cwd=str(DATA_DIR),
             log_dir=log_dir,
