@@ -2,12 +2,14 @@
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import signal
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("vmuxd.sessions")
@@ -351,6 +353,59 @@ class SessionManager:
             logger.error(f"[sessions] clear_context failed: {e}")
             return False
 
+    async def compact_context(self, session_id: str) -> bool:
+        """Send /compact to a Claude session to compact its conversation context.
+
+        Performs a hard interrupt first (Ctrl-C + Escape) to break Claude out of
+        any current operation (standby, active work, tool use, etc.), then sends
+        /compact, reconnects the MCP plugin, and re-enters voice standby.
+        """
+        async with self._lock:
+            session = self._find_session(session_id)
+            if not session:
+                return False
+            tmux_session = session.tmux_session
+        try:
+            # Step 1: Hard interrupt — Ctrl-C to cancel, then Escape to dismiss
+            # any prompts or autocomplete menus that may be open.
+            await self.interrupt(session_id)
+            await asyncio.sleep(0.5)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Escape", ""])
+            await asyncio.sleep(0.5)
+            # Second Ctrl-C in case the first was absorbed by a confirmation prompt
+            await self.interrupt(session_id)
+            await asyncio.sleep(1.0)
+
+            # Step 2: Send /compact slash command — two Enters (autocomplete select + submit)
+            await self._run(["tmux", "send-keys", "-t", tmux_session,
+                             "-l", "/compact"])
+            await asyncio.sleep(0.3)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(0.5)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(2.0)
+
+            # Step 3: Reconnect MCP plugin (clearing stale session state)
+            await self._run(["tmux", "send-keys", "-t", tmux_session,
+                             "-l", "/mcp reconnect plugin:voice-multiplexer:voice-multiplexer"])
+            await asyncio.sleep(0.3)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(0.5)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(2.0)
+
+            # Step 4: Re-enter voice standby
+            await self._run(["tmux", "send-keys", "-t", tmux_session,
+                             "-l", "/voice-multiplexer:standby"])
+            await asyncio.sleep(0.3)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(0.5)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            return True
+        except Exception as e:
+            logger.error(f"[sessions] compact_context failed: {e}")
+            return False
+
     async def restart_session(self, session_id: str) -> dict:
         """Kill and respawn a session in the same directory."""
         async with self._lock:
@@ -499,6 +554,175 @@ class SessionManager:
     async def list_sessions(self) -> list[dict]:
         async with self._lock:
             return [s.to_dict() for s in self._sessions.values()]
+
+    # --- Model context window sizes ---
+    _MODEL_CONTEXT_WINDOWS = {
+        "claude-opus-4-6": 1_000_000,
+        "claude-sonnet-4-6": 200_000,
+        "claude-haiku-4-5": 200_000,
+    }
+    _DEFAULT_CONTEXT_WINDOW = 200_000
+
+    async def get_context_usage(self, session_id: str) -> Optional[dict]:
+        """Read Claude's JSONL conversation log to compute context usage.
+
+        Finds the Claude PID via tmux pane, reads ~/.claude/sessions/{pid}.json
+        for the sessionId and cwd, then reads the corresponding JSONL file from
+        the end to find the most recent assistant message with usage data.
+        """
+        async with self._lock:
+            session = self._find_session(session_id)
+            if not session:
+                return None
+            tmux_session = session.tmux_session
+            session_cwd = session.cwd
+
+        try:
+            # Step 1: Get the tmux pane PID
+            pane_pid_str = await self._run_output([
+                "tmux", "list-panes", "-t", tmux_session, "-F", "#{pane_pid}"
+            ])
+            pane_pid = pane_pid_str.strip().splitlines()[0].strip()
+            if not pane_pid.isdigit():
+                return None
+
+            # Step 2: Find claude child process — walk the process tree from the
+            # pane shell PID to find a 'claude' process (may be a grandchild).
+            claude_pid = await self._find_claude_pid(int(pane_pid))
+            if not claude_pid:
+                return None
+
+            # Step 3: Read ~/.claude/sessions/{pid}.json
+            session_file = Path.home() / ".claude" / "sessions" / f"{claude_pid}.json"
+            if not session_file.exists():
+                return None
+
+            session_data = json.loads(session_file.read_text())
+            claude_session_id = session_data.get("sessionId")
+            cwd = session_data.get("cwd", session_cwd)
+            if not claude_session_id:
+                return None
+
+            # Step 4: Encode cwd to find the project directory
+            # Claude encodes: /Users/foo/bar → -Users-foo-bar
+            encoded_cwd = cwd.replace("/", "-")
+            if encoded_cwd.startswith("-"):
+                encoded_cwd = encoded_cwd  # keep leading dash (Claude's convention)
+
+            jsonl_path = Path.home() / ".claude" / "projects" / encoded_cwd / f"{claude_session_id}.jsonl"
+            if not jsonl_path.exists():
+                return None
+
+            # Step 5: Read from the end of the JSONL to find last assistant usage
+            usage_data = await asyncio.to_thread(self._read_last_usage, str(jsonl_path))
+            if not usage_data:
+                return None
+
+            return usage_data
+
+        except Exception as e:
+            logger.error(f"[sessions] get_context_usage failed: {e}")
+            return None
+
+    async def _find_claude_pid(self, pane_pid: int) -> Optional[int]:
+        """Walk the process tree from pane_pid to find a 'claude' process."""
+        try:
+            output = await self._run_output(["ps", "-eo", "pid,ppid,comm"])
+            children: dict[int, list[tuple[int, str]]] = {}
+            for line in output.strip().splitlines()[1:]:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                try:
+                    pid = int(parts[0])
+                    ppid = int(parts[1])
+                    comm = parts[2]
+                    children.setdefault(ppid, []).append((pid, comm))
+                except ValueError:
+                    continue
+
+            # BFS from pane_pid looking for a process named 'claude'
+            queue = [pane_pid]
+            visited = set()
+            while queue:
+                current = queue.pop(0)
+                if current in visited:
+                    continue
+                visited.add(current)
+                for child_pid, comm in children.get(current, []):
+                    if "claude" in comm.lower():
+                        return child_pid
+                    queue.append(child_pid)
+
+            return None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _read_last_usage(jsonl_path: str) -> Optional[dict]:
+        """Read the JSONL file from the end and find the last assistant message with usage."""
+        try:
+            # Read last ~64KB from the file to find recent assistant messages
+            file_size = os.path.getsize(jsonl_path)
+            read_size = min(file_size, 65536)
+
+            with open(jsonl_path, "rb") as f:
+                if file_size > read_size:
+                    f.seek(file_size - read_size)
+                    # Skip partial first line
+                    f.readline()
+                data = f.read().decode("utf-8", errors="replace")
+
+            lines = data.strip().splitlines()
+
+            # Walk backwards to find the last assistant message with usage
+            for line in reversed(lines):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                if obj.get("type") != "assistant":
+                    continue
+
+                msg = obj.get("message", {})
+                usage = msg.get("usage")
+                if not usage:
+                    continue
+
+                model = msg.get("model", "")
+                # Skip synthetic messages
+                if model == "<synthetic>":
+                    continue
+
+                input_tokens = usage.get("input_tokens", 0)
+                cache_creation = usage.get("cache_creation_input_tokens", 0)
+                cache_read = usage.get("cache_read_input_tokens", 0)
+                output_tokens = usage.get("output_tokens", 0)
+                used_tokens = input_tokens + cache_creation + cache_read + output_tokens
+
+                context_window = SessionManager._MODEL_CONTEXT_WINDOWS.get(
+                    model, SessionManager._DEFAULT_CONTEXT_WINDOW
+                )
+                percentage = round((used_tokens / context_window) * 100, 1) if context_window > 0 else 0
+
+                return {
+                    "model": model,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "cache_creation_input_tokens": cache_creation,
+                    "cache_read_input_tokens": cache_read,
+                    "context_window": context_window,
+                    "used_tokens": used_tokens,
+                    "percentage": percentage,
+                }
+
+            return None
+        except Exception:
+            return None
 
     async def reconcile_orphans(self):
         """On daemon startup: re-register tmux sessions from a previous daemon instance."""

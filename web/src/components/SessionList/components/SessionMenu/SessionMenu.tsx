@@ -16,6 +16,7 @@ interface SessionMenuProps {
   onSpawnSession: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
   onReconnectSession: (sessionId: string, cwd?: string) => Promise<{ ok: boolean; error?: string }>;
   onClearContext: (sessionId: string) => Promise<boolean>;
+  onCompact: (sessionId: string) => Promise<boolean>;
   onMenuOpenChange?: (open: boolean) => void;
 }
 
@@ -31,6 +32,7 @@ export function SessionMenu({
   onSpawnSession,
   onReconnectSession,
   onClearContext,
+  onCompact,
   onMenuOpenChange,
 }: SessionMenuProps) {
   const [open, setOpen] = useState(false);
@@ -199,6 +201,22 @@ export function SessionMenu({
                 }}
               >
                 Clear context
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                className={styles.MenuItem}
+                onSelect={() => {
+                  setOpen(false);
+                  setBusy(true);
+                  onCompact(session.session_id).then((ok) => {
+                    setBusy(false);
+                    if (ok) {
+                      setToast("Session compacted");
+                      setTimeout(() => setToast(null), 2000);
+                    }
+                  });
+                }}
+              >
+                Compact
               </DropdownMenu.Item>
               <DropdownMenu.Separator className={styles.Divider} />
               <DropdownMenu.Item

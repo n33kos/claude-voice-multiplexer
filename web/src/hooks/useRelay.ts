@@ -847,6 +847,21 @@ export function useRelay(authenticated: boolean = true) {
     [],
   );
 
+  const compactSession = useCallback(
+    async (sessionId: string): Promise<boolean> => {
+      try {
+        const resp = await authFetch(
+          `/api/sessions/${sessionId}/compact`,
+          { method: "POST" },
+        );
+        return resp.ok;
+      } catch {
+        return false;
+      }
+    },
+    [],
+  );
+
   const requestTerminalCapture = useCallback((lines = 50) => {
     setState((s) => ({ ...s, terminalSnapshotLoading: true }));
     wsRef.current?.send(JSON.stringify({ type: "capture_terminal", lines }));
@@ -948,6 +963,7 @@ export function useRelay(authenticated: boolean = true) {
     restartSession,
     hardInterruptSession,
     clearContextSession,
+    compactSession,
     requestTerminalCapture,
     dismissTerminalSnapshot,
     sendTerminalKeys,

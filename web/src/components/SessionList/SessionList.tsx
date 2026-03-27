@@ -112,6 +112,7 @@ export function SessionList({
   onRestartSession,
   onHardInterrupt,
   onClearContext,
+  onCompact,
 }: SessionListProps) {
   const [showNewSession, setShowNewSession] = useState(false);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -358,6 +359,7 @@ export function SessionList({
                         onHardInterrupt={onHardInterrupt}
                         onSpawnSession={onSpawnSession}
                         onClearContext={onClearContext}
+                        onCompact={onCompact}
                       />
                     </div>
                   </div>

@@ -1007,6 +1007,27 @@ async def clear_context_session(session_id: str, request: Request):
     return JSONResponse({"error": result.get("error", "Clear context failed")}, status_code=500)
 
 
+@app.post("/api/sessions/{session_id}/compact")
+async def compact_session(session_id: str, request: Request):
+    """Send /compact to a Claude session to compact conversation context."""
+    _require_auth(request)
+    result = await _daemon_ipc({"cmd": "compact", "session_id": session_id})
+    if result.get("ok"):
+        return JSONResponse({"success": True})
+    return JSONResponse({"error": result.get("error", "Compact failed")}, status_code=500)
+
+
+@app.get("/api/sessions/{session_id}/context")
+async def get_context_usage(session_id: str, request: Request):
+    """Get context window usage for a Claude session via daemon IPC."""
+    _require_auth(request)
+    result = await _daemon_ipc({"cmd": "context-usage", "session_id": session_id})
+    if result.get("ok"):
+        # Strip the "ok" key from the response — frontend doesn't need it
+        return JSONResponse({k: v for k, v in result.items() if k != "ok"})
+    return JSONResponse({"error": result.get("error", "Context usage not available")}, status_code=404)
+
+
 @app.post("/api/sessions/{session_id}/restart")
 async def restart_session_endpoint(session_id: str, request: Request):
     """Kill + respawn a session via daemon."""

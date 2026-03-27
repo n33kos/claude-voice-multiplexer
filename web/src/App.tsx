@@ -19,6 +19,8 @@ import { ParticleNetwork } from "./components/ParticleNetwork/ParticleNetwork";
 import { Header } from "./components/Header/Header";
 import { PairScreen } from "./components/PairScreen/PairScreen";
 import { TerminalOverlay } from "./components/TerminalOverlay/TerminalOverlay";
+import { ContextBar } from "./components/ContextBar/ContextBar";
+import { useContextUsage } from "./hooks/useContextUsage";
 import styles from "./App.module.scss";
 
 // Lazy-load VoiceControls (pulls in heavy livekit-client bundle)
@@ -96,6 +98,7 @@ export default function App() {
   const auth = useAuth();
   const relay = useRelay(auth.authenticated);
   const livekit = useLiveKit();
+  const contextUsage = useContextUsage(relay.connectedSessionId);
   const { settings, updateSettings } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
@@ -303,6 +306,7 @@ export default function App() {
           onRestartSession={relay.restartSession}
           onHardInterrupt={relay.hardInterruptSession}
           onClearContext={relay.clearContextSession}
+          onCompact={relay.compactSession}
         />
 
         {relay.connectedSessionId && (
@@ -370,6 +374,10 @@ export default function App() {
               />
             </Suspense>
           )}
+
+        {relay.connectedSessionId && (
+          <ContextBar usage={contextUsage} />
+        )}
 
         <StatusBar
           relayStatus={relay.status}

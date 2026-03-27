@@ -24,4 +24,5 @@ export interface SessionListProps {
   onRestartSession: (sessionId: string) => Promise<boolean>;
   onHardInterrupt: (sessionId: string) => Promise<boolean>;
   onClearContext: (sessionId: string) => Promise<boolean>;
+  onCompact: (sessionId: string) => Promise<boolean>;
 }

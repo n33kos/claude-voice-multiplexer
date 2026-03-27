@@ -439,6 +439,16 @@ class VmuxDaemon:
                 session_id = request.get("session_id", "")
                 ok = await self._session_manager.clear_context(session_id)
                 return {"ok": ok}
+            elif cmd == "compact":
+                session_id = request.get("session_id", "")
+                ok = await self._session_manager.compact_context(session_id)
+                return {"ok": ok}
+            elif cmd == "context-usage":
+                session_id = request.get("session_id", "")
+                usage = await self._session_manager.get_context_usage(session_id)
+                if usage:
+                    return {"ok": True, **usage}
+                return {"ok": False, "error": "Context usage not available"}
             elif cmd == "restart-session":
                 session_id = request.get("session_id", "")
                 return await self._session_manager.restart_session(session_id)
