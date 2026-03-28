@@ -145,13 +145,36 @@ if [ "$OS" = "Linux" ]; then
     log "Linux: installing Vulkan build deps..."
     brew install vulkan-headers glslang shaderc
 
-    # Fedora/Bazzite ships libvulkan.so.1 but not the unversioned libvulkan.so that
-    # cmake's FindVulkan requires. Create it in ~/.local/lib if missing.
-    VULKAN_SO=$(ldconfig -p 2>/dev/null | awk '/libvulkan\.so\.1 \(libc6,x86-64\)/ {print $NF; exit}')
+    # Many distros ship libvulkan.so.1 but not the unversioned libvulkan.so that
+    # cmake's FindVulkan requires. Try multiple detection methods across architectures.
+    VULKAN_SO=""
+
+    # 1. ldconfig — works on most distros, arch-agnostic pattern
+    if [ -z "$VULKAN_SO" ]; then
+        VULKAN_SO=$(ldconfig -p 2>/dev/null | awk '/libvulkan\.so\.1/ {print $NF; exit}')
+    fi
+
+    # 2. pkg-config — works if vulkan development package is installed
+    if [ -z "$VULKAN_SO" ] && command -v pkg-config &>/dev/null; then
+        PKG_LIB=$(pkg-config --variable=libdir vulkan 2>/dev/null)
+        [ -n "$PKG_LIB" ] && VULKAN_SO="$PKG_LIB/libvulkan.so.1"
+        [ -n "$VULKAN_SO" ] && [ ! -f "$VULKAN_SO" ] && VULKAN_SO=""
+    fi
+
+    # 3. Common distro paths as last resort
+    if [ -z "$VULKAN_SO" ]; then
+        for _p in /usr/lib64/libvulkan.so.1 /usr/lib/x86_64-linux-gnu/libvulkan.so.1 \
+                  /usr/lib/aarch64-linux-gnu/libvulkan.so.1 /usr/lib/libvulkan.so.1; do
+            [ -f "$_p" ] && VULKAN_SO="$_p" && break
+        done
+    fi
+
     if [ -n "$VULKAN_SO" ] && [ ! -f "$HOME/.local/lib/libvulkan.so" ]; then
         mkdir -p "$HOME/.local/lib"
         ln -sf "$VULKAN_SO" "$HOME/.local/lib/libvulkan.so"
         log "Created libvulkan.so symlink → $VULKAN_SO"
+    elif [ -z "$VULKAN_SO" ]; then
+        log "WARNING: libvulkan.so.1 not found — will attempt CPU-only whisper build"
     fi
 fi
 
@@ -195,10 +218,20 @@ else
         log "Building whisper.cpp with Metal/CoreML acceleration..."
         CMAKE_GPU_FLAGS="-DGGML_METAL=ON -DWHISPER_COREML=ON -DWHISPER_COREML_ALLOW_FALLBACK=ON"
     else
-        log "Building whisper.cpp with Vulkan acceleration..."
-        VULKAN_LIB=$(ldconfig -p 2>/dev/null | awk '/libvulkan\.so\.1 \(libc6,x86-64\)/ {print $NF; exit}')
-        VULKAN_LIB="${VULKAN_LIB:-/usr/lib64/libvulkan.so.1}"
-        CMAKE_GPU_FLAGS="-DGGML_VULKAN=ON -DVulkan_LIBRARY=${VULKAN_LIB} -DVulkan_INCLUDE_DIR=$(brew --prefix)/include"
+        # Use the VULKAN_SO detected during preflight (may be empty if Vulkan not available)
+        VULKAN_LIB="${VULKAN_SO:-}"
+        # Also try the local symlink we may have just created
+        if [ -z "$VULKAN_LIB" ] && [ -f "$HOME/.local/lib/libvulkan.so" ]; then
+            VULKAN_LIB="$HOME/.local/lib/libvulkan.so"
+        fi
+
+        if [ -n "$VULKAN_LIB" ] && [ -f "$VULKAN_LIB" ]; then
+            log "Building whisper.cpp with Vulkan acceleration..."
+            CMAKE_GPU_FLAGS="-DGGML_VULKAN=ON -DVulkan_LIBRARY=${VULKAN_LIB} -DVulkan_INCLUDE_DIR=$(brew --prefix)/include"
+        else
+            log "WARNING: Vulkan not available — building whisper.cpp for CPU only (slower)"
+            CMAKE_GPU_FLAGS=""
+        fi
     fi
 
     NPROC=$([ "$OS" = "Darwin" ] && sysctl -n hw.logicalcpu || nproc)
