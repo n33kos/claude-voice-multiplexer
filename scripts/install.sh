@@ -18,6 +18,8 @@
 
 set -e
 
+OS="$(uname)"   # "Darwin" or "Linux"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 DATA_DIR="$HOME/.claude/voice-multiplexer"
@@ -59,18 +61,25 @@ check_cmd() {
 
 log_section "Checking prerequisites"
 
-# Xcode CLI tools
-if ! xcode-select -p &> /dev/null; then
-    echo "ERROR: Xcode Command Line Tools not installed."
-    echo "  Run: xcode-select --install"
-    exit 1
+# Xcode CLI tools (macOS only)
+if [ "$OS" = "Darwin" ]; then
+    if ! xcode-select -p &> /dev/null; then
+        echo "ERROR: Xcode Command Line Tools not installed."
+        echo "  Run: xcode-select --install"
+        exit 1
+    fi
+    log "Xcode CLI tools: OK"
 fi
-log "Xcode CLI tools: OK"
 
-# Homebrew
+# Homebrew / Linuxbrew
 if ! check_cmd brew; then
-    echo "ERROR: Homebrew not found."
-    echo "  Install from https://brew.sh"
+    if [ "$OS" = "Darwin" ]; then
+        echo "ERROR: Homebrew not found."
+        echo "  Install from https://brew.sh"
+    else
+        echo "ERROR: Linuxbrew not found."
+        echo "  Install from https://brew.sh/linux"
+    fi
     exit 1
 fi
 log "Homebrew: OK"
@@ -131,6 +140,21 @@ if ! check_cmd tmux; then
 fi
 log "tmux: OK ($(tmux -V))"
 
+# Vulkan build deps (Linux only — needed for whisper.cpp GPU acceleration)
+if [ "$OS" = "Linux" ]; then
+    log "Linux: installing Vulkan build deps..."
+    brew install vulkan-headers glslang shaderc
+
+    # Fedora/Bazzite ships libvulkan.so.1 but not the unversioned libvulkan.so that
+    # cmake's FindVulkan requires. Create it in ~/.local/lib if missing.
+    VULKAN_SO=$(ldconfig -p 2>/dev/null | awk '/libvulkan\.so\.1 \(libc6,x86-64\)/ {print $NF; exit}')
+    if [ -n "$VULKAN_SO" ] && [ ! -f "$HOME/.local/lib/libvulkan.so" ]; then
+        mkdir -p "$HOME/.local/lib"
+        ln -sf "$VULKAN_SO" "$HOME/.local/lib/libvulkan.so"
+        log "Created libvulkan.so symlink → $VULKAN_SO"
+    fi
+fi
+
 # --- Create data directory ---
 
 mkdir -p "$DATA_DIR/logs"
@@ -164,15 +188,26 @@ else
     fi
 
     # Build
-    log "Building whisper.cpp with Metal acceleration..."
     cd "$WHISPER_REPO"
     rm -rf build
+
+    if [ "$OS" = "Darwin" ]; then
+        log "Building whisper.cpp with Metal/CoreML acceleration..."
+        CMAKE_GPU_FLAGS="-DGGML_METAL=ON -DWHISPER_COREML=ON -DWHISPER_COREML_ALLOW_FALLBACK=ON"
+    else
+        log "Building whisper.cpp with Vulkan acceleration..."
+        VULKAN_LIB=$(ldconfig -p 2>/dev/null | awk '/libvulkan\.so\.1 \(libc6,x86-64\)/ {print $NF; exit}')
+        VULKAN_LIB="${VULKAN_LIB:-/usr/lib64/libvulkan.so.1}"
+        CMAKE_GPU_FLAGS="-DGGML_VULKAN=ON -DVulkan_LIBRARY=${VULKAN_LIB} -DVulkan_INCLUDE_DIR=$(brew --prefix)/include"
+    fi
+
+    NPROC=$([ "$OS" = "Darwin" ] && sysctl -n hw.logicalcpu || nproc)
+
     cmake -B build \
-        -DGGML_METAL=ON \
-        -DWHISPER_COREML=ON \
-        -DWHISPER_COREML_ALLOW_FALLBACK=ON \
+        $CMAKE_GPU_FLAGS \
+        -DWHISPER_BUILD_SERVER=ON \
         -DCMAKE_BUILD_TYPE=Release
-    cmake --build build -j "$(sysctl -n hw.logicalcpu)" --config Release
+    cmake --build build -j "$NPROC" --config Release
 
     if [ ! -f "$WHISPER_BINARY" ]; then
         echo "ERROR: whisper-server binary not found after build."
@@ -312,10 +347,12 @@ log_section "Generating configuration"
 CONFIG_FILE="$DATA_DIR/voice-multiplexer.env"
 
 # Auto-detect GPU device by platform
-if [ "$(uname)" = "Darwin" ]; then
+if [ "$OS" = "Darwin" ]; then
     DETECTED_DEVICE="mps"
+elif command -v nvidia-smi &>/dev/null; then
+    DETECTED_DEVICE="cuda"
 else
-    DETECTED_DEVICE="auto"
+    DETECTED_DEVICE="cpu"
 fi
 
 # Generate LiveKit API keys
@@ -352,7 +389,6 @@ fi
 log_section "Installing vmuxd daemon"
 
 DAEMON_INSTALL_DIR="$DATA_DIR/daemon"
-LAUNCHD_PLIST="$HOME/Library/LaunchAgents/com.vmux.daemon.plist"
 
 # Copy daemon files to install location
 mkdir -p "$DAEMON_INSTALL_DIR"
@@ -374,7 +410,7 @@ mkdir -p "$(dirname "$VMUX_LINK")"
 ln -sf "$DAEMON_INSTALL_DIR/vmux" "$VMUX_LINK"
 log "vmux CLI installed at $VMUX_LINK"
 
-# Resolve absolute paths for launchd (launchd does not support ~ expansion)
+# Resolve absolute paths for init system (launchd/systemd do not support ~ expansion)
 UV_PATH=$(command -v uv || echo "$HOME/.local/bin/uv")
 VMUXD_PATH="$DAEMON_INSTALL_DIR/vmuxd.py"
 VMUXD_WRAPPER="$DAEMON_INSTALL_DIR/vmuxd"
@@ -382,9 +418,9 @@ LOG_PATH="$DATA_DIR/logs/daemon.log"
 LOG_ERR_PATH="$DATA_DIR/logs/daemon-error.log"
 PLUGIN_DIR="$PROJECT_DIR"
 
-# Generate a named wrapper script so macOS shows "vmuxd" (not "python3") in
-# the Background Items notification. Uses uv run so Python version and deps
-# are managed by uv/pyproject.toml regardless of the system Python.
+# Generate a named wrapper script so the OS shows "vmuxd" (not "python3") in
+# process listings. Uses uv run so Python version and deps are managed by
+# uv/pyproject.toml regardless of the system Python.
 cat > "$VMUXD_WRAPPER" << WRAPPER_EOF
 #!/bin/bash
 cd "${DAEMON_INSTALL_DIR}"
@@ -393,8 +429,11 @@ WRAPPER_EOF
 chmod +x "$VMUXD_WRAPPER"
 log "vmuxd wrapper generated at $VMUXD_WRAPPER (using uv run)"
 
-# Write launchd plist
-cat > "$LAUNCHD_PLIST" << PLIST_EOF
+if [ "$OS" = "Darwin" ]; then
+    # macOS: register with launchd
+    LAUNCHD_PLIST="$HOME/Library/LaunchAgents/com.vmux.daemon.plist"
+
+    cat > "$LAUNCHD_PLIST" << PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -437,15 +476,48 @@ cat > "$LAUNCHD_PLIST" << PLIST_EOF
 </dict>
 </plist>
 PLIST_EOF
-log "launchd plist written to $LAUNCHD_PLIST"
+    log "launchd plist written to $LAUNCHD_PLIST"
 
-# Load the daemon
-if launchctl list com.vmux.daemon &>/dev/null; then
-    log "Reloading daemon (already registered)..."
-    launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
+    if launchctl list com.vmux.daemon &>/dev/null; then
+        log "Reloading daemon (already registered)..."
+        launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
+    fi
+    launchctl load -w "$LAUNCHD_PLIST"
+    log "Daemon loaded via launchd (com.vmux.daemon)"
+
+else
+    # Linux: register as a systemd user service
+    BREW_PREFIX="$(brew --prefix)"
+    SYSTEMD_DIR="$HOME/.config/systemd/user"
+    mkdir -p "$SYSTEMD_DIR"
+    SYSTEMD_UNIT="$SYSTEMD_DIR/vmuxd.service"
+
+    cat > "$SYSTEMD_UNIT" << UNIT_EOF
+[Unit]
+Description=Claude Voice Multiplexer Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${VMUXD_WRAPPER}
+WorkingDirectory=${DAEMON_INSTALL_DIR}
+Environment=VMUX_PLUGIN_DIR=${PLUGIN_DIR}
+Environment=PATH=${BREW_PREFIX}/bin:${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin
+StandardOutput=append:${LOG_PATH}
+StandardError=append:${LOG_ERR_PATH}
+LimitNOFILE=65536
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+UNIT_EOF
+
+    systemctl --user daemon-reload
+    systemctl --user enable vmuxd.service
+    systemctl --user start vmuxd.service
+    log "Daemon loaded via systemd user service (vmuxd.service)"
 fi
-launchctl load -w "$LAUNCHD_PLIST"
-log "Daemon loaded via launchd (com.vmux.daemon)"
 
 # Wait a moment then generate a pairing code
 sleep 3
@@ -481,8 +553,13 @@ log ""
 log "Web app: $WEB_SIZE (built in $WEB_DIR/dist)"
 echo ""
 log ""
-log "vmuxd daemon: running as launchd service (com.vmux.daemon)"
-log "  Start/stop:   launchctl start/stop com.vmux.daemon"
+if [ "$OS" = "Darwin" ]; then
+    log "vmuxd daemon: running as launchd service (com.vmux.daemon)"
+    log "  Start/stop:   launchctl start/stop com.vmux.daemon"
+else
+    log "vmuxd daemon: running as systemd user service (vmuxd.service)"
+    log "  Start/stop:   systemctl --user start/stop vmuxd.service"
+fi
 log "  Status:       vmux status"
 log "  Logs:         $DATA_DIR/logs/daemon.log"
 echo ""
@@ -492,7 +569,11 @@ if [ -n "$PAIR_CODE" ]; then
     log "    Pairing code: $PAIR_CODE"
     log ""
     log "  Web app: http://localhost:3100"
-    LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "your-local-ip")
+    if [ "$OS" = "Darwin" ]; then
+        LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "your-local-ip")
+    else
+        LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "your-local-ip")
+    fi
     log "  From phone:  http://${LOCAL_IP}:3100"
 else
     log "Next steps:"

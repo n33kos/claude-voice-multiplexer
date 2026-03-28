@@ -1,6 +1,6 @@
 ---
 name: voice-multiplexer:install
-description: Install or reinstall the Claude Voice Multiplexer (downloads dependencies, builds Whisper, sets up launchd daemon)
+description: Install or reinstall the Claude Voice Multiplexer (downloads dependencies, builds Whisper, sets up daemon)
 ---
 
 # Install Voice Multiplexer
@@ -27,13 +27,13 @@ Run the full installation script to set up all Voice Multiplexer components.
    ```
 
 4. The script will:
-   - Install Homebrew dependencies (ffmpeg, portaudio, etc.)
-   - Build whisper.cpp with Metal GPU support
+   - Install Homebrew/Linuxbrew dependencies (cmake, node, livekit, tmux, etc.)
+   - Build whisper.cpp with GPU acceleration (Metal/CoreML on macOS, Vulkan on Linux)
    - Install Kokoro TTS (kokoro-fastapi)
    - Download and configure LiveKit
    - Install relay server Python deps
    - Build the web app
-   - Set up the vmuxd daemon under launchd (`com.vmux.daemon`)
+   - Set up the vmuxd daemon (launchd on macOS, systemd user service on Linux)
    - Generate an initial device pairing code
 
 5. At the end of installation the script will print a **pairing code**. Share it with the user so they can pair their phone/browser.
@@ -46,7 +46,9 @@ Run the full installation script to set up all Voice Multiplexer components.
 ## Notes
 
 - Full install takes 5–15 minutes depending on internet speed and CPU
-- Requires macOS (Apple Silicon recommended for Metal GPU acceleration)
+- Supported platforms: macOS (Apple Silicon recommended), Linux (x86-64 with Vulkan-capable GPU recommended)
+- Windows is not supported — WSL2 is recommended for Windows users
+- If the script fails on an unusual Linux distro, it will describe what it needs and ask if you want to try anyway
 - Re-running without `--force` is safe — already-installed components are skipped
-- After install, services start automatically via launchd on every login
+- After install, services start automatically on every login (launchd on macOS, systemd `--user` on Linux)
 - Logs: `~/.claude/voice-multiplexer/logs/daemon.log`

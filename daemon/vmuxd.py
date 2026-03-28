@@ -701,21 +701,40 @@ class VmuxDaemon:
                 else:
                     logger.warning("[update] no web source found in cache — web UI not updated")
 
-            # 4. Update launchd plist VMUX_PLUGIN_DIR
-            plist_path = Path.home() / "Library" / "LaunchAgents" / "com.vmux.daemon.plist"
-            if plist_path.exists():
-                try:
-                    import plistlib
-                    with open(plist_path, "rb") as f:
-                        plist = plistlib.load(f)
-                    env_vars = plist.get("EnvironmentVariables", {})
-                    env_vars["VMUX_PLUGIN_DIR"] = str(latest_dir)
-                    plist["EnvironmentVariables"] = env_vars
-                    with open(plist_path, "wb") as f:
-                        plistlib.dump(plist, f)
-                    logger.info(f"[update] plist updated: VMUX_PLUGIN_DIR → {latest_dir}")
-                except Exception as e:
-                    logger.warning(f"[update] plist update failed: {e}")
+            # 4. Update init service VMUX_PLUGIN_DIR
+            if sys.platform == "darwin":
+                plist_path = Path.home() / "Library" / "LaunchAgents" / "com.vmux.daemon.plist"
+                if plist_path.exists():
+                    try:
+                        import plistlib
+                        with open(plist_path, "rb") as f:
+                            plist = plistlib.load(f)
+                        env_vars = plist.get("EnvironmentVariables", {})
+                        env_vars["VMUX_PLUGIN_DIR"] = str(latest_dir)
+                        plist["EnvironmentVariables"] = env_vars
+                        with open(plist_path, "wb") as f:
+                            plistlib.dump(plist, f)
+                        logger.info(f"[update] plist updated: VMUX_PLUGIN_DIR → {latest_dir}")
+                    except Exception as e:
+                        logger.warning(f"[update] plist update failed: {e}")
+            else:
+                import re as _re
+                unit_path = Path.home() / ".config" / "systemd" / "user" / "vmuxd.service"
+                if unit_path.exists():
+                    try:
+                        content = unit_path.read_text()
+                        content = _re.sub(
+                            r'Environment=VMUX_PLUGIN_DIR=.*',
+                            f'Environment=VMUX_PLUGIN_DIR={latest_dir}',
+                            content,
+                        )
+                        unit_path.write_text(content)
+                        await asyncio.create_subprocess_exec(
+                            "systemctl", "--user", "daemon-reload"
+                        )
+                        logger.info(f"[update] systemd unit updated: VMUX_PLUGIN_DIR → {latest_dir}")
+                    except Exception as e:
+                        logger.warning(f"[update] systemd unit update failed: {e}")
 
             # 5. Verify
             actual = _read_installed_version()
@@ -807,13 +826,17 @@ class VmuxDaemon:
     async def _get_process_tree_footprint(root_pid: int) -> Optional[float]:
         """Get total dirty memory footprint in MB for a process tree.
 
-        Uses the macOS `footprint --pid` command which reports the actual dirty
-        memory including MPS GPU allocations and malloc regions — unlike `ps` RSS
-        which dramatically underreports for processes using Metal/MPS.
+        On macOS: uses the `footprint --pid` command which reports actual dirty
+        memory including MPS GPU allocations and malloc regions.
+
+        On Linux: delegates to _get_process_tree_rss which reads /proc smaps_rollup.
 
         Walks the process tree (root + descendants) and sums footprints.
         """
         import re
+
+        if sys.platform != "darwin":
+            return await VmuxDaemon._get_process_tree_rss(root_pid)
 
         try:
             # First, find all PIDs in the process tree via ps
