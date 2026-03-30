@@ -1,0 +1,21 @@
+[project]
+name = "vmux-overlay"
+version = "0.1.0"
+description = "System tray overlay for Claude Voice Multiplexer"
+requires-python = ">=3.10"
+dependencies = [
+  "pystray>=0.19",
+  "pynput>=1.7",
+  "pywebview>=5.0",
+  "screeninfo>=0.8",
+  "Pillow>=9.0",
+  "cairosvg>=2.5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+include = ["overlay.py"]

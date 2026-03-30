@@ -127,6 +127,15 @@ export function MicControls({
     }
   };
 
+  // Listen for vmux:command events from the overlay wrapper
+  useEffect(() => {
+    const handler = (e: CustomEvent) => {
+      if (e.detail?.type === 'toggle-mic') toggleMic();
+    };
+    document.addEventListener('vmux:command', handler as EventListener);
+    return () => document.removeEventListener('vmux:command', handler as EventListener);
+  }, [toggleMic]);
+
   const toggleSpeaker = () => {
     initAudio();
     onSpeakerMutedChange(!speakerMuted);

@@ -17,12 +17,16 @@ Usage:
   vmux send-key <session-id> <key>    send a special key (Enter, C-c, Tab, etc)
   vmux auth-code                  generate a one-time pairing code for the web app
   vmux update-if-newer            update daemon from plugin cache if newer version available
+  vmux install-overlay            install overlay deps, config, startup item, and start
+  vmux uninstall-overlay           stop overlay, remove startup item and optionally config
   vmux shutdown                   stop daemon and all children
 """
 
 import json
 import os
+import shutil
 import socket
+import subprocess
 import sys
 
 SOCKET_PATH = "/tmp/vmuxd.sock"
@@ -270,6 +274,293 @@ def cmd_shutdown():
         print("Daemon shutting down...")
 
 
+def _find_project_root() -> str:
+    """Find the project root containing overlay/.
+
+    Checks VMUX_PLUGIN_DIR (set by the daemon/init system), then falls
+    back to walking up from this script's location.
+    """
+    plugin_dir = os.environ.get("VMUX_PLUGIN_DIR", "")
+    if plugin_dir and os.path.isdir(os.path.join(plugin_dir, "overlay")):
+        return plugin_dir
+
+    # Script may be the installed copy in ~/.claude/voice-multiplexer/daemon/
+    # or the repo copy in <repo>/daemon/. Walk up and look for overlay/.
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidate = os.path.dirname(script_dir)
+    if os.path.isdir(os.path.join(candidate, "overlay")):
+        return candidate
+
+    # Try reading VMUX_PLUGIN_DIR from the daemon state
+    state_file = os.path.join(os.path.expanduser("~/.claude/voice-multiplexer"), "daemon.state")
+    if os.path.exists(state_file):
+        try:
+            with open(state_file) as f:
+                state = json.load(f)
+            pd = state.get("plugin_dir", "")
+            if pd and os.path.isdir(os.path.join(pd, "overlay")):
+                return pd
+        except Exception:
+            pass
+
+    # Last resort: check the systemd unit or launchd plist for VMUX_PLUGIN_DIR
+    _die(
+        "Cannot find project root with overlay/ directory.\n"
+        "  Set VMUX_PLUGIN_DIR to your repo path, e.g.:\n"
+        "    VMUX_PLUGIN_DIR=~/claude-voice-multiplexer vmux install-overlay"
+    )
+
+
+def _find_uv() -> str:
+    """Find the uv binary."""
+    # Check common locations
+    for candidate in [
+        shutil.which("uv"),
+        os.path.expanduser("~/.local/bin/uv"),
+        os.path.expanduser("~/.cargo/bin/uv"),
+    ]:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    _die("uv not found. Install it: curl -LsSf https://astral.sh/uv/install.sh | sh")
+
+
+OVERLAY_CONFIG_DIR = os.path.expanduser("~/.claude/voice-multiplexer")
+OVERLAY_CONFIG_PATH = os.path.join(OVERLAY_CONFIG_DIR, "overlay.json")
+OVERLAY_DAEMON_DIR = os.path.join(OVERLAY_CONFIG_DIR, "daemon")
+
+DEFAULT_OVERLAY_CONFIG = {
+    "relay_url": "http://localhost:3100",
+    "position": "right",
+    "screen": 0,
+    "width": 420,
+    "opacity": 0.96,
+    "always_on_top": True,
+    "shortcut_toggle_window": "<ctrl>+<shift>+v",
+    "shortcut_toggle_mic": "<ctrl>+<shift>+m",
+}
+
+
+def cmd_install_overlay():
+    """Install overlay deps, generate config, register startup, start."""
+    project_root = _find_project_root()
+    overlay_dir = os.path.join(project_root, "overlay")
+
+    if not os.path.isdir(overlay_dir):
+        _die(f"overlay/ directory not found at {overlay_dir}")
+
+    uv = _find_uv()
+    is_mac = sys.platform == "darwin"
+
+    # 1. Install Python deps via uv
+    print("Installing overlay dependencies...")
+    venv_path = os.path.join(overlay_dir, ".venv")
+    # On Linux, use the system/brew Python so PyGObject (gi) is available for pywebview GTK
+    build_env = dict(os.environ)
+    venv_args = [uv, "venv"]
+    if not is_mac:
+        # Prefer brew's python3 (has dev headers + gi), fall back to system python3
+        brew_prefix = subprocess.run(["brew", "--prefix"], capture_output=True, text=True).stdout.strip()
+        brew_python = os.path.join(brew_prefix, "bin", "python3")
+        if os.path.exists(brew_python):
+            venv_args += ["--python", brew_python, "--system-site-packages"]
+        elif os.path.exists("/usr/bin/python3"):
+            venv_args += ["--python", "/usr/bin/python3", "--system-site-packages"]
+        # Brew's Python may reference gcc-12 which doesn't exist — use system gcc
+        if os.path.exists("/usr/bin/gcc") and not shutil.which("gcc-12"):
+            build_env["CC"] = "/usr/bin/gcc"
+    venv_args.append(venv_path)
+    subprocess.run(venv_args, cwd=overlay_dir, check=True, env=build_env)
+    # Install deps from pyproject.toml without editable install (single-file project)
+    subprocess.run(
+        [uv, "pip", "install",
+         "pystray>=0.19", "pynput>=1.7", "pywebview>=5.0",
+         "screeninfo>=0.8", "Pillow>=9.0", "cairosvg>=2.5",
+         "--python", os.path.join(venv_path, "bin", "python")],
+        cwd=overlay_dir, check=True, env=build_env,
+    )
+
+    # On Linux, ensure webkit2gtk is available
+    if not is_mac:
+        print("Note: pywebview on Linux requires webkit2gtk (libwebkit2gtk-4.1 or similar).")
+        print("      Install via your system package manager if not already present.")
+
+    # 2. Write default overlay.json if it doesn't exist
+    os.makedirs(OVERLAY_CONFIG_DIR, exist_ok=True)
+    if not os.path.exists(OVERLAY_CONFIG_PATH):
+        print(f"Writing default config to {OVERLAY_CONFIG_PATH}")
+        with open(OVERLAY_CONFIG_PATH, "w") as f:
+            json.dump(DEFAULT_OVERLAY_CONFIG, f, indent=2)
+            f.write("\n")
+    else:
+        print(f"Config already exists at {OVERLAY_CONFIG_PATH}")
+
+    # 3. Create vmux-overlay wrapper script
+    os.makedirs(OVERLAY_DAEMON_DIR, exist_ok=True)
+    wrapper_path = os.path.join(OVERLAY_DAEMON_DIR, "vmux-overlay")
+    python_path = os.path.join(venv_path, "bin", "python")
+    overlay_script = os.path.join(overlay_dir, "overlay.py")
+
+    # On Linux, brew's gi can't find system GTK typelibs — set GI_TYPELIB_PATH
+    gi_env_lines = ""
+    if not is_mac:
+        gi_typelib_dirs = []
+        for d in ["/usr/lib64/girepository-1.0", "/usr/lib/girepository-1.0",
+                  "/usr/lib/x86_64-linux-gnu/girepository-1.0"]:
+            if os.path.isdir(d):
+                gi_typelib_dirs.append(d)
+        if gi_typelib_dirs:
+            gi_env_lines = "\nexport GI_TYPELIB_PATH=\"" + ":".join(gi_typelib_dirs) + ":${GI_TYPELIB_PATH:-}\""
+
+    wrapper_content = f"""#!/usr/bin/env bash
+# vmux-overlay wrapper — auto-generated by vmux install-overlay{gi_env_lines}
+exec "{python_path}" "{overlay_script}" "$@"
+"""
+    with open(wrapper_path, "w") as f:
+        f.write(wrapper_content)
+    os.chmod(wrapper_path, 0o755)
+    print(f"Created wrapper script: {wrapper_path}")
+
+    # 4. Register startup item
+    if is_mac:
+        _register_launchd(wrapper_path)
+    else:
+        _register_systemd(wrapper_path)
+
+    # 5. Start the overlay
+    print("Starting vmux-overlay...")
+    if is_mac:
+        subprocess.run(["launchctl", "load", "-w",
+                        os.path.expanduser("~/Library/LaunchAgents/com.vmux.overlay.plist")])
+    else:
+        subprocess.run(["systemctl", "--user", "start", "vmux-overlay"])
+
+    print("\nvmux-overlay installed and started!")
+    print(f"  Config: {OVERLAY_CONFIG_PATH}")
+    print(f"  Wrapper: {wrapper_path}")
+
+
+def _register_launchd(wrapper_path: str):
+    """Register a macOS launchd plist for the overlay."""
+    plist_dir = os.path.expanduser("~/Library/LaunchAgents")
+    os.makedirs(plist_dir, exist_ok=True)
+    plist_path = os.path.join(plist_dir, "com.vmux.overlay.plist")
+
+    log_dir = os.path.join(OVERLAY_CONFIG_DIR, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+
+    plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.vmux.overlay</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{wrapper_path}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>{log_dir}/overlay.log</string>
+  <key>StandardErrorPath</key>
+  <string>{log_dir}/overlay.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DISPLAY</key>
+    <string>:0</string>
+  </dict>
+</dict>
+</plist>
+"""
+    with open(plist_path, "w") as f:
+        f.write(plist_content)
+    print(f"Registered launchd agent: {plist_path}")
+
+
+def _register_systemd(wrapper_path: str):
+    """Register a Linux systemd user service for the overlay."""
+    systemd_dir = os.path.expanduser("~/.config/systemd/user")
+    os.makedirs(systemd_dir, exist_ok=True)
+    service_path = os.path.join(systemd_dir, "vmux-overlay.service")
+
+    log_dir = os.path.join(OVERLAY_CONFIG_DIR, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+
+    service_content = f"""[Unit]
+Description=vmux-overlay — system tray overlay for Claude Voice Multiplexer
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart={wrapper_path}
+Restart=on-failure
+RestartSec=5
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=graphical-session.target
+"""
+    with open(service_path, "w") as f:
+        f.write(service_content)
+
+    subprocess.run(["systemctl", "--user", "daemon-reload"])
+    subprocess.run(["systemctl", "--user", "enable", "vmux-overlay"])
+    print(f"Registered systemd user service: {service_path}")
+
+
+def cmd_uninstall_overlay():
+    """Stop overlay, remove startup item, optionally remove config."""
+    is_mac = sys.platform == "darwin"
+
+    # Stop the overlay
+    print("Stopping vmux-overlay...")
+    if is_mac:
+        plist_path = os.path.expanduser("~/Library/LaunchAgents/com.vmux.overlay.plist")
+        if os.path.exists(plist_path):
+            subprocess.run(["launchctl", "unload", "-w", plist_path])
+            os.remove(plist_path)
+            print(f"Removed launchd agent: {plist_path}")
+        else:
+            print("No launchd agent found.")
+    else:
+        subprocess.run(["systemctl", "--user", "stop", "vmux-overlay"])
+        subprocess.run(["systemctl", "--user", "disable", "vmux-overlay"])
+        service_path = os.path.expanduser("~/.config/systemd/user/vmux-overlay.service")
+        if os.path.exists(service_path):
+            os.remove(service_path)
+            subprocess.run(["systemctl", "--user", "daemon-reload"])
+            print(f"Removed systemd service: {service_path}")
+        else:
+            print("No systemd service found.")
+
+    # Remove wrapper script
+    wrapper_path = os.path.join(OVERLAY_DAEMON_DIR, "vmux-overlay")
+    if os.path.exists(wrapper_path):
+        os.remove(wrapper_path)
+        print(f"Removed wrapper: {wrapper_path}")
+
+    # Ask about config removal
+    if os.path.exists(OVERLAY_CONFIG_PATH):
+        answer = input(f"Remove config at {OVERLAY_CONFIG_PATH}? [y/N] ").strip().lower()
+        if answer in ("y", "yes"):
+            os.remove(OVERLAY_CONFIG_PATH)
+            print("Config removed.")
+        else:
+            print("Config preserved.")
+
+    # Remove venv
+    project_root = _find_project_root()
+    venv_path = os.path.join(project_root, "overlay", ".venv")
+    if os.path.isdir(venv_path):
+        shutil.rmtree(venv_path)
+        print(f"Removed overlay venv: {venv_path}")
+
+    print("\nvmux-overlay uninstalled.")
+
+
 def usage():
     print(__doc__)
     sys.exit(0)
@@ -346,6 +637,10 @@ def main():
         cmd_auth_code()
     elif sub in ("update", "update-if-newer"):
         cmd_update()
+    elif sub == "install-overlay":
+        cmd_install_overlay()
+    elif sub == "uninstall-overlay":
+        cmd_uninstall_overlay()
     elif sub == "shutdown":
         cmd_shutdown()
     elif sub in ("-h", "--help", "help"):
