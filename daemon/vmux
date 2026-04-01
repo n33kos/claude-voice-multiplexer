@@ -371,11 +371,15 @@ def cmd_install_overlay():
     venv_args.append(venv_path)
     subprocess.run(venv_args, cwd=overlay_dir, check=True, env=build_env)
     # Install deps from pyproject.toml without editable install (single-file project)
+    deps = [
+        "pystray>=0.19", "pynput>=1.7", "pywebview>=5.0",
+        "screeninfo>=0.8", "Pillow>=9.0", "cairosvg>=2.5",
+    ]
+    if is_mac:
+        deps.append("quickmachotkey>=2025.7")
     subprocess.run(
-        [uv, "pip", "install",
-         "pystray>=0.19", "pynput>=1.7", "pywebview>=5.0",
-         "screeninfo>=0.8", "Pillow>=9.0", "cairosvg>=2.5",
-         "--python", os.path.join(venv_path, "bin", "python")],
+        [uv, "pip", "install"] + deps +
+        ["--python", os.path.join(venv_path, "bin", "python")],
         cwd=overlay_dir, check=True, env=build_env,
     )
 
@@ -422,13 +426,22 @@ exec "{python_path}" "{overlay_script}" "$@"
 
     # 4. Register startup item
     if is_mac:
-        _register_launchd(wrapper_path)
+        app_bundle = os.path.join(overlay_dir, "VmuxOverlay.app")
+        app_executable = os.path.join(app_bundle, "Contents", "MacOS", "vmux-overlay")
+        if os.path.exists(app_executable):
+            _register_launchd(app_executable)
+        else:
+            print(f"Warning: app bundle not found at {app_bundle}, using wrapper script")
+            _register_launchd(wrapper_path)
     else:
         _register_systemd(wrapper_path)
 
     # 5. Start the overlay
     print("Starting vmux-overlay...")
     if is_mac:
+        # Kill any existing overlay first
+        subprocess.run(["pkill", "-f", "overlay.py"], capture_output=True)
+        import time; time.sleep(1)
         subprocess.run(["launchctl", "load", "-w",
                         os.path.expanduser("~/Library/LaunchAgents/com.vmux.overlay.plist")])
     else:
@@ -439,14 +452,38 @@ exec "{python_path}" "{overlay_script}" "$@"
     print(f"  Wrapper: {wrapper_path}")
 
 
-def _register_launchd(wrapper_path: str):
-    """Register a macOS launchd plist for the overlay."""
+def _register_launchd(executable_path: str):
+    """Register a macOS launchd plist for the overlay.
+
+    Uses 'open -a' to launch via the app bundle for proper identity.
+    Falls back to direct execution if the path isn't in an app bundle.
+    """
     plist_dir = os.path.expanduser("~/Library/LaunchAgents")
     os.makedirs(plist_dir, exist_ok=True)
     plist_path = os.path.join(plist_dir, "com.vmux.overlay.plist")
 
     log_dir = os.path.join(OVERLAY_CONFIG_DIR, "logs")
     os.makedirs(log_dir, exist_ok=True)
+
+    # Check if the executable is inside an app bundle
+    app_bundle = None
+    parts = executable_path.split(os.sep)
+    for i, part in enumerate(parts):
+        if part.endswith(".app"):
+            app_bundle = os.sep.join(parts[:i + 1])
+            break
+
+    if app_bundle:
+        # Use 'open -a' to launch via the app bundle for proper identity
+        program_args = f"""  <array>
+    <string>/usr/bin/open</string>
+    <string>-a</string>
+    <string>{app_bundle}</string>
+  </array>"""
+    else:
+        program_args = f"""  <array>
+    <string>{executable_path}</string>
+  </array>"""
 
     plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -456,9 +493,7 @@ def _register_launchd(wrapper_path: str):
   <key>Label</key>
   <string>com.vmux.overlay</string>
   <key>ProgramArguments</key>
-  <array>
-    <string>{wrapper_path}</string>
-  </array>
+{program_args}
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
@@ -467,11 +502,6 @@ def _register_launchd(wrapper_path: str):
   <string>{log_dir}/overlay.log</string>
   <key>StandardErrorPath</key>
   <string>{log_dir}/overlay.log</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>DISPLAY</key>
-    <string>:0</string>
-  </dict>
 </dict>
 </plist>
 """

@@ -1,0 +1,16 @@
+#!/bin/bash
+# Vmux Overlay launcher — runs overlay.py using the overlay venv
+# This script is the app bundle's executable, so macOS accessibility
+# permissions are granted to "Vmux Overlay" instead of "uv" or "python".
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+VENV_PYTHON="${SCRIPT_DIR}/.venv/bin/python"
+OVERLAY_PY="${SCRIPT_DIR}/overlay.py"
+
+if [ ! -f "$VENV_PYTHON" ]; then
+    echo "Error: venv not found at $VENV_PYTHON" >&2
+    echo "Run: cd $SCRIPT_DIR && uv venv .venv && uv pip install -e ." >&2
+    exit 1
+fi
+
+exec "$VENV_PYTHON" "$OVERLAY_PY" "$@"

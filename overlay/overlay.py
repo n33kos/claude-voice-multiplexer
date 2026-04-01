@@ -13,6 +13,9 @@ Threading model:
 
 from __future__ import annotations
 
+import faulthandler
+faulthandler.enable()
+
 import json
 import os
 import platform
@@ -35,6 +38,8 @@ try:
     from gi.repository import GLib as _glib
 except ImportError:
     _glib = None
+
+IS_MACOS = platform.system() == "Darwin"
 
 # ---------------------------------------------------------------------------
 # Config
@@ -84,10 +89,14 @@ DEFAULT_CONFIG = {
 
 # Map from human-readable labels to pynput format
 OPACITY_OPTIONS = [
+    ("100%", 1.00),
     ("96%", 0.96),
+    ("90%", 0.90),
+    ("85%", 0.85),
     ("80%", 0.80),
+    ("75%", 0.75),
+    ("70%", 0.70),
     ("60%", 0.60),
-    ("40%", 0.40),
 ]
 
 
@@ -122,15 +131,39 @@ def save_config(cfg: dict):
 
 def load_tray_icon() -> Image.Image:
     """Load the monochrome SVG icon as a PIL Image for pystray."""
+    import io
+
+    # macOS: use AppKit's native SVG rendering
+    if IS_MACOS:
+        try:
+            import AppKit
+            import Foundation
+            svg_data = Foundation.NSData.dataWithContentsOfFile_(str(ICON_PATH))
+            if svg_data:
+                ns_image = AppKit.NSImage.alloc().initWithData_(svg_data)
+                if ns_image:
+                    # Render to 64x64 PNG via NSBitmapImageRep
+                    ns_image.setSize_(Foundation.NSMakeSize(64, 64))
+                    tiff_data = ns_image.TIFFRepresentation()
+                    bitmap = AppKit.NSBitmapImageRep.imageRepWithData_(tiff_data)
+                    png_data = bitmap.representationUsingType_properties_(
+                        AppKit.NSBitmapImageFileTypePNG, None
+                    )
+                    return Image.open(io.BytesIO(png_data.bytes()))
+        except Exception as e:
+            print(f"[overlay] AppKit SVG load failed: {e}", file=sys.stderr, flush=True)
+
+    # Linux/fallback: use cairosvg
     try:
         import cairosvg
-        import io
         png_data = cairosvg.svg2png(url=str(ICON_PATH), output_width=64, output_height=64)
         return Image.open(io.BytesIO(png_data))
     except Exception:
-        # Fallback: generate a simple white square icon
-        img = Image.new("RGBA", (64, 64), (255, 255, 255, 200))
-        return img
+        pass
+
+    # Last resort: white square
+    img = Image.new("RGBA", (64, 64), (255, 255, 255, 200))
+    return img
 
 
 # ---------------------------------------------------------------------------
@@ -291,14 +324,13 @@ class VmuxOverlay:
             print(f"[overlay] screen {i}: x={m.x} w={m.width}{primary}", file=sys.stderr, flush=True)
         print(f"[overlay] config: pos={self.config.get('position')}, screen={self.config.get('screen')}, width={self.config.get('width')}", file=sys.stderr, flush=True)
 
-        # Start tray in a daemon thread
-        tray_thread = threading.Thread(target=self._run_tray, daemon=True)
-        tray_thread.start()
+        if IS_MACOS:
+            self._start_macos()
+        else:
+            self._start_linux()
 
-        # Start hotkey listener
-        self._start_hotkeys()
-
-        # Create the webview window on main thread (required by most backends)
+    def _create_webview_window(self):
+        """Create the webview window (call before starting the event loop)."""
         relay_url = self.config["relay_url"].rstrip("/")
         sep = "&" if "?" in relay_url else "?"
         overlay_url = f"{relay_url}{sep}overlay=true"
@@ -315,11 +347,79 @@ class VmuxOverlay:
             hidden=False,
         )
         self.visible = True
-
-        # Apply opacity and permissions after window is ready
         self.window.events.loaded += self._on_window_loaded
 
-        # Persistent cookies/storage and non-private mode
+    def _start_macos(self):
+        """macOS startup: tray + webview share the main thread's Cocoa event loop."""
+        import AppKit
+        import Foundation
+
+        # Hide from Dock — LSUIElement in the .app bundle's Info.plist handles
+        # this natively, but set it programmatically too as a fallback for
+        # running outside the app bundle (e.g., during development).
+        try:
+            app = AppKit.NSApplication.sharedApplication()
+            app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+            print("[overlay] set activation policy to Accessory (no dock icon)", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[overlay] could not hide dock icon: {e}", file=sys.stderr, flush=True)
+
+        # Inject NSMicrophoneUsageDescription into runtime Info.plist
+        try:
+            bundle = AppKit.NSBundle.mainBundle()
+            info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+            if info is not None:
+                info['NSMicrophoneUsageDescription'] = (
+                    'Voice multiplexer requires microphone access for WebRTC audio.'
+                )
+                print("[overlay] injected NSMicrophoneUsageDescription", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[overlay] mic usage description injection failed: {e}", file=sys.stderr, flush=True)
+
+        # Patch pywebview's BrowserDelegate to auto-grant media capture permissions
+        self._patch_wkwebview_media_permissions()
+
+        # pywebview's cocoa.py sets ActivationPolicyRegular (dock icon) at import
+        # time (line 59). Override it AFTER import to hide from dock.
+        try:
+            app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+            print("[overlay] re-set activation policy after pywebview import", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[overlay] re-set activation policy failed: {e}", file=sys.stderr, flush=True)
+
+        # Start hotkey listener (daemon thread)
+        self._start_hotkeys()
+
+        # Create tray icon on the main thread (required by Cocoa),
+        # then run_detached so it doesn't start its own event loop.
+        self._setup_tray()
+        self.tray.run_detached()
+
+        # Create webview window and start the Cocoa event loop
+        # (pywebview drives NSApp.run(), which also processes tray events)
+        self._create_webview_window()
+
+        # Re-apply Accessory policy right before starting the event loop,
+        # in case pywebview's window creation resets it again.
+        try:
+            app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+        except Exception:
+            pass
+
+        storage_dir = str(CONFIG_DIR / "webdata")
+        webview.start(debug=False, private_mode=False, storage_path=storage_dir)
+
+    def _start_linux(self):
+        """Linux startup: tray in daemon thread, webview on main thread."""
+        # Start tray in a daemon thread
+        tray_thread = threading.Thread(target=self._run_tray, daemon=True)
+        tray_thread.start()
+
+        # Start hotkey listener
+        self._start_hotkeys()
+
+        # Create webview window on main thread (required by GTK backends)
+        self._create_webview_window()
         storage_dir = str(CONFIG_DIR / "webdata")
         webview.start(debug=False, private_mode=False, storage_path=storage_dir)
 
@@ -328,6 +428,10 @@ class VmuxOverlay:
         print("[overlay] window loaded event fired", file=sys.stderr, flush=True)
         self._apply_window_setup()
         self._grant_media_permissions()
+        # Apply initial opacity
+        opacity = self.config.get("opacity", 0.96)
+        if opacity < 1.0:
+            self._apply_opacity(opacity)
 
     def _apply_window_setup(self):
         """Apply GTK window hints and initial position on Linux."""
@@ -340,10 +444,64 @@ class VmuxOverlay:
         # Reposition handles DOCK → move → NORMAL cycle
         self._reposition()
 
-    # -- Media permissions (Linux/webkit2gtk) ----------------------------------
+    # -- Media permissions -----------------------------------------------------
 
     def _grant_media_permissions(self):
-        """Auto-grant microphone/camera permissions for webkit2gtk."""
+        """Auto-grant microphone/camera permissions."""
+        if IS_MACOS:
+            self._grant_media_permissions_macos()
+        else:
+            self._grant_media_permissions_linux()
+
+    @staticmethod
+    def _patch_wkwebview_media_permissions():
+        """Monkey-patch pywebview's BrowserDelegate to auto-grant media capture.
+
+        Must be called BEFORE webview.start() / window creation.
+        """
+        try:
+            import objc
+            from webview.platforms.cocoa import BrowserView
+
+            # Add requestMediaCapturePermissionFor delegate method
+            def _media_capture_handler(self, webview, origin, frame, capture_type, handler):
+                # WKPermissionDecision.grant = 1
+                handler(1)
+                print("[overlay] auto-granted media capture permission", file=sys.stderr, flush=True)
+
+            objc.classAddMethod(
+                BrowserView.BrowserDelegate,
+                b'webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:',
+                objc.selector(
+                    _media_capture_handler,
+                    selector=b'webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:',
+                    signature=b'v@:@@@q@?',
+                ),
+            )
+            print("[overlay] patched BrowserDelegate for media capture", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[overlay] media delegate patch failed: {e}", file=sys.stderr, flush=True)
+
+    def _grant_media_permissions_macos(self):
+        """Enable media devices on the WKWebView instance (post-creation)."""
+        try:
+            from webview.platforms.cocoa import BrowserView
+
+            bv = BrowserView.instances.get(self.window.uid)
+            if not bv or not hasattr(bv, 'webview'):
+                print("[overlay] could not access WKWebView for permissions", file=sys.stderr, flush=True)
+                return
+
+            # Set private WKPreferences to enable media devices on HTTP
+            prefs = bv.webview.configuration().preferences()
+            prefs._setMediaDevicesEnabled_(True)
+            prefs._setMediaCaptureRequiresSecureConnection_(False)
+            print("[overlay] enabled WKWebView media devices (HTTP allowed)", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[overlay] WKWebView media preferences failed: {e}", file=sys.stderr, flush=True)
+
+    def _grant_media_permissions_linux(self):
+        """Auto-grant microphone/camera permissions for webkit2gtk on Linux."""
         try:
             from webview.platforms.gtk import BrowserView
             import gi
@@ -519,6 +677,23 @@ class VmuxOverlay:
         self.config["opacity"] = val
         save_config(self.config)
         if self.window and self.visible:
+            self._apply_opacity(val)
+
+    def _apply_opacity(self, val: float):
+        """Apply opacity to the window using platform-appropriate API."""
+        if IS_MACOS:
+            try:
+                # pywebview cocoa backend sets window.native = NSWindow
+                ns_window = getattr(self.window, 'native', None)
+                if ns_window and hasattr(ns_window, 'setAlphaValue_'):
+                    ns_window.setAlphaValue_(val)
+                    print(f"[overlay] set NSWindow alpha to {val}", file=sys.stderr, flush=True)
+                    return
+                # Fallback: CSS opacity
+                self.window.evaluate_js(f"document.body.style.opacity = '{val}'")
+            except Exception as e:
+                print(f"[overlay] macOS opacity failed: {e}", file=sys.stderr, flush=True)
+        else:
             native = getattr(self.window, 'native', None)
             if native and _glib:
                 _glib.idle_add(native.set_opacity, val)
@@ -565,12 +740,139 @@ class VmuxOverlay:
             self.window.move(x, y)
             self.window.resize(w, h)
 
+    def _apply_shortcut_change(self):
+        """Apply a shortcut config change. Restarts hotkeys and updates tray."""
+        if IS_MACOS:
+            from PyObjCTools import AppHelper
+
+            def _do_apply():
+                try:
+                    self._start_hotkeys_macos()
+                except Exception as e:
+                    print(f"[overlay] hotkey restart failed: {e}", file=sys.stderr, flush=True)
+                try:
+                    if self.tray:
+                        self.tray.menu = self._build_menu()
+                except Exception as e:
+                    print(f"[overlay] tray menu update failed: {e}", file=sys.stderr, flush=True)
+
+            AppHelper.callAfter(_do_apply)
+        else:
+            self._start_hotkeys()
+            self._update_tray_menu()
+
     # -- Hotkeys -------------------------------------------------------------
 
     def _start_hotkeys(self):
         """Start the global hotkey listener."""
+        if IS_MACOS:
+            self._start_hotkeys_macos()
+        else:
+            self._start_hotkeys_linux()
+
+    def _start_hotkeys_macos(self):
+        """macOS: use Carbon RegisterEventHotKey via QuickMacHotKey.
+
+        This does NOT require Accessibility permissions (unlike NSEvent monitors
+        or CGEventTap). It uses the Carbon Event Manager which integrates with
+        the NSApp run loop that pywebview drives.
+        """
+        # Unregister existing hotkeys
+        for handler in getattr(self, '_hotkey_handlers', []):
+            try:
+                handler.unregister()
+            except Exception:
+                pass
+        self._hotkey_handlers = []
+
+        from quickmachotkey import quickHotKey, mask
+
+        toggle_win = self.config.get("shortcut_toggle_window", "<ctrl>+<shift>+v")
+        toggle_mic = self.config.get("shortcut_toggle_mic", "<ctrl>+<shift>+m")
+
+        if toggle_win:
+            parsed = self._parse_shortcut_carbon(toggle_win)
+            if parsed:
+                keycode, mod_mask = parsed
+                overlay = self  # closure ref
+
+                @quickHotKey(virtualKey=keycode, modifierMask=mod_mask)
+                def _toggle_win():
+                    threading.Thread(target=overlay.toggle_window, daemon=True).start()
+
+                self._hotkey_handlers.append(_toggle_win)
+                print(f"[overlay] registered toggle-window: {toggle_win}", file=sys.stderr, flush=True)
+
+        if toggle_mic:
+            parsed = self._parse_shortcut_carbon(toggle_mic)
+            if parsed:
+                keycode, mod_mask = parsed
+                overlay = self
+
+                @quickHotKey(virtualKey=keycode, modifierMask=mod_mask)
+                def _toggle_mic():
+                    threading.Thread(target=overlay.toggle_mic, daemon=True).start()
+
+                self._hotkey_handlers.append(_toggle_mic)
+                print(f"[overlay] registered toggle-mic: {toggle_mic}", file=sys.stderr, flush=True)
+
+    @staticmethod
+    def _parse_shortcut_carbon(pynput_str: str):
+        """Convert pynput-format shortcut to (keyCode, carbonModifierMask) tuple.
+
+        Returns (keyCode, mask) for use with QuickMacHotKey/Carbon RegisterEventHotKey.
+        """
+        from quickmachotkey.constants import controlKey, shiftKey, optionKey, cmdKey
+
+        # Virtual key codes (same as kVK_* constants)
+        KEY_CODES = {
+            'a': 0, 'b': 11, 'c': 8, 'd': 2, 'e': 14, 'f': 3, 'g': 5,
+            'h': 4, 'i': 34, 'j': 38, 'k': 40, 'l': 37, 'm': 46, 'n': 45,
+            'o': 31, 'p': 35, 'q': 12, 'r': 15, 's': 1, 't': 17, 'u': 32,
+            'v': 9, 'w': 13, 'x': 7, 'y': 16, 'z': 6,
+            '0': 29, '1': 18, '2': 19, '3': 20, '4': 21,
+            '5': 23, '6': 22, '7': 26, '8': 28, '9': 25,
+            'f1': 122, 'f2': 120, 'f3': 99, 'f4': 118, 'f5': 96,
+            'f6': 97, 'f7': 98, 'f8': 100, 'f9': 101, 'f10': 109,
+            'f11': 103, 'f12': 111,
+            'space': 49, 'tab': 48, 'return': 36, 'escape': 53,
+            'delete': 51, 'backspace': 51,
+            '[': 33, ']': 30, '\\': 42, ';': 41, "'": 39,
+            ',': 43, '.': 47, '/': 44, '`': 50, '-': 27, '=': 24,
+        }
+
+        MODIFIER_MAP = {
+            '<ctrl>': controlKey,
+            '<shift>': shiftKey,
+            '<alt>': optionKey,
+            '<cmd>': cmdKey,
+        }
+
+        parts = pynput_str.split("+")
+        mod_mask = 0
+        keycode = None
+
+        for p in parts:
+            p = p.strip().lower()
+            if p in MODIFIER_MAP:
+                mod_mask |= MODIFIER_MAP[p]
+            elif p in KEY_CODES:
+                keycode = KEY_CODES[p]
+            else:
+                print(f"[overlay] unknown key in shortcut: {p}", file=sys.stderr, flush=True)
+                return None
+
+        if keycode is None:
+            return None
+        return (keycode, mod_mask)
+
+    def _start_hotkeys_linux(self):
+        """Linux: use pynput GlobalHotKeys."""
         if self.hotkey_listener:
-            self.hotkey_listener.stop()
+            try:
+                self.hotkey_listener.stop()
+            except Exception:
+                pass
 
         bindings = {}
         toggle_win = self.config.get("shortcut_toggle_window", "<ctrl>+<shift>+v")
@@ -592,45 +894,182 @@ class VmuxOverlay:
     # -- Shortcut rebinding --------------------------------------------------
 
     def rebind_shortcut(self, name: str):
-        """Open a capture dialog to rebind a shortcut.
+        """Open a key capture overlay inside the main webview window.
 
         Args:
             name: 'shortcut_toggle_window' or 'shortcut_toggle_mic'
         """
-        api = CaptureApi(self, name)
-        self._capture_api = api
+        if not self.window:
+            return
 
-        def _open_capture():
-            capture_win = webview.create_window(
-                title="Rebind Shortcut",
-                html=CAPTURE_HTML,
-                width=340,
-                height=220,
-                resizable=False,
-                on_top=True,
-                js_api=api,
-            )
+        # Show window if hidden so user can see the capture dialog
+        if not self.visible:
+            with self._lock:
+                self._show_window()
 
-            # Wait for result in a thread
-            def _wait():
-                api.done.wait(timeout=60)
-                if api.result:
-                    self.config[name] = api.result
-                    save_config(self.config)
-                    self._start_hotkeys()
+        # Temporarily unregister existing hotkeys so they don't fire during capture
+        if IS_MACOS:
+            for handler in getattr(self, '_hotkey_handlers', []):
                 try:
-                    capture_win.destroy()
+                    handler.unregister()
                 except Exception:
                     pass
-                # Rebuild tray menu to show updated shortcut
-                self._update_tray_menu()
+            print("[overlay] hotkeys suspended for capture", file=sys.stderr, flush=True)
 
-            t = threading.Thread(target=_wait, daemon=True)
-            t.start()
+        # Inject a key capture overlay into the existing webview
+        # The overlay reports results via document.title changes that we poll
+        capture_js = r"""
+        (function() {
+            if (document.getElementById('vmux-capture-overlay')) return;
+            var overlay = document.createElement('div');
+            overlay.id = 'vmux-capture-overlay';
+            overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:999999;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:-apple-system,sans-serif;color:#e0e0e0;';
+            overlay.innerHTML = '<h3 style="margin:0 0 16px;font-size:16px;color:#fff">Press your key combination</h3>' +
+                '<div id="vmux-combo" style="font-size:22px;font-weight:bold;color:#7ecfff;min-height:32px;margin:12px 0">Waiting...</div>' +
+                '<p style="font-size:12px;color:#888;margin-top:12px">Hold modifier keys and press a regular key</p>' +
+                '<div style="margin-top:20px;display:flex;gap:12px">' +
+                '<button id="vmux-confirm" style="padding:8px 20px;border:1px solid #4a8a4a;border-radius:6px;background:#2d5a2d;color:#ddd;cursor:pointer;font-size:14px">Confirm</button>' +
+                '<button id="vmux-cancel" style="padding:8px 20px;border:1px solid #444;border-radius:6px;background:#2a2a3e;color:#ddd;cursor:pointer;font-size:14px">Cancel</button>' +
+                '</div>';
+            document.body.appendChild(overlay);
 
-        # Must create window from a thread-safe context
-        # Use webview's built-in thread safety
-        threading.Thread(target=_open_capture, daemon=True).start()
+            var currentKeys = new Set();
+            var lastCombo = '';
+            var bestDisplay = '';
+
+            function keyName(e) {
+                var modifiers = ['Control', 'Shift', 'Alt', 'Meta'];
+                if (modifiers.indexOf(e.key) >= 0) return e.key;
+                // Map e.code first (reliable, not affected by modifiers)
+                var codeMap = {
+                    'Space': 'space', 'Tab': 'tab', 'Enter': 'return',
+                    'Escape': 'escape', 'Backspace': 'backspace', 'Delete': 'delete',
+                    'ArrowUp': 'up', 'ArrowDown': 'down', 'ArrowLeft': 'left', 'ArrowRight': 'right',
+                };
+                if (e.code && codeMap[e.code]) return codeMap[e.code];
+                // Function keys (F1-F12)
+                if (e.code && e.code.match(/^F\d+$/)) return e.code.toLowerCase();
+                // Letter keys
+                if (e.code && e.code.startsWith('Key')) return e.code.slice(3).toLowerCase();
+                // Digit keys
+                if (e.code && e.code.startsWith('Digit')) return e.code.slice(5);
+                // Punctuation and others — use e.key as fallback
+                return e.key;
+            }
+
+            function toPynput(keys) {
+                var map = {'Control':'<ctrl>','Shift':'<shift>','Alt':'<alt>','Meta':'<cmd>'};
+                var mods = [], regular = [];
+                keys.forEach(function(k) { if (map[k]) mods.push(map[k]); else regular.push(k.toLowerCase()); });
+                return mods.concat(regular).join('+');
+            }
+
+            function onKeyDown(e) {
+                e.preventDefault(); e.stopPropagation();
+                var name = keyName(e);
+                console.log('[capture] keydown:', e.key, e.code, '->', name);
+                currentKeys.add(name);
+                var display = Array.from(currentKeys).join(' + ');
+                var combo = toPynput(currentKeys);
+                // Keep the best combo (most keys held simultaneously)
+                if (currentKeys.size > bestDisplay.split(' + ').filter(Boolean).length || !bestDisplay) {
+                    bestDisplay = display;
+                    lastCombo = combo;
+                }
+                document.getElementById('vmux-combo').textContent = bestDisplay + ' [' + lastCombo + ']';
+            }
+            function onKeyUp(e) {
+                // Remove released key from current set but keep bestDisplay/lastCombo
+                currentKeys.delete(keyName(e));
+                // When all keys released, reset for next attempt
+                if (currentKeys.size === 0) {
+                    // Don't clear bestDisplay/lastCombo — user needs to click confirm
+                }
+            }
+
+            // Use capture phase to intercept before WKWebView defaults
+            document.addEventListener('keydown', onKeyDown, true);
+            document.addEventListener('keyup', onKeyUp, true);
+            // Also prevent default on the overlay itself to stop scrolling
+            overlay.addEventListener('keydown', function(e) { e.preventDefault(); }, true);
+
+            function cleanup() {
+                document.removeEventListener('keydown', onKeyDown, true);
+                document.removeEventListener('keyup', onKeyUp, true);
+                overlay.remove();
+            }
+
+            document.getElementById('vmux-confirm').onclick = function() {
+                if (lastCombo) document.title = 'VMUX_SHORTCUT:' + lastCombo;
+                else document.title = 'VMUX_SHORTCUT_CANCEL';
+                cleanup();
+            };
+            document.getElementById('vmux-cancel').onclick = function() {
+                document.title = 'VMUX_SHORTCUT_CANCEL';
+                cleanup();
+            };
+        })();
+        """
+        self.window.evaluate_js(capture_js)
+
+        # Poll for result via document.title
+        def _poll():
+            try:
+                for _ in range(120):  # 60 seconds
+                    time.sleep(0.5)
+                    try:
+                        if not self.window:
+                            return
+                        title = self.window.evaluate_js("document.title")
+                        if not title:
+                            continue
+                        if title.startswith("VMUX_SHORTCUT:"):
+                            combo = title.replace("VMUX_SHORTCUT:", "")
+                            print(f"[overlay] captured shortcut: {combo}", file=sys.stderr, flush=True)
+                            # Validate: must have at least one non-modifier key
+                            parts = combo.split("+")
+                            modifiers = {"<ctrl>", "<shift>", "<alt>", "<cmd>"}
+                            has_regular = any(p.strip() not in modifiers for p in parts if p.strip())
+                            if not has_regular:
+                                print(f"[overlay] invalid shortcut (modifiers only): {combo}", file=sys.stderr, flush=True)
+                                try:
+                                    self.window.evaluate_js("document.title = 'vmux-overlay'")
+                                except Exception:
+                                    pass
+                                # Re-register existing hotkeys
+                                self._apply_shortcut_change()
+                                return
+                            self.config[name] = combo
+                            save_config(self.config)
+                            # Apply changes on the main thread to avoid Cocoa crashes
+                            self._apply_shortcut_change()
+                            try:
+                                self.window.evaluate_js("document.title = 'vmux-overlay'")
+                            except Exception:
+                                pass
+                            return
+                        elif title == "VMUX_SHORTCUT_CANCEL":
+                            try:
+                                self.window.evaluate_js("document.title = 'vmux-overlay'")
+                            except Exception:
+                                pass
+                            # Re-register existing hotkeys
+                            self._apply_shortcut_change()
+                            return
+                    except Exception as e:
+                        print(f"[overlay] poll error: {e}", file=sys.stderr, flush=True)
+                        continue
+            except Exception as e:
+                print(f"[overlay] _poll crashed: {e}", file=sys.stderr, flush=True)
+            # Timeout — clean up and re-register hotkeys
+            try:
+                if self.window:
+                    self.window.evaluate_js("var el = document.getElementById('vmux-capture-overlay'); if(el) el.remove(); document.title = 'vmux-overlay';")
+            except Exception:
+                pass
+            self._apply_shortcut_change()
+
+        threading.Thread(target=_poll, daemon=True).start()
 
     # -- Tray icon -----------------------------------------------------------
 
@@ -719,8 +1158,8 @@ class VmuxOverlay:
         )
         return menu
 
-    def _run_tray(self):
-        """Run the system tray icon (called in a daemon thread)."""
+    def _setup_tray(self):
+        """Create the tray icon (does not start an event loop)."""
         icon_image = load_tray_icon()
         self.tray = pystray.Icon(
             name="vmux-overlay",
@@ -729,12 +1168,31 @@ class VmuxOverlay:
             menu=self._build_menu(),
         )
 
-        # On Linux, pystray may need to be told to use AppIndicator
+    def _run_tray(self):
+        """Run the system tray icon (called in a daemon thread on Linux)."""
+        self._setup_tray()
         self.tray.run()
 
     def _update_tray_menu(self):
-        """Rebuild the tray menu (e.g. after shortcut rebinding)."""
-        if self.tray:
+        """Rebuild the tray menu (e.g. after shortcut rebinding).
+
+        On macOS, NSStatusBar operations must happen on the main thread.
+        """
+        if not self.tray:
+            return
+        if IS_MACOS:
+            try:
+                from PyObjCTools import AppHelper
+                def _do_update():
+                    try:
+                        self.tray.menu = self._build_menu()
+                        self.tray.update_menu()
+                    except Exception as e:
+                        print(f"[overlay] tray menu update error: {e}", file=sys.stderr, flush=True)
+                AppHelper.callAfter(_do_update)
+            except Exception as e:
+                print(f"[overlay] could not schedule tray update: {e}", file=sys.stderr, flush=True)
+        else:
             self.tray.menu = self._build_menu()
             self.tray.update_menu()
 
