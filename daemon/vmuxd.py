@@ -259,6 +259,11 @@ def _build_service_configs():
                 "VOICES_DIR": "src/voices/v1_0",
                 "DEVICE_TYPE": kokoro_device,
                 "PYTORCH_ENABLE_MPS_FALLBACK": "1",
+                # Force full 32-bit precision on MPS to match CPU audio quality.
+                # Without this, MPS uses mixed 16/32-bit precision which produces
+                # audibly different (breathier, less clean) TTS output.
+                "PYTORCH_MPS_HIGH_WATERMARK_RATIO": os.environ.get("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0"),
+                "TORCH_FLOAT32_MATMUL_PRECISION": os.environ.get("TORCH_FLOAT32_MATMUL_PRECISION", "highest"),
             },
             cwd=str(kokoro_repo),
             health_url=f"http://127.0.0.1:{kokoro_port}/health",
