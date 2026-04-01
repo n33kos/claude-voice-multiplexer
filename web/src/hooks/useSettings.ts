@@ -5,12 +5,19 @@ export type ThemeMode = 'system' | 'light' | 'dark'
 /** Position for a context bar field: hidden or left/center/right. */
 export type FieldPosition = 'hidden' | 'left' | 'center' | 'right'
 
+/** Visibility for the progress bar (only hidden/visible). */
+export type BarVisibility = 'hidden' | 'visible'
+
 /** Configurable context bar field placement. */
 export interface ContextBarFields {
   model: FieldPosition
   contextUsage: FieldPosition
   cost: FieldPosition
-  contextBar: FieldPosition  // the progress bar itself
+  rateLimit5h: FieldPosition
+  rateLimit7d: FieldPosition
+  workingDir: FieldPosition
+  duration: FieldPosition
+  contextBar: BarVisibility
 }
 
 export interface Settings {
@@ -30,7 +37,11 @@ export const DEFAULT_CONTEXT_BAR_FIELDS: ContextBarFields = {
   model: 'left',
   contextUsage: 'right',
   cost: 'hidden',
-  contextBar: 'left',  // spans full width below, position just controls visibility
+  rateLimit5h: 'hidden',
+  rateLimit7d: 'hidden',
+  workingDir: 'hidden',
+  duration: 'hidden',
+  contextBar: 'visible',
 }
 
 const DEFAULTS: Settings = {

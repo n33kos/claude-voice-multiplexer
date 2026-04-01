@@ -13,6 +13,10 @@ export interface ContextUsage {
   used_tokens: number;
   percentage: number;
   cost_usd?: number | null;
+  cost_duration_ms?: number | null;
+  cwd?: string;
+  rate_limit_5h?: number | null;
+  rate_limit_7d?: number | null;
 }
 
 interface ContextBarProps {
@@ -38,6 +42,14 @@ function formatCost(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
+function formatDuration(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSec / 3600);
+  const minutes = Math.floor((totalSec % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
 function barColor(pct: number): string {
   if (pct < 50) return "var(--color-status-green)";
   if (pct < 80) return "var(--color-status-yellow)";
@@ -47,6 +59,11 @@ function barColor(pct: number): string {
 /** Short model display name — strip common prefixes. */
 function modelLabel(model: string): string {
   return model.replace("claude-", "").replace(/-/g, " ");
+}
+
+/** Shorten a path to just the last directory name. */
+function shortCwd(cwd: string): string {
+  return cwd.split("/").filter(Boolean).pop() || cwd;
 }
 
 /** Model switcher widget with dropdown. */
@@ -139,6 +156,30 @@ function CostDisplay({ usage }: { usage: ContextUsage | null }) {
   return <span className={styles.Tokens}>{formatCost(usage.cost_usd)}</span>;
 }
 
+/** 5-hour rate limit widget. */
+function RateLimit5h({ usage }: { usage: ContextUsage | null }) {
+  if (usage?.rate_limit_5h == null) return <span className={styles.Tokens}>5h: --</span>;
+  return <span className={styles.Tokens}>5h: {usage.rate_limit_5h.toFixed(1)}%</span>;
+}
+
+/** 7-day rate limit widget. */
+function RateLimit7d({ usage }: { usage: ContextUsage | null }) {
+  if (usage?.rate_limit_7d == null) return <span className={styles.Tokens}>7d: --</span>;
+  return <span className={styles.Tokens}>7d: {usage.rate_limit_7d.toFixed(1)}%</span>;
+}
+
+/** Working directory widget. */
+function WorkingDir({ usage }: { usage: ContextUsage | null }) {
+  if (!usage?.cwd) return <span className={styles.Tokens}>--</span>;
+  return <span className={styles.Tokens} title={usage.cwd}>{shortCwd(usage.cwd)}</span>;
+}
+
+/** Session duration widget. */
+function Duration({ usage }: { usage: ContextUsage | null }) {
+  if (!usage?.cost_duration_ms) return <span className={styles.Tokens}>--</span>;
+  return <span className={styles.Tokens}>{formatDuration(usage.cost_duration_ms)}</span>;
+}
+
 /** Map field IDs to their rendered widgets. */
 function renderField(
   fieldId: string,
@@ -152,6 +193,14 @@ function renderField(
       return <TokenUsage key="contextUsage" usage={usage} />;
     case "cost":
       return <CostDisplay key="cost" usage={usage} />;
+    case "rateLimit5h":
+      return <RateLimit5h key="rateLimit5h" usage={usage} />;
+    case "rateLimit7d":
+      return <RateLimit7d key="rateLimit7d" usage={usage} />;
+    case "workingDir":
+      return <WorkingDir key="workingDir" usage={usage} />;
+    case "duration":
+      return <Duration key="duration" usage={usage} />;
     default:
       return null;
   }

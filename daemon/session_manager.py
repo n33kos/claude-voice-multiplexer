@@ -662,10 +662,43 @@ class SessionManager:
 
             model = model_info.get("id", "")
             context_window = ctx.get("context_window_size", 200_000) or 200_000
-            total_input = ctx.get("total_input_tokens", 0) or 0
-            total_output = ctx.get("total_output_tokens", 0) or 0
-            used_tokens = total_input + total_output
-            percentage = ctx.get("used_percentage", 0) or 0
+
+            # Claude always reports 200k as the base window size.
+            # When exceeds_200k_tokens is True the session has been extended
+            # to the full 1M context window.
+            exceeds_200k = data.get("exceeds_200k_tokens", False)
+            if exceeds_200k:
+                context_window = 1_000_000
+
+            # Current context usage — sum all token types in current_usage
+            # (NOT total_input/output which are cumulative session totals)
+            used_tokens = (
+                (current.get("input_tokens", 0) or 0)
+                + (current.get("output_tokens", 0) or 0)
+                + (current.get("cache_creation_input_tokens", 0) or 0)
+                + (current.get("cache_read_input_tokens", 0) or 0)
+            )
+
+            # Recalculate percentage with corrected context window
+            percentage = round((used_tokens / context_window) * 100, 1) if context_window > 0 else 0
+
+            # Rate limit info — not yet in statusline JSON but expected
+            # format is {five_hour: {utilization: 0-100}, seven_day: {...}}
+            # Also handle alternate key names defensively.
+            rate_limits = data.get("rate_limits") or {}
+            five_hour = rate_limits.get("five_hour") or {}
+            seven_day = rate_limits.get("seven_day") or {}
+
+            def _pct(obj: dict) -> float | None:
+                """Extract percentage from a rate limit object, handling key variants."""
+                for key in ("utilization", "used_percentage"):
+                    val = obj.get(key)
+                    if val is not None:
+                        try:
+                            return float(val)
+                        except (TypeError, ValueError):
+                            pass
+                return None
 
             return {
                 "model": model,
@@ -678,6 +711,10 @@ class SessionManager:
                 "used_tokens": used_tokens,
                 "percentage": percentage,
                 "cost_usd": cost.get("total_cost_usd"),
+                "cost_duration_ms": cost.get("total_duration_ms"),
+                "cwd": data.get("cwd", ""),
+                "rate_limit_5h": _pct(five_hour),
+                "rate_limit_7d": _pct(seven_day),
                 "source": "statusline",
             }
 
@@ -824,7 +861,7 @@ class SessionManager:
                             logger.warning(f"[sessions] zombie detected: {session.tmux_session}")
                             async with self._lock:
                                 session.status = "zombie"
-                            await self.interrupt(session.relay_session_id)
+                            await self.hard_interrupt(session.relay_session_id)
 
     async def _reap_caffeinate(self):
         """Kill excess caffeinate processes spawned by managed Claude sessions.

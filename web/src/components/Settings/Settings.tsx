@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import classNames from "classnames";
-import type { ThemeMode, FieldPosition } from "../../hooks/useSettings";
+import type { ThemeMode, FieldPosition, BarVisibility } from "../../hooks/useSettings";
 import type { SettingsProps } from "./Settings.types";
 import { useVoiceSettings } from "../../hooks/useVoiceSettings";
 import type { VoiceOption } from "../../hooks/useVoiceSettings";
@@ -271,10 +271,13 @@ export function Settings({
             <div className={styles.SubSection}>
               {(
                 [
-                  { key: "model" as const, label: "Model switcher", desc: "Active model with switch dropdown" },
-                  { key: "contextUsage" as const, label: "Context usage", desc: "Token count and percentage" },
-                  { key: "cost" as const, label: "Session cost", desc: "Running cost in USD" },
-                  { key: "contextBar" as const, label: "Progress bar", desc: "Visual context usage bar" },
+                  { key: "model", label: "Model switcher", desc: "Active model with switch dropdown" },
+                  { key: "contextUsage", label: "Context usage", desc: "Token count and percentage" },
+                  { key: "cost", label: "Session cost", desc: "Running cost in USD" },
+                  { key: "rateLimit5h", label: "5-hour usage", desc: "Rolling 5-hour rate limit %" },
+                  { key: "rateLimit7d", label: "7-day usage", desc: "Rolling 7-day rate limit %" },
+                  { key: "workingDir", label: "Working directory", desc: "Session working directory" },
+                  { key: "duration", label: "Duration", desc: "Session elapsed time" },
                 ] as const
               ).map((field) => (
                 <div key={field.key} className={styles.SettingRow}>
@@ -301,6 +304,27 @@ export function Settings({
                   </select>
                 </div>
               ))}
+              <div className={styles.SettingRow}>
+                <div className={styles.SettingLabel}>
+                  <span className={styles.SettingTitle}>Progress bar</span>
+                  <span className={styles.SettingDescription}>Visual context usage bar</span>
+                </div>
+                <select
+                  value={settings.contextBarFields.contextBar}
+                  onChange={(e) =>
+                    onUpdate({
+                      contextBarFields: {
+                        ...settings.contextBarFields,
+                        contextBar: e.target.value as BarVisibility,
+                      },
+                    })
+                  }
+                  className={styles.FieldPositionSelect}
+                >
+                  <option value="visible">Visible</option>
+                  <option value="hidden">Hidden</option>
+                </select>
+              </div>
             </div>
           )}
 
