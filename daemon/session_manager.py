@@ -613,30 +613,19 @@ class SessionManager:
         async with self._lock:
             return [s.to_dict() for s in self._sessions.values()]
 
-    # --- Model context window sizes ---
-    _MODEL_CONTEXT_WINDOWS = {
-        "claude-opus-4-6": 1_000_000,
-        "claude-sonnet-4-6": 200_000,
-        "claude-haiku-4-5": 200_000,
-    }
-    _DEFAULT_CONTEXT_WINDOW = 200_000
+    # --- Statusline data directory ---
+    _STATUSLINE_DIR = Path.home() / ".claude" / "voice-multiplexer" / "sessions"
 
     async def get_context_usage(self, session_id: str) -> Optional[dict]:
-        """Read Claude's JSONL conversation log to compute context usage.
-
-        Finds the Claude PID via tmux pane, reads ~/.claude/sessions/{pid}.json
-        for the sessionId and cwd, then reads the corresponding JSONL file from
-        the end to find the most recent assistant message with usage data.
-        """
+        """Read usage data from the statusline-written per-session JSON file."""
         async with self._lock:
             session = self._find_session(session_id)
             if not session:
                 return None
             tmux_session = session.tmux_session
-            session_cwd = session.cwd
 
         try:
-            # Step 1: Get the tmux pane PID
+            # Find the Claude PID to get its session_id (which is the filename)
             pane_pid_str = await self._run_output([
                 "tmux", "list-panes", "-t", tmux_session, "-F", "#{pane_pid}"
             ])
@@ -644,42 +633,56 @@ class SessionManager:
             if not pane_pid.isdigit():
                 return None
 
-            # Step 2: Find claude child process — walk the process tree from the
-            # pane shell PID to find a 'claude' process (may be a grandchild).
             claude_pid = await self._find_claude_pid(int(pane_pid))
             if not claude_pid:
                 return None
 
-            # Step 3: Read ~/.claude/sessions/{pid}.json
+            # Read Claude's own session file to get its session ID
             session_file = Path.home() / ".claude" / "sessions" / f"{claude_pid}.json"
             if not session_file.exists():
                 return None
 
             session_data = json.loads(session_file.read_text())
             claude_session_id = session_data.get("sessionId")
-            cwd = session_data.get("cwd", session_cwd)
             if not claude_session_id:
                 return None
 
-            # Step 4: Encode cwd to find the project directory
-            # Claude encodes: /Users/foo/bar → -Users-foo-bar
-            encoded_cwd = cwd.replace("/", "-")
-            if encoded_cwd.startswith("-"):
-                encoded_cwd = encoded_cwd  # keep leading dash (Claude's convention)
-
-            jsonl_path = Path.home() / ".claude" / "projects" / encoded_cwd / f"{claude_session_id}.jsonl"
-            if not jsonl_path.exists():
+            # Now look for our statusline-written file
+            statusline_file = self._STATUSLINE_DIR / f"{claude_session_id}.json"
+            if not statusline_file.exists():
                 return None
 
-            # Step 5: Read from the end of the JSONL to find last assistant usage
-            usage_data = await asyncio.to_thread(self._read_last_usage, str(jsonl_path))
-            if not usage_data:
-                return None
+            data = json.loads(statusline_file.read_text())
 
-            return usage_data
+            # Extract from the full Claude JSON payload
+            model_info = data.get("model") or {}
+            ctx = data.get("context_window") or {}
+            cost = data.get("cost") or {}
+            current = ctx.get("current_usage") or {}
+
+            model = model_info.get("id", "")
+            context_window = ctx.get("context_window_size", 200_000) or 200_000
+            total_input = ctx.get("total_input_tokens", 0) or 0
+            total_output = ctx.get("total_output_tokens", 0) or 0
+            used_tokens = total_input + total_output
+            percentage = ctx.get("used_percentage", 0) or 0
+
+            return {
+                "model": model,
+                "model_name": model_info.get("display_name", ""),
+                "input_tokens": current.get("input_tokens", 0) or 0,
+                "output_tokens": current.get("output_tokens", 0) or 0,
+                "cache_creation_input_tokens": current.get("cache_creation_input_tokens", 0) or 0,
+                "cache_read_input_tokens": current.get("cache_read_input_tokens", 0) or 0,
+                "context_window": context_window,
+                "used_tokens": used_tokens,
+                "percentage": percentage,
+                "cost_usd": cost.get("total_cost_usd"),
+                "source": "statusline",
+            }
 
         except Exception as e:
-            logger.error(f"[sessions] get_context_usage failed: {e}")
+            logger.debug(f"[sessions] statusline read failed: {e}")
             return None
 
     async def _find_claude_pid(self, pane_pid: int) -> Optional[int]:
@@ -711,72 +714,6 @@ class SessionManager:
                     if "claude" in comm.lower():
                         return child_pid
                     queue.append(child_pid)
-
-            return None
-        except Exception:
-            return None
-
-    @staticmethod
-    def _read_last_usage(jsonl_path: str) -> Optional[dict]:
-        """Read the JSONL file from the end and find the last assistant message with usage."""
-        try:
-            # Read last ~64KB from the file to find recent assistant messages
-            file_size = os.path.getsize(jsonl_path)
-            read_size = min(file_size, 65536)
-
-            with open(jsonl_path, "rb") as f:
-                if file_size > read_size:
-                    f.seek(file_size - read_size)
-                    # Skip partial first line
-                    f.readline()
-                data = f.read().decode("utf-8", errors="replace")
-
-            lines = data.strip().splitlines()
-
-            # Walk backwards to find the last assistant message with usage
-            for line in reversed(lines):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                if obj.get("type") != "assistant":
-                    continue
-
-                msg = obj.get("message", {})
-                usage = msg.get("usage")
-                if not usage:
-                    continue
-
-                model = msg.get("model", "")
-                # Skip synthetic messages
-                if model == "<synthetic>":
-                    continue
-
-                input_tokens = usage.get("input_tokens", 0)
-                cache_creation = usage.get("cache_creation_input_tokens", 0)
-                cache_read = usage.get("cache_read_input_tokens", 0)
-                output_tokens = usage.get("output_tokens", 0)
-                used_tokens = input_tokens + cache_creation + cache_read + output_tokens
-
-                context_window = SessionManager._MODEL_CONTEXT_WINDOWS.get(
-                    model, SessionManager._DEFAULT_CONTEXT_WINDOW
-                )
-                percentage = round((used_tokens / context_window) * 100, 1) if context_window > 0 else 0
-
-                return {
-                    "model": model,
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "cache_creation_input_tokens": cache_creation,
-                    "cache_read_input_tokens": cache_read,
-                    "context_window": context_window,
-                    "used_tokens": used_tokens,
-                    "percentage": percentage,
-                }
 
             return None
         except Exception:

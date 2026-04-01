@@ -440,6 +440,37 @@ mkdir -p "$OVERLAY_INSTALL_DIR"
 cp -r "$PROJECT_DIR/overlay/." "$OVERLAY_INSTALL_DIR/"
 log "Overlay files copied to $OVERLAY_INSTALL_DIR"
 
+# Copy statusline script and configure Claude's settings
+STATUSLINE_SCRIPT="$DATA_DIR/vmux-statusline.sh"
+cp "$PROJECT_DIR/scripts/vmux-statusline.sh" "$STATUSLINE_SCRIPT"
+chmod +x "$STATUSLINE_SCRIPT"
+mkdir -p "$DATA_DIR/sessions"
+log "Statusline script installed at $STATUSLINE_SCRIPT"
+
+# Configure Claude Code's statusLine setting to run our data pipeline script
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+if [ -f "$CLAUDE_SETTINGS" ]; then
+    # Check if statusLine is already configured
+    if ! python3 -c "import json; d=json.load(open('$CLAUDE_SETTINGS')); assert 'statusLine' in d" 2>/dev/null; then
+        # Add statusLine to existing settings
+        python3 -c "
+import json
+with open('$CLAUDE_SETTINGS') as f:
+    settings = json.load(f)
+settings['statusLine'] = {
+    'type': 'command',
+    'command': '$STATUSLINE_SCRIPT'
+}
+with open('$CLAUDE_SETTINGS', 'w') as f:
+    json.dump(settings, f, indent=4)
+" 2>/dev/null && log "Claude Code statusLine configured" || log "WARNING: Could not configure statusLine in settings.json"
+    else
+        log "Claude Code statusLine already configured — skipping"
+    fi
+else
+    log "WARNING: ~/.claude/settings.json not found — statusLine not configured"
+fi
+
 # Ensure vmux CLI is executable
 chmod +x "$DAEMON_INSTALL_DIR/vmux"
 
