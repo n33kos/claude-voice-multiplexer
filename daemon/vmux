@@ -286,7 +286,9 @@ def _find_project_root() -> str:
 
     # Script may be the installed copy in ~/.claude/voice-multiplexer/daemon/
     # or the repo copy in <repo>/daemon/. Walk up and look for overlay/.
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # Resolve symlinks first so ~/.local/bin/vmux -> .../daemon/vmux finds the repo.
+    script_path = os.path.realpath(__file__)
+    script_dir = os.path.dirname(script_path)
     candidate = os.path.dirname(script_dir)
     if os.path.isdir(os.path.join(candidate, "overlay")):
         return candidate
@@ -303,7 +305,6 @@ def _find_project_root() -> str:
         except Exception:
             pass
 
-    # Last resort: check the systemd unit or launchd plist for VMUX_PLUGIN_DIR
     _die(
         "Cannot find project root with overlay/ directory.\n"
         "  Set VMUX_PLUGIN_DIR to your repo path, e.g.:\n"
@@ -356,7 +357,7 @@ def cmd_install_overlay():
     venv_path = os.path.join(overlay_dir, ".venv")
     # On Linux, use the system/brew Python so PyGObject (gi) is available for pywebview GTK
     build_env = dict(os.environ)
-    venv_args = [uv, "venv"]
+    venv_args = [uv, "venv", "--clear"]
     if not is_mac:
         # Prefer brew's python3 (has dev headers + gi), fall back to system python3
         brew_prefix = subprocess.run(["brew", "--prefix"], capture_output=True, text=True).stdout.strip()

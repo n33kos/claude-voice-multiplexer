@@ -434,6 +434,12 @@ mkdir -p "$RELAY_INSTALL_DIR"
 cp -r "$PROJECT_DIR/relay-server/." "$RELAY_INSTALL_DIR/"
 log "Relay server files copied to $RELAY_INSTALL_DIR"
 
+# Copy overlay files to managed location (for vmux install-overlay)
+OVERLAY_INSTALL_DIR="$DATA_DIR/overlay"
+mkdir -p "$OVERLAY_INSTALL_DIR"
+cp -r "$PROJECT_DIR/overlay/." "$OVERLAY_INSTALL_DIR/"
+log "Overlay files copied to $OVERLAY_INSTALL_DIR"
+
 # Ensure vmux CLI is executable
 chmod +x "$DAEMON_INSTALL_DIR/vmux"
 
