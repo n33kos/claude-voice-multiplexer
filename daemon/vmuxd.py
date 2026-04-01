@@ -443,6 +443,13 @@ class VmuxDaemon:
                 session_id = request.get("session_id", "")
                 ok = await self._session_manager.compact_context(session_id)
                 return {"ok": ok}
+            elif cmd == "change-model":
+                session_id = request.get("session_id", "")
+                model = request.get("model", "")
+                if not model:
+                    return {"ok": False, "error": "model is required"}
+                ok = await self._session_manager.change_model(session_id, model)
+                return {"ok": ok}
             elif cmd == "context-usage":
                 session_id = request.get("session_id", "")
                 usage = await self._session_manager.get_context_usage(session_id)

@@ -375,8 +375,16 @@ export default function App() {
             </Suspense>
           )}
 
-        {relay.connectedSessionId && (
-          <ContextBar usage={contextUsage} />
+        {settings.showContextBar && (
+          <ContextBar
+            usage={contextUsage}
+            alwaysShow
+            onChangeModel={
+              relay.connectedSessionId
+                ? (model) => relay.changeModel(relay.connectedSessionId!, model)
+                : undefined
+            }
+          />
         )}
 
         <StatusBar

@@ -252,6 +252,23 @@ export function Settings({
 
           <label className={styles.SettingRow}>
             <div className={styles.SettingLabel}>
+              <span className={styles.SettingTitle}>Show context bar</span>
+              <span className={styles.SettingDescription}>
+                Show the context usage and model indicator bar
+              </span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.showContextBar}
+              onClick={() => onUpdate({ showContextBar: !settings.showContextBar })}
+              className={classNames(styles.Toggle, { [styles.ToggleActive]: settings.showContextBar })}
+            >
+              <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.showContextBar })} />
+            </button>
+          </label>
+
+          <label className={styles.SettingRow}>
+            <div className={styles.SettingLabel}>
               <span className={styles.SettingTitle}>Audio-reactive particles</span>
               <span className={styles.SettingDescription}>
                 Particle network pulses with voice amplitude

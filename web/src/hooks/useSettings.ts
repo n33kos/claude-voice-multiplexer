@@ -9,6 +9,7 @@ export interface Settings {
   showParticles: boolean
   theme: ThemeMode
   audioReactiveParticles: boolean
+  showContextBar: boolean
 }
 
 const STORAGE_KEY = 'voice-multiplexer-settings'
@@ -20,6 +21,7 @@ const DEFAULTS: Settings = {
   showParticles: true,
   theme: 'system',
   audioReactiveParticles: false,
+  showContextBar: true,
 }
 
 function loadSettings(): Settings {

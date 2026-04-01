@@ -1017,6 +1017,20 @@ async def compact_session(session_id: str, request: Request):
     return JSONResponse({"error": result.get("error", "Compact failed")}, status_code=500)
 
 
+@app.post("/api/sessions/{session_id}/model")
+async def change_model(session_id: str, request: Request):
+    """Switch the Claude model in a session via the /model interactive selector."""
+    _require_auth(request)
+    body = await request.json()
+    model = body.get("model", "")
+    if not model:
+        return JSONResponse({"error": "model is required"}, status_code=400)
+    result = await _daemon_ipc({"cmd": "change-model", "session_id": session_id, "model": model})
+    if result.get("ok"):
+        return JSONResponse({"success": True})
+    return JSONResponse({"error": result.get("error", "Model change failed")}, status_code=500)
+
+
 @app.get("/api/sessions/{session_id}/context")
 async def get_context_usage(session_id: str, request: Request):
     """Get context window usage for a Claude session via daemon IPC."""

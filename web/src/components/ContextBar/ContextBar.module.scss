@@ -15,9 +15,94 @@
   color: var(--color-text-muted);
 }
 
+.ModelContainer {
+  position: relative;
+}
+
+.ModelButton {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  background: none;
+  border: none;
+  padding: 0.15rem 0.3rem;
+  margin: -0.15rem -0.3rem;
+  border-radius: 4px;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  transition: background-color 0.15s ease;
+
+  &:hover:not(:disabled) {
+    background: var(--color-surface-secondary);
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.7;
+  }
+}
+
 .Model {
   font-weight: 500;
   color: var(--color-text-tertiary);
+}
+
+.ChevronIcon {
+  width: 10px;
+  height: 10px;
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+.Dropdown {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: -0.3rem;
+  min-width: 140px;
+  background: var(--color-surface-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 0.25rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.DropdownItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: background-color 0.1s ease;
+
+  &:hover {
+    background: var(--color-surface-secondary);
+    color: var(--color-text-primary);
+  }
+}
+
+.DropdownItemActive {
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+.CheckIcon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--color-status-green);
 }
 
 .Tokens {

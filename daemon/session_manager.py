@@ -406,6 +406,75 @@ class SessionManager:
             logger.error(f"[sessions] compact_context failed: {e}")
             return False
 
+    async def change_model(self, session_id: str, model: str) -> bool:
+        """Switch the Claude model in a session via the /model interactive selector.
+
+        Performs a hard interrupt first (Ctrl-C + Escape) to break Claude out of
+        any current operation, then opens the /model selector, types the model
+        filter text, selects it, reconnects the MCP plugin, and re-enters standby.
+        """
+        # Map short names to filter text that uniquely matches in Claude's model selector
+        MODEL_FILTERS = {
+            "opus": "opus",
+            "sonnet": "sonnet",
+            "haiku": "haiku",
+            "claude-opus-4-6": "opus",
+            "claude-sonnet-4-6": "sonnet",
+            "claude-haiku-4-5": "haiku",
+        }
+        filter_text = MODEL_FILTERS.get(model, model)
+
+        async with self._lock:
+            session = self._find_session(session_id)
+            if not session:
+                return False
+            tmux_session = session.tmux_session
+        try:
+            # Step 1: Hard interrupt
+            await self.interrupt(session_id)
+            await asyncio.sleep(0.5)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Escape", ""])
+            await asyncio.sleep(0.5)
+            await self.interrupt(session_id)
+            await asyncio.sleep(1.0)
+
+            # Step 2: Open /model selector — two Enters (autocomplete select + submit)
+            await self._run(["tmux", "send-keys", "-t", tmux_session,
+                             "-l", "/model"])
+            await asyncio.sleep(0.3)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(0.5)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(1.5)
+
+            # Step 3: Type filter text to narrow down the model list, then select
+            await self._run(["tmux", "send-keys", "-t", tmux_session,
+                             "-l", filter_text])
+            await asyncio.sleep(0.3)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(2.0)
+
+            # Step 4: Reconnect MCP plugin
+            await self._run(["tmux", "send-keys", "-t", tmux_session,
+                             "-l", "/mcp reconnect plugin:voice-multiplexer:voice-multiplexer"])
+            await asyncio.sleep(0.3)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(0.5)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(2.0)
+
+            # Step 5: Re-enter voice standby
+            await self._run(["tmux", "send-keys", "-t", tmux_session,
+                             "-l", "/voice-multiplexer:standby"])
+            await asyncio.sleep(0.3)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            await asyncio.sleep(0.5)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            return True
+        except Exception as e:
+            logger.error(f"[sessions] change_model failed: {e}")
+            return False
+
     async def restart_session(self, session_id: str) -> dict:
         """Kill and respawn a session in the same directory."""
         async with self._lock:
