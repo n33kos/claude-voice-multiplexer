@@ -379,6 +379,7 @@ export default function App() {
           <ContextBar
             usage={contextUsage}
             alwaysShow
+            fields={settings.contextBarFields}
             onChangeModel={
               relay.connectedSessionId
                 ? (model) => relay.changeModel(relay.connectedSessionId!, model)

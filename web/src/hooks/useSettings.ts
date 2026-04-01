@@ -2,6 +2,17 @@ import { useCallback, useEffect, useState } from 'react'
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 
+/** Position for a context bar field: hidden or left/center/right. */
+export type FieldPosition = 'hidden' | 'left' | 'center' | 'right'
+
+/** Configurable context bar field placement. */
+export interface ContextBarFields {
+  model: FieldPosition
+  contextUsage: FieldPosition
+  cost: FieldPosition
+  contextBar: FieldPosition  // the progress bar itself
+}
+
 export interface Settings {
   autoListen: boolean
   speakerMuted: boolean
@@ -10,9 +21,17 @@ export interface Settings {
   theme: ThemeMode
   audioReactiveParticles: boolean
   showContextBar: boolean
+  contextBarFields: ContextBarFields
 }
 
 const STORAGE_KEY = 'voice-multiplexer-settings'
+
+export const DEFAULT_CONTEXT_BAR_FIELDS: ContextBarFields = {
+  model: 'left',
+  contextUsage: 'right',
+  cost: 'hidden',
+  contextBar: 'left',  // spans full width below, position just controls visibility
+}
 
 const DEFAULTS: Settings = {
   autoListen: true,
@@ -22,6 +41,7 @@ const DEFAULTS: Settings = {
   theme: 'system',
   audioReactiveParticles: false,
   showContextBar: true,
+  contextBarFields: DEFAULT_CONTEXT_BAR_FIELDS,
 }
 
 function loadSettings(): Settings {

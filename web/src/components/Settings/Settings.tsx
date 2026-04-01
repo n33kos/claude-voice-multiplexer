@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import classNames from "classnames";
-import type { ThemeMode } from "../../hooks/useSettings";
+import type { ThemeMode, FieldPosition } from "../../hooks/useSettings";
 import type { SettingsProps } from "./Settings.types";
 import { useVoiceSettings } from "../../hooks/useVoiceSettings";
 import type { VoiceOption } from "../../hooks/useVoiceSettings";
@@ -266,6 +266,43 @@ export function Settings({
               <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.showContextBar })} />
             </button>
           </label>
+
+          {settings.showContextBar && (
+            <div className={styles.SubSection}>
+              {(
+                [
+                  { key: "model" as const, label: "Model switcher", desc: "Active model with switch dropdown" },
+                  { key: "contextUsage" as const, label: "Context usage", desc: "Token count and percentage" },
+                  { key: "cost" as const, label: "Session cost", desc: "Running cost in USD" },
+                  { key: "contextBar" as const, label: "Progress bar", desc: "Visual context usage bar" },
+                ] as const
+              ).map((field) => (
+                <div key={field.key} className={styles.SettingRow}>
+                  <div className={styles.SettingLabel}>
+                    <span className={styles.SettingTitle}>{field.label}</span>
+                    <span className={styles.SettingDescription}>{field.desc}</span>
+                  </div>
+                  <select
+                    value={settings.contextBarFields[field.key]}
+                    onChange={(e) =>
+                      onUpdate({
+                        contextBarFields: {
+                          ...settings.contextBarFields,
+                          [field.key]: e.target.value as FieldPosition,
+                        },
+                      })
+                    }
+                    className={styles.FieldPositionSelect}
+                  >
+                    <option value="hidden">Hidden</option>
+                    <option value="left">Left</option>
+                    <option value="center">Center</option>
+                    <option value="right">Right</option>
+                  </select>
+                </div>
+              ))}
+            </div>
+          )}
 
           <label className={styles.SettingRow}>
             <div className={styles.SettingLabel}>

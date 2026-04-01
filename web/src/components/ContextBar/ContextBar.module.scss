@@ -15,6 +15,17 @@
   color: var(--color-text-muted);
 }
 
+.FieldGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.FieldGroupCenter {
+  flex: 1;
+  justify-content: center;
+}
+
 .ModelContainer {
   position: relative;
 }
