@@ -407,22 +407,20 @@ class SessionManager:
             return False
 
     async def change_model(self, session_id: str, model: str) -> bool:
-        """Switch the Claude model in a session via the /model interactive selector.
+        """Switch the Claude model in a session via /model <name>.
 
         Performs a hard interrupt first (Ctrl-C + Escape) to break Claude out of
-        any current operation, then opens the /model selector, types the model
-        filter text, selects it, reconnects the MCP plugin, and re-enters standby.
+        any current operation, then sends `/model <name>` as a single command
+        (which switches immediately without an interactive picker), reconnects
+        the MCP plugin, and re-enters voice standby.
         """
-        # Map short names to filter text that uniquely matches in Claude's model selector
-        MODEL_FILTERS = {
-            "opus": "opus",
-            "sonnet": "sonnet",
-            "haiku": "haiku",
+        # Map full model IDs to short names accepted by /model
+        MODEL_NAMES = {
             "claude-opus-4-6": "opus",
             "claude-sonnet-4-6": "sonnet",
             "claude-haiku-4-5": "haiku",
         }
-        filter_text = MODEL_FILTERS.get(model, model)
+        model_name = MODEL_NAMES.get(model, model)
 
         async with self._lock:
             session = self._find_session(session_id)
@@ -438,23 +436,14 @@ class SessionManager:
             await self.interrupt(session_id)
             await asyncio.sleep(1.0)
 
-            # Step 2: Open /model selector — two Enters (autocomplete select + submit)
+            # Step 2: Send /model <name> as a single command (no interactive picker)
             await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "-l", "/model"])
-            await asyncio.sleep(0.3)
-            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-            await asyncio.sleep(0.5)
-            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-            await asyncio.sleep(1.5)
-
-            # Step 3: Type filter text to narrow down the model list, then select
-            await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "-l", filter_text])
+                             "-l", f"/model {model_name}"])
             await asyncio.sleep(0.3)
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             await asyncio.sleep(2.0)
 
-            # Step 4: Reconnect MCP plugin
+            # Step 3: Reconnect MCP plugin
             await self._run(["tmux", "send-keys", "-t", tmux_session,
                              "-l", "/mcp reconnect plugin:voice-multiplexer:voice-multiplexer"])
             await asyncio.sleep(0.3)
@@ -463,7 +452,7 @@ class SessionManager:
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             await asyncio.sleep(2.0)
 
-            # Step 5: Re-enter voice standby
+            # Step 4: Re-enter voice standby
             await self._run(["tmux", "send-keys", "-t", tmux_session,
                              "-l", "/voice-multiplexer:standby"])
             await asyncio.sleep(0.3)
