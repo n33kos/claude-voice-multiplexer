@@ -342,6 +342,7 @@ class VmuxOverlay:
             x=self._calc_geometry()[0],
             y=self._calc_geometry()[1],
             frameless=True,
+            easy_drag=False,
             on_top=self.config.get("always_on_top", True),
             transparent=False,
             hidden=False,

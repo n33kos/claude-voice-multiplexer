@@ -285,6 +285,7 @@ export default function App() {
           onSettingsOpen={() => setSettingsOpen(true)}
           onTerminalOpen={() => setTerminalOpen(true)}
           showTerminalButton={!!relay.connectedSessionId}
+          showTitle={settings.showTitle}
         />
 
         <SessionList

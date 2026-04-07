@@ -27,6 +27,7 @@ export interface Settings {
   showParticles: boolean
   theme: ThemeMode
   audioReactiveParticles: boolean
+  showTitle: boolean
   showContextBar: boolean
   contextBarFields: ContextBarFields
 }
@@ -51,6 +52,7 @@ const DEFAULTS: Settings = {
   showParticles: true,
   theme: 'system',
   audioReactiveParticles: false,
+  showTitle: true,
   showContextBar: true,
   contextBarFields: DEFAULT_CONTEXT_BAR_FIELDS,
 }

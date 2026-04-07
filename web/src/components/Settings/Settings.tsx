@@ -252,6 +252,23 @@ export function Settings({
 
           <label className={styles.SettingRow}>
             <div className={styles.SettingLabel}>
+              <span className={styles.SettingTitle}>Show title</span>
+              <span className={styles.SettingDescription}>
+                Show the app title in the header bar
+              </span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.showTitle}
+              onClick={() => onUpdate({ showTitle: !settings.showTitle })}
+              className={classNames(styles.Toggle, { [styles.ToggleActive]: settings.showTitle })}
+            >
+              <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.showTitle })} />
+            </button>
+          </label>
+
+          <label className={styles.SettingRow}>
+            <div className={styles.SettingLabel}>
               <span className={styles.SettingTitle}>Show context bar</span>
               <span className={styles.SettingDescription}>
                 Show the context usage and model indicator bar
