@@ -34,24 +34,6 @@ def _bg(coro) -> asyncio.Task:
 
 mcp = FastMCP("voice-multiplexer")
 
-STANDBY_LISTEN_TIMEOUT = 86400  # 24 hours
-HEARTBEAT_INTERVAL = 30  # seconds — keep session alive during long standby waits
-
-
-async def _heartbeat_loop(session_id: str):
-    """Background task that sends periodic heartbeats to prevent session pruning.
-
-    Runs while relay_standby is blocking on voice_queue.get(). Without this,
-    the session would be pruned after SESSION_TIMEOUT (120s) of no tool calls.
-    """
-    registry = _app["registry"]
-    while registry:
-        await asyncio.sleep(HEARTBEAT_INTERVAL)
-        session = await registry.get(session_id)
-        if not session:
-            break
-        await registry.heartbeat(session_id)
-
 
 def _make_session_id(cwd: str) -> str:
     """Generate a deterministic session ID from a working directory path."""
@@ -67,8 +49,6 @@ def _file_uri_to_path(uri: str) -> str:
 # --- Per-connection session mapping ---
 # Maps FastMCP session_id → (relay_session_id, cwd)
 _connection_map: dict[str, tuple[str, str]] = {}
-# Maps relay session_id → persistent heartbeat task (runs for entire MCP connection lifetime)
-_session_heartbeats: dict[str, "asyncio.Task[None]"] = {}
 # Throttle relay_activity: maps relay session_id → (last_time, last_activity)
 _ACTIVITY_MIN_INTERVAL = 3.0  # seconds
 _last_activity: dict[str, tuple[float, str]] = {}
@@ -87,10 +67,6 @@ async def _resolve_session(ctx: Context) -> tuple[Optional[str], Optional[str]]:
         # Fast path — verify session still exists in registry.
         registry = _app["registry"]
         if await registry.get(session_id):
-            # Session is alive — ensure the persistent heartbeat is still running.
-            hb = _session_heartbeats.get(session_id)
-            if not hb or hb.done():
-                _session_heartbeats[session_id] = asyncio.create_task(_heartbeat_loop(session_id))
             return session_id, None
         # Session was pruned — clear stale mapping and fall through to re-registration.
         _connection_map.pop(mcp_sid, None)
@@ -118,15 +94,6 @@ async def _resolve_session(ctx: Context) -> tuple[Optional[str], Optional[str]]:
 
     # Cache the mapping only after successful registration
     _connection_map[mcp_sid] = (session_id, cwd)
-
-    # Start (or restart) a persistent per-session heartbeat that keeps the session
-    # alive for the entire MCP connection lifetime — including while Claude is
-    # actively processing between relay_standby calls (bash commands, file reads,
-    # etc.) when no relay tools are being called.
-    old_hb = _session_heartbeats.get(session_id)
-    if old_hb and not old_hb.done():
-        old_hb.cancel()
-    _session_heartbeats[session_id] = asyncio.create_task(_heartbeat_loop(session_id))
 
     # Manage LiveKit room
     agent = _app["get_agent"]()
@@ -179,72 +146,11 @@ def init(registry, get_agent, notify_transcript, notify_status, broadcast_sessio
 
 
 @mcp.tool()
-async def relay_standby(ctx: Context, session_name: str = "") -> str:
-    """Enter voice relay standby. Blocks until a voice message arrives. Respond conversationally.
-
-    Args:
-        session_name: Optional display name for this session
-    """
-    session_id, err = await _resolve_session(ctx)
-    if err:
-        return err
-
-    registry = _app["registry"]
-
-    # Override display name if provided
-    if session_name:
-        session = await registry.get(session_id)
-        if session:
-            session.name = session_name
-
-    # Update heartbeat
-    await registry.heartbeat(session_id)
-
-    # Signal that Claude is listening
-    agent = _app["get_agent"]()
-    if agent:
-        _bg(agent.handle_claude_listening(session_id))
-
-    # Block waiting for a voice message.
-    # The persistent per-session heartbeat (started in _resolve_session) keeps
-    # the session alive during both this wait AND during Claude's processing
-    # between standby calls — no separate per-standby heartbeat needed.
-    session = await registry.get(session_id)
-    if not session:
-        return "Session not found."
-
-    try:
-        msg = await asyncio.wait_for(
-            session.voice_queue.get(),
-            timeout=STANDBY_LISTEN_TIMEOUT,
-        )
-        await registry.heartbeat(session_id)
-        return msg
-    except asyncio.TimeoutError:
-        return "[Standby timeout]"
-    except asyncio.CancelledError:
-        print(f"[mcp] Session cancelled (SSE disconnect): {session_id}")
-        # Clean up the stale MCP connection mapping so the next SSE connection
-        # from Claude Code starts fresh and re-registers properly.
-        mcp_sid = ctx.session_id
-        _connection_map.pop(mcp_sid, None)
-        # Cancel the persistent heartbeat — let SESSION_TIMEOUT handle
-        # natural expiry.  If Claude reconnects within the timeout window,
-        # _resolve_session will start a fresh heartbeat.
-        hb = _session_heartbeats.pop(session_id, None)
-        if hb:
-            hb.cancel()
-        raise
-    except Exception as e:
-        return f"Error: {e}"
-
-
-@mcp.tool()
 async def relay_notify(ctx: Context, message: str, source: str = "") -> str:
-    """Wake the parent session's relay_standby with a message. Use from background agents on completion.
+    """Post a background agent completion notice to the session transcript.
 
     Args:
-        message: Notification text delivered as voice input to the parent session
+        message: Notification text shown in the web transcript
         source: Optional agent label
     """
     session_id, err = await _resolve_session(ctx)
@@ -258,12 +164,10 @@ async def relay_notify(ctx: Context, message: str, source: str = "") -> str:
 
     prefix = f"[Background agent{': ' + source if source else ''}]"
     full_message = f"{prefix} {message}"
-    try:
-        session.voice_queue.put_nowait(full_message)
-    except asyncio.QueueFull:
-        return "Queue full."
 
-    # Broadcast to web transcript so the notification is visible in real time
+    # Broadcast to web transcript so the notification is visible in real time.
+    # The parent session will discover completion on its next turn — we no
+    # longer wake it via a queue because the standby loop has been removed.
     if _app["notify_transcript"]:
         await _app["notify_transcript"](session_id, "system", full_message)
 
@@ -282,7 +186,7 @@ async def relay_activity(ctx: Context, activity: str, source: str = "") -> str:
     if err:
         return err
 
-    # Keep session alive during processing between relay_standby calls
+    # Keep session alive by touching the heartbeat on every tool call
     registry = _app["registry"]
     if registry:
         await registry.heartbeat(session_id)
@@ -317,7 +221,7 @@ async def relay_respond(ctx: Context, text: str) -> str:
     if err:
         return err
 
-    # Keep session alive during processing between relay_standby calls
+    # Keep session alive by touching the heartbeat on every tool call
     registry = _app["registry"]
     if registry:
         await registry.heartbeat(session_id)
@@ -349,7 +253,7 @@ async def relay_code_block(ctx: Context, code: str, filename: str = "", language
     if err:
         return err
 
-    # Keep session alive during processing between relay_standby calls
+    # Keep session alive by touching the heartbeat on every tool call
     registry = _app["registry"]
     if registry:
         await registry.heartbeat(session_id)
@@ -373,11 +277,6 @@ async def relay_disconnect(ctx: Context) -> str:
     session_id, err = await _resolve_session(ctx)
     if err:
         return err
-
-    # Cancel the persistent per-session heartbeat
-    hb = _session_heartbeats.pop(session_id, None)
-    if hb and not hb.done():
-        hb.cancel()
 
     registry = _app["registry"]
     agent = _app["get_agent"]()
@@ -411,8 +310,7 @@ async def relay_status(ctx: Context) -> str:
     if not err and session_id:
         session = await registry.get(session_id)
         if session:
-            queued = session.voice_queue.qsize()
-            return f"Connected: {session.name} ({session_id}) queued={queued}"
+            return f"Connected: {session.name} ({session_id})"
 
     sessions = await registry.list_sessions()
     if not sessions:
@@ -435,7 +333,7 @@ async def relay_image(ctx: Context, file_path: str) -> str:
     if err:
         return err
 
-    # Keep session alive during processing between relay_standby calls
+    # Keep session alive by touching the heartbeat on every tool call
     registry = _app["registry"]
     if registry:
         await registry.heartbeat(session_id)
@@ -493,7 +391,7 @@ async def relay_file(ctx: Context, file_path: str, read_aloud: bool = False) -> 
     if err:
         return err
 
-    # Keep session alive during processing between relay_standby calls
+    # Keep session alive by touching the heartbeat on every tool call
     registry = _app["registry"]
     if registry:
         await registry.heartbeat(session_id)
@@ -572,17 +470,6 @@ def cleanup_stale_connections(active_session_ids: set[str]) -> int:
     ]
     for mcp_sid in stale_mcp_sids:
         _connection_map.pop(mcp_sid, None)
-        removed += 1
-
-    # Cancel heartbeat tasks for dead sessions
-    stale_hb_sids = [
-        sid for sid in _session_heartbeats
-        if sid not in active_session_ids
-    ]
-    for sid in stale_hb_sids:
-        hb = _session_heartbeats.pop(sid, None)
-        if hb and not hb.done():
-            hb.cancel()
         removed += 1
 
     # Clean up activity throttle entries for dead sessions

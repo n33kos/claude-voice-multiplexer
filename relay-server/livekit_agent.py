@@ -15,6 +15,7 @@ import asyncio
 import collections
 import gc
 import io
+import json
 import re
 import struct
 import time
@@ -22,6 +23,34 @@ from typing import Optional
 
 import numpy as np
 from livekit import api, rtc
+
+
+_VMUXD_SOCKET_PATH = "/tmp/vmuxd.sock"
+
+
+async def _daemon_inject_text(session_id: str, text: str) -> bool:
+    """Send inject-text IPC to vmuxd. Returns True on success."""
+    writer = None
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_unix_connection(_VMUXD_SOCKET_PATH), timeout=3.0
+        )
+        cmd = {"cmd": "inject-text", "session_id": session_id, "text": text}
+        writer.write((json.dumps(cmd) + "\n").encode())
+        await writer.drain()
+        line = await asyncio.wait_for(reader.readline(), timeout=5.0)
+        resp = json.loads(line.decode().strip())
+        return bool(resp.get("ok"))
+    except Exception as e:
+        print(f"[daemon-ipc] inject-text failed: {e}")
+        return False
+    finally:
+        if writer is not None:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
 
 import audio as audio_pipeline
 from config import (
@@ -225,6 +254,10 @@ class SessionRoom:
         # Queue to serialize TTS responses (prevents concurrent playback conflicts)
         self._response_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=50)
         self._response_worker_task: asyncio.Optional[Task] = None
+
+        # TTS cancellation (Phase 3): set when user interrupts or /cancel-tts called.
+        # _play_tts_response checks this between PCM chunks and aborts if set.
+        self._tts_cancel_event: asyncio.Event = asyncio.Event()
 
     async def start(self):
         """Connect to this session's LiveKit room."""
@@ -442,7 +475,7 @@ class SessionRoom:
                 if not self._running:
                     break
 
-                if self._waiting_for_response or self._is_speaking:
+                if self._waiting_for_response:
                     continue
                 if time.time() - self._speaking_ended_at < ECHO_COOLDOWN_S:
                     continue
@@ -454,6 +487,22 @@ class SessionRoom:
                 # np.frombuffer + .copy() is faster than np.array() and
                 # produces a contiguous buffer that can be freed cleanly.
                 samples = np.frombuffer(frame.data, dtype=np.int16).copy()
+
+                # TTS barge-in: if Claude is currently speaking and the user
+                # begins to speak, cancel the TTS stream so the user is
+                # heard.  VAD needs a few frames of speech before we trust
+                # it — spurious RMS spikes from the TTS itself would cause
+                # self-cancellation otherwise.
+                if self._is_speaking:
+                    if self._detect_speech(samples, frame.sample_rate):
+                        consecutive_speech += 1
+                        if consecutive_speech >= _SPEECH_ONSET_FRAMES:
+                            print(f"[room:{self.room_name}] Barge-in detected, cancelling TTS")
+                            await self.cancel_tts()
+                            consecutive_speech = 0
+                    else:
+                        consecutive_speech = 0
+                    continue
 
                 if not _frame_logged:
                     rms = np.sqrt(np.mean(samples.astype(np.float64) ** 2))
@@ -636,23 +685,19 @@ class SessionRoom:
             except Exception:
                 pass
 
-        # Forward transcription to Claude session via voice queue
+        # Forward transcription to Claude session via tmux send-keys.  The
+        # daemon types the text into the tmux pane and presses Enter, so
+        # Claude Code's TUI handles it exactly like a human typing.
         try:
-            msg = f"[Voice from {participant.identity}]: {text}"
-            try:
-                session.voice_queue.put_nowait(msg)
-            except asyncio.QueueFull:
-                print(f"[room:{self.room_name}] Voice queue full, dropping oldest message")
-                try:
-                    session.voice_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-                session.voice_queue.put_nowait(msg)
-            print(f"[room:{self.room_name}] Forwarded to session '{session.name}'")
-            self._waiting_for_response = True
-            await self._notify_status("thinking", "Waiting for Claude...")
+            ok = await _daemon_inject_text(self.session_id, text)
+            if ok:
+                print(f"[room:{self.room_name}] Injected text to session '{session.name}'")
+                self._waiting_for_response = True
+                await self._notify_status("thinking", "Waiting for Claude...")
+            else:
+                print(f"[room:{self.room_name}] inject-text failed; session may not be registered")
         except Exception as e:
-            print(f"[room:{self.room_name}] Failed to queue message: {e}")
+            print(f"[room:{self.room_name}] Failed to inject transcription: {e}")
 
     async def handle_claude_response(self, text: str):
         """Queue a text response for serialized TTS playback."""
@@ -671,11 +716,31 @@ class SessionRoom:
         while self._running:
             try:
                 text = await self._response_queue.get()
+                # Clear any stale cancel signal from the previous response
+                self._tts_cancel_event.clear()
                 await self._play_tts_response(text)
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 print(f"[room:{self.room_name}] Response worker error: {e}")
+
+    async def cancel_tts(self):
+        """Cancel any in-progress or queued TTS playback.
+
+        Sets the cancel event that _play_tts_response checks between PCM
+        chunks.  Also drains the response queue so pending responses are
+        dropped rather than played after the cancel.
+        """
+        self._tts_cancel_event.set()
+        drained = 0
+        while not self._response_queue.empty():
+            try:
+                self._response_queue.get_nowait()
+                drained += 1
+            except asyncio.QueueEmpty:
+                break
+        if drained:
+            print(f"[room:{self.room_name}] cancel_tts drained {drained} queued response(s)")
 
     async def _play_tts_response(self, text: str):
         """Stream-synthesize and play a single TTS response."""
@@ -691,6 +756,9 @@ class SessionRoom:
 
             try:
                 async for pcm_chunk in audio_pipeline.synthesize_pcm_stream(text):
+                    if self._tts_cancel_event.is_set():
+                        print(f"[room:{self.room_name}] TTS cancelled mid-stream")
+                        break
                     if not got_audio:
                         first_frame_at = time.time()
                     got_audio = True
@@ -735,8 +803,11 @@ class SessionRoom:
             if not self._response_queue.empty():
                 return
 
-            if self._pending_listening and self._last_status_update_at <= self._pending_listening_at:
-                # Claude called relay_standby during TTS and no newer work started
+            if self._pending_listening:
+                # Stop hook signalled end-of-turn.
+                # The turn is genuinely done — transition to idle so the mic
+                # re-enables, regardless of any earlier status update bumps
+                # from relay_activity calls made during the turn.
                 self._pending_listening = None
                 self._waiting_for_response = False
                 self._current_activity = None
@@ -750,7 +821,7 @@ class SessionRoom:
                 await self._notify_status("thinking", "Waiting for Claude...")
 
     async def handle_claude_listening(self):
-        """Called when Claude enters relay_standby again — ready for next voice input."""
+        """Called when Claude's turn ends (Stop hook) — ready for next voice input."""
         if self._is_speaking or not self._response_queue.empty():
             # TTS is playing or responses are queued — defer the idle transition
             self._pending_listening = self.session_id

@@ -500,6 +500,15 @@ class VmuxDaemon:
                 else:
                     return {"ok": False, "error": "keys or special_key is required"}
                 return {"ok": ok, "error": None if ok else "Session not found or send failed"}
+            elif cmd == "inject-text":
+                session_id = request.get("session_id", "")
+                text = request.get("text", "")
+                if not session_id:
+                    return {"ok": False, "error": "session_id is required"}
+                if not text:
+                    return {"ok": False, "error": "text is required"}
+                ok = await self._session_manager.inject_text(session_id, text)
+                return {"ok": ok, "error": None if ok else "Session not found or inject failed"}
             elif cmd == "send-message":
                 session_id = request.get("session_id", "")
                 text = request.get("text", "")

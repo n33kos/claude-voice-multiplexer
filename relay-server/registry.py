@@ -28,7 +28,6 @@ class Session:
     created_at: float = field(default_factory=time.time)
     last_heartbeat: float = field(default_factory=time.time)
     connected_clients: dict[str, str] = field(default_factory=dict)  # client_id → device_name
-    voice_queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=100))  # voice messages for MCP relay_standby
 
     @property
     def room_name(self) -> str:
@@ -83,10 +82,9 @@ class SessionRegistry:
                 dir_name=dir_name,
                 ws=ws,
             )
-            # Preserve connected clients and voice queue on reconnect
+            # Preserve connected clients on reconnect
             if old:
                 session.connected_clients = old.connected_clients
-                session.voice_queue = old.voice_queue
             self._sessions[session_id] = session
             return session, is_reconnect
 
@@ -94,12 +92,6 @@ class SessionRegistry:
         async with self._lock:
             session = self._sessions.pop(session_id, None)
             if session:
-                # Drain the voice queue to release any held message references
-                while not session.voice_queue.empty():
-                    try:
-                        session.voice_queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
                 session.connected_clients.clear()
 
     async def heartbeat(self, session_id: str):
@@ -145,10 +137,4 @@ class SessionRegistry:
             for sid in stale:
                 session = self._sessions.pop(sid, None)
                 if session:
-                    # Drain the voice queue to release held references
-                    while not session.voice_queue.empty():
-                        try:
-                            session.voice_queue.get_nowait()
-                        except asyncio.QueueEmpty:
-                            break
                     session.connected_clients.clear()

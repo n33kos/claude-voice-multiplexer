@@ -10,6 +10,7 @@ Bridges web clients (phone/browser) with Claude Code sessions via:
 
 import asyncio
 import gc
+import hashlib
 import json
 import os
 import resource
@@ -359,6 +360,63 @@ async def _warmup_kokoro():
         print(f"[server] Kokoro TTS warm-up failed (non-fatal): {e}")
 
 
+async def _sync_sessions_from_daemon():
+    """Repopulate the in-memory registry from the daemon's known sessions.
+
+    The daemon is the source of truth for which tmux sessions exist.
+    The relay's registry is in-memory and wiped on restart — without this
+    sync, a relay restart leaves the Stop/SessionStart hooks unable to
+    find the session and voice breaks silently.
+
+    We give the daemon a brief window to be reachable after startup, since
+    the relay typically starts before the daemon finishes its own init.
+    """
+    # Let the daemon fully initialize first (it may still be scanning
+    # existing tmux sessions).
+    await asyncio.sleep(1.0)
+
+    for attempt in range(1, 4):
+        result = await _daemon_ipc({"cmd": "list"})
+        if result.get("ok"):
+            break
+        await asyncio.sleep(1.0)
+    else:
+        print("[server] session sync: daemon unreachable after 3 attempts, skipping")
+        return
+
+    sessions = result.get("sessions", []) or []
+    if not sessions:
+        print("[server] session sync: no sessions reported by daemon")
+        return
+
+    registered = 0
+    for s in sessions:
+        cwd = s.get("cwd") or ""
+        if not cwd:
+            continue
+        session_id = s.get("relay_session_id") or hashlib.sha256(cwd.encode()).hexdigest()[:12]
+        name = s.get("session_name") or Path(cwd).name
+        dir_name = Path(cwd).name
+        try:
+            session, _is_reconnect = await registry.register(
+                session_id=session_id,
+                name=name,
+                cwd=cwd,
+                dir_name=dir_name,
+            )
+            if _agent:
+                try:
+                    await _agent.add_session(session_id, session.room_name)
+                except Exception as e:
+                    print(f"[server] session sync: add_session failed for {session_id}: {e}")
+            registered += 1
+        except Exception as e:
+            print(f"[server] session sync: register failed for {session_id}: {e}")
+
+    print(f"[server] session sync: registered {registered} session(s) from daemon")
+    await _broadcast_sessions()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _agent, _http_client
@@ -406,6 +464,14 @@ async def lifespan(app: FastAPI):
 
     # Warm up Kokoro TTS in the background (non-blocking)
     _spawn_background(_warmup_kokoro())
+
+    # Resilience: repopulate the session registry from the daemon's known
+    # sessions.  If the relay restarts without Claude Code restarting,
+    # nothing re-registers automatically (SessionStart hook only fires
+    # once per Claude Code session).  Syncing from the daemon on boot
+    # closes that gap.
+    _spawn_background(_sync_sessions_from_daemon())
+
     yield
     _fd_monitor_task.cancel()
     _mem_cleanup_task.cancel()
@@ -971,11 +1037,17 @@ async def send_message_to_session(session_id: str, request: Request):
 
     # Identify the caller
     caller = device.get("device_name", "cli")
-    msg = f"[Voice from {caller}]: {text}"
-    try:
-        session.voice_queue.put_nowait(msg)
-    except asyncio.QueueFull:
-        return JSONResponse({"error": "Session voice queue is full"}, status_code=429)
+
+    # Inject the message into the session's tmux pane via the daemon — same
+    # path the LiveKit agent uses for voice transcription.
+    inject_result = await _daemon_ipc({
+        "cmd": "inject-text", "session_id": session_id, "text": text,
+    })
+    if not inject_result.get("ok"):
+        return JSONResponse(
+            {"error": inject_result.get("error") or "inject-text failed"},
+            status_code=500,
+        )
 
     # Set agent to thinking state
     if _agent:
@@ -995,6 +1067,115 @@ async def interrupt_session(session_id: str, request: Request):
     if result.get("ok"):
         return JSONResponse({"success": True})
     return JSONResponse({"error": result.get("error", "Interrupt failed")}, status_code=500)
+
+
+@app.post("/api/sessions/{session_id}/register")
+async def register_session_from_hook(session_id: str, request: Request):
+    """Register a Claude Code session from the SessionStart hook.
+
+    Replaces the old '/voice-multiplexer:standby' invocation for initial
+    registration.  The hook posts {cwd, name} and we create a registry
+    entry plus a LiveKit room so the session shows up in the web UI and
+    can receive voice input.
+    """
+    _require_auth(request)
+    body = await request.json()
+    cwd = (body.get("cwd") or "").strip()
+    if not cwd:
+        return JSONResponse({"error": "cwd is required"}, status_code=400)
+
+    name = (body.get("name") or cwd).strip()
+    dir_name = Path(cwd).name
+
+    session, is_reconnect = await registry.register(
+        session_id=session_id,
+        name=name,
+        cwd=cwd,
+        dir_name=dir_name,
+    )
+
+    # Create the LiveKit room so audio I/O works.
+    if _agent:
+        try:
+            if is_reconnect:
+                await _agent.remove_session(session_id)
+            await _agent.add_session(session_id, session.room_name)
+        except Exception as e:
+            print(f"[register] Failed to create room for {session_id}: {e}")
+
+    await _broadcast_sessions()
+    return JSONResponse({"ok": True, "session_id": session_id, "reconnect": is_reconnect})
+
+
+@app.post("/api/sessions/{session_id}/tts")
+async def tts_session(session_id: str, request: Request):
+    """Play TTS audio for a session.
+
+    Called by the Stop hook (via daemon secret) to speak Claude's last
+    assistant message.  Routes through the same LiveKit agent pipeline as
+    relay_respond, but does not require a live MCP connection.
+    """
+    _require_auth(request)
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        return JSONResponse({"error": "text is required"}, status_code=400)
+
+    session = await registry.get(session_id)
+    if not session:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+
+    if _agent:
+        # Await the queueing so the response_queue is populated before
+        # /turn-complete arrives; otherwise handle_claude_listening races
+        # and goes idle before TTS starts.
+        await _agent.handle_claude_response(session_id, text)
+
+    await _notify_client_transcript(session_id, "claude", text)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/sessions/{session_id}/turn-complete")
+async def turn_complete_session(session_id: str, request: Request):
+    """Signal that Claude has finished an assistant turn.
+
+    Routes through the agent's handle_claude_listening path so the
+    TTS-end transition lands on 'idle' (mic re-enables) instead of
+    'thinking' (mic stays disabled waiting for more Claude work).
+    """
+    _require_auth(request)
+    session = await registry.get(session_id)
+    if not session:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+
+    # Tell the agent Claude's turn is done — it will transition to idle
+    # when any currently-playing TTS finishes.
+    if _agent:
+        _spawn_background(_agent.handle_claude_listening(session_id))
+
+    # Also broadcast a turn-complete event for the web client.
+    msg = json.dumps({
+        "type": "turn-complete",
+        "session_id": session_id,
+        "ts": time.time(),
+    })
+    for client_ws in list(_clients.values()):
+        try:
+            await client_ws.send_text(msg)
+        except Exception:
+            pass
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/sessions/{session_id}/cancel-tts")
+async def cancel_tts_session(session_id: str, request: Request):
+    """Cancel any in-progress TTS playback for a session."""
+    _require_auth(request)
+    if _agent:
+        room = _agent.get_room(session_id)
+        if room:
+            await room.cancel_tts()
+    return JSONResponse({"ok": True})
 
 
 @app.post("/api/sessions/{session_id}/clear-context")
@@ -1278,11 +1459,13 @@ async def client_ws(ws: WebSocket):
                             connected_session_id = None
                         else:
                             try:
-                                msg = f"[Voice from {client_id}]: {text}"
-                                try:
-                                    session.voice_queue.put_nowait(msg)
-                                except asyncio.QueueFull:
-                                    print(f"Voice queue full for session {connected_session_id}")
+                                inject_result = await _daemon_ipc({
+                                    "cmd": "inject-text",
+                                    "session_id": connected_session_id,
+                                    "text": text,
+                                })
+                                if not inject_result.get("ok"):
+                                    print(f"inject-text failed for {connected_session_id}: {inject_result.get('error')}")
                                     continue
                                 # Set agent to thinking state
                                 if _agent:
@@ -1290,7 +1473,7 @@ async def client_ws(ws: WebSocket):
                                 # Broadcast transcript
                                 await _notify_client_transcript(connected_session_id, "user", text)
                             except Exception as e:
-                                print(f"Failed to queue message for session {connected_session_id}: {e}")
+                                print(f"Failed to inject text for session {connected_session_id}: {e}")
                                 await ws.send_text(json.dumps({
                                     "type": "session_disconnected",
                                     "session_id": connected_session_id,

@@ -152,8 +152,7 @@ export function SessionList({
       <div data-component="SessionList" className={styles.EmptyState}>
         <p className={styles.EmptyTitle}>No Claude sessions</p>
         <p className={styles.EmptyHint}>
-          Use <code className={styles.Code}>/voice-multiplexer:standby</code> in
-          a Claude session, or{" "}
+          Open Claude Code in any directory to auto-register, or{" "}
           <button
             className={styles.SpawnLink}
             onClick={() => setShowNewSession(true)}

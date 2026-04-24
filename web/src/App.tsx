@@ -368,8 +368,13 @@ export default function App() {
                 onConnected={() => livekit.setConnected(true)}
                 onDisconnected={() => livekit.setConnected(false)}
                 onInterrupt={() => {
+                  // Barge-in: cancel any in-progress TTS so the user
+                  // can speak.  Does not interrupt Claude itself —
+                  // that now comes from send-keys during tool use.
                   relay.interruptAgent();
-                  relay.hardInterruptSession(relay.connectedSessionId!);
+                  if (relay.connectedSessionId) {
+                    relay.cancelTts(relay.connectedSessionId);
+                  }
                 }}
                 particleAnalyserRef={particleAnalyserRef}
               />

@@ -111,13 +111,16 @@ export function MicControls({
     }
   }, [agentState, autoListen, room.localParticipant]);
 
-  const showInterrupt =
-    agentState === "thinking" ||
-    agentState === "speaking" ||
-    agentState === "error";
-
   const toggleMic = async () => {
     initAudio();
+    // If Claude is currently speaking and the user taps the mic, treat
+    // that as a barge-in: cancel TTS and enable the mic immediately.
+    if (agentState === "speaking") {
+      onInterrupt();
+      await room.localParticipant.setMicrophoneEnabled(true);
+      onAutoListenChange(true);
+      return;
+    }
     if (agentState === "idle") {
       const next = !isMicrophoneEnabled;
       await room.localParticipant.setMicrophoneEnabled(next);
@@ -224,38 +227,6 @@ export function MicControls({
             )}
           </svg>
         </button>
-        {showInterrupt && (
-          <button
-            onClick={async () => {
-              initAudio();
-              // Immediately enable mic (don't wait for React state/effect cycle)
-              if (autoListen) {
-                await room.localParticipant.setMicrophoneEnabled(true);
-              }
-              onInterrupt();
-            }}
-            className={classNames(styles.CircleButton, styles.InterruptButton)}
-          >
-            <svg
-              className={classNames(styles.ButtonIcon, styles.InterruptIcon)}
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={2}
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M9 9l6 6m0-6l-6 6"
-              />
-            </svg>
-          </button>
-        )}
         <button
           onClick={toggleSpeaker}
           className={classNames(

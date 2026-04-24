@@ -501,6 +501,14 @@ export function useRelay(authenticated: boolean = true) {
           scheduleSave(syncSessionId);
           break;
         }
+        case "turn-complete": {
+          // Informational only — the relay sends an agent_status "idle"
+          // when TTS actually finishes, which is what drives the mic
+          // re-enable.  Flipping state here would re-enable the mic
+          // before TTS starts and cause Claude's own voice to be
+          // captured as user input.
+          break;
+        }
         case "agent_status": {
           const newActivity = data.activity ?? null;
           setState((s) => {
@@ -832,6 +840,20 @@ export function useRelay(authenticated: boolean = true) {
     [],
   );
 
+  const cancelTts = useCallback(
+    async (sessionId: string): Promise<boolean> => {
+      try {
+        const resp = await authFetch(`/api/sessions/${sessionId}/cancel-tts`, {
+          method: "POST",
+        });
+        return resp.ok;
+      } catch {
+        return false;
+      }
+    },
+    [],
+  );
+
   const clearContextSession = useCallback(
     async (sessionId: string): Promise<boolean> => {
       try {
@@ -978,6 +1000,7 @@ export function useRelay(authenticated: boolean = true) {
     killSession,
     restartSession,
     hardInterruptSession,
+    cancelTts,
     clearContextSession,
     compactSession,
     changeModel,

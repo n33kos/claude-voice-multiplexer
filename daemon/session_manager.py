@@ -172,29 +172,12 @@ class SessionManager:
                 # event handlers are fully attached in Claude's TUI.
                 await asyncio.sleep(1.5)
             else:
-                logger.warning(f"[sessions] Claude prompt not detected in {tmux_session} after 30s — sending standby anyway")
+                logger.warning(f"[sessions] Claude prompt not detected in {tmux_session} after 30s — continuing anyway")
 
-            # Now enter voice standby.
-            # Use -l (literal) flag so tmux sends the text as typed characters
-            # rather than interpreting any special key sequences.
-            # Send Enter twice: the first press selects the slash command from
-            # the autocomplete dropdown, and the second press submits it.
-            await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "-l", "/voice-multiplexer:standby"])
-            await asyncio.sleep(0.3)  # Brief pause between text and Enter
-            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-            await asyncio.sleep(0.5)  # Wait for autocomplete selection
-            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-
-            # Post-verification: capture the pane to confirm the command was received
-            await asyncio.sleep(3.0)
-            try:
-                pane_output = await self._run_output([
-                    "tmux", "capture-pane", "-t", tmux_session, "-p", "-S", "-5"
-                ])
-                logger.info(f"[sessions] pane after standby command: {repr(pane_output[-200:])}")
-            except Exception:
-                pass
+            # Voice registration happens automatically via the SessionStart
+            # hook fired by Claude Code itself — no need to inject a slash
+            # command here.  Give the hook a moment to POST to /register.
+            await asyncio.sleep(2.0)
 
             # Compute expected relay session ID from CWD (same algorithm as
             # the MCP plugin) and poll for that specific ID to avoid picking up
@@ -271,7 +254,7 @@ class SessionManager:
             return False
 
     async def hard_interrupt(self, session_id: str) -> bool:
-        """Send Ctrl-C + MCP reconnect + re-enter standby in the tmux session."""
+        """Send Ctrl-C + MCP reconnect to the tmux session."""
         async with self._lock:
             session = self._find_session(session_id)
             if not session:
@@ -287,14 +270,6 @@ class SessionManager:
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             await asyncio.sleep(0.5)
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-            await asyncio.sleep(2.0)
-            # Voice standby — same double-Enter pattern
-            await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "-l", "/voice-multiplexer:standby"])
-            await asyncio.sleep(0.3)
-            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-            await asyncio.sleep(0.5)
-            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             return True
         except Exception as e:
             logger.error(f"[sessions] hard_interrupt failed: {e}")
@@ -303,9 +278,9 @@ class SessionManager:
     async def clear_context(self, session_id: str) -> bool:
         """Send /clear to a Claude session to reset its conversation context.
 
-        Performs a hard interrupt first (Ctrl-C + Escape) to break Claude out of
-        any current operation (standby, active work, tool use, etc.), then sends
-        /clear, reconnects the MCP plugin, and re-enters voice standby.
+        Performs a hard interrupt first (Ctrl-C + Escape) to break Claude out
+        of any current operation, then sends /clear and reconnects the MCP
+        plugin.
         """
         async with self._lock:
             session = self._find_session(session_id)
@@ -339,15 +314,6 @@ class SessionManager:
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             await asyncio.sleep(0.5)
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-            await asyncio.sleep(2.0)
-
-            # Step 4: Re-enter voice standby
-            await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "-l", "/voice-multiplexer:standby"])
-            await asyncio.sleep(0.3)
-            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-            await asyncio.sleep(0.5)
-            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             return True
         except Exception as e:
             logger.error(f"[sessions] clear_context failed: {e}")
@@ -356,9 +322,9 @@ class SessionManager:
     async def compact_context(self, session_id: str) -> bool:
         """Send /compact to a Claude session to compact its conversation context.
 
-        Performs a hard interrupt first (Ctrl-C + Escape) to break Claude out of
-        any current operation (standby, active work, tool use, etc.), then sends
-        /compact, reconnects the MCP plugin, and re-enters voice standby.
+        Performs a hard interrupt first (Ctrl-C + Escape) to break Claude out
+        of any current operation, then sends /compact and reconnects the MCP
+        plugin.
         """
         async with self._lock:
             session = self._find_session(session_id)
@@ -392,15 +358,6 @@ class SessionManager:
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             await asyncio.sleep(0.5)
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-            await asyncio.sleep(2.0)
-
-            # Step 4: Re-enter voice standby
-            await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "-l", "/voice-multiplexer:standby"])
-            await asyncio.sleep(0.3)
-            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-            await asyncio.sleep(0.5)
-            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             return True
         except Exception as e:
             logger.error(f"[sessions] compact_context failed: {e}")
@@ -409,10 +366,10 @@ class SessionManager:
     async def change_model(self, session_id: str, model: str) -> bool:
         """Switch the Claude model in a session via /model <name>.
 
-        Performs a hard interrupt first (Ctrl-C + Escape) to break Claude out of
-        any current operation, then sends `/model <name>` as a single command
-        (which switches immediately without an interactive picker), reconnects
-        the MCP plugin, and re-enters voice standby.
+        Performs a hard interrupt first (Ctrl-C + Escape) to break Claude out
+        of any current operation, then sends `/model <name>` as a single
+        command (which switches immediately without an interactive picker)
+        and reconnects the MCP plugin.
         """
         # Map full model IDs to short names accepted by /model
         MODEL_NAMES = {
@@ -450,15 +407,6 @@ class SessionManager:
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             await asyncio.sleep(0.5)
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-            await asyncio.sleep(2.0)
-
-            # Step 4: Re-enter voice standby
-            await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "-l", "/voice-multiplexer:standby"])
-            await asyncio.sleep(0.3)
-            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-            await asyncio.sleep(0.5)
-            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             return True
         except Exception as e:
             logger.error(f"[sessions] change_model failed: {e}")
@@ -480,11 +428,7 @@ class SessionManager:
         return await self.spawn(cwd)
 
     async def reconnect_session(self, session_id: str = "", cwd: str = "") -> dict:
-        """Attempt to reconnect to a session's tmux pane by re-entering standby.
-
-        First reconnects the MCP plugin to get a fresh connection to the relay
-        server (clears stale session state from previous relay instance), then
-        re-enters voice standby.
+        """Clear stale MCP state by reconnecting the plugin in the tmux pane.
 
         Accepts session_id (preferred) or cwd (fallback) to locate the session.
         """
@@ -498,18 +442,10 @@ class SessionManager:
                 return {"ok": False, "error": "Session not found"}
             tmux_session = session.tmux_session
         try:
-            # Reconnect MCP plugin first to clear stale session state
-            # Slash commands need two Enters (autocomplete select + submit)
+            # Reconnect MCP plugin to clear stale session state.
+            # Slash commands need two Enters (autocomplete select + submit).
             await self._run(["tmux", "send-keys", "-t", tmux_session,
                              "-l", "/mcp reconnect plugin:voice-multiplexer:voice-multiplexer"])
-            await asyncio.sleep(0.3)
-            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-            await asyncio.sleep(0.5)
-            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
-            await asyncio.sleep(2.0)
-            # Then re-enter voice standby
-            await self._run(["tmux", "send-keys", "-t", tmux_session,
-                             "-l", "/voice-multiplexer:standby"])
             await asyncio.sleep(0.3)
             await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
             await asyncio.sleep(0.5)
@@ -568,6 +504,45 @@ class SessionManager:
             return proc.returncode == 0
         except Exception as e:
             logger.error(f"[sessions] send_special_key failed: {e}")
+            return False
+
+    async def inject_text(self, session_id: str, text: str) -> bool:
+        """Inject text as typed input into a session's tmux pane and submit.
+
+        This is the primary voice-in mechanism in the post-standby world.
+        Transcribed speech arrives here, gets sent as literal keystrokes
+        (just like a human typing), and is submitted with Enter.
+
+        Newlines in the input are flattened to semicolons so multi-line
+        transcriptions do not prematurely submit the turn.  The trailing
+        Enter is sent separately to submit the whole turn atomically.
+        """
+        async with self._lock:
+            session = self._find_session(session_id)
+            if not session:
+                return False
+            tmux_session = session.tmux_session
+        try:
+            safe_text = text.replace("\r\n", "; ").replace("\n", "; ").replace("\r", "; ")
+            # Stage 1: send literal text
+            p1 = await asyncio.create_subprocess_exec(
+                "tmux", "send-keys", "-t", tmux_session, "-l", safe_text,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await p1.wait()
+            if p1.returncode != 0:
+                return False
+            # Stage 2: press Enter to submit
+            p2 = await asyncio.create_subprocess_exec(
+                "tmux", "send-keys", "-t", tmux_session, "Enter", "",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await p2.wait()
+            return p2.returncode == 0
+        except Exception as e:
+            logger.error(f"[sessions] inject_text failed: {e}")
             return False
 
     async def get_attach_info(self, session_id: str) -> Optional[dict]:
@@ -848,20 +823,14 @@ class SessionManager:
                     session.relay_session_id = computed_id
                 logger.info(f"[sessions] resolved pending relay_session_id: {session.tmux_session} -> {computed_id}")
 
-            # Check relay heartbeat for zombie detection
-            if session.relay_session_id:
-                if session.relay_session_id in relay_sessions:
-                    session.last_relay_heartbeat = time.time()
-                    if session.status not in ("active",):
-                        session.status = "standby"
-                else:
-                    age = time.time() - session.last_relay_heartbeat
-                    if age > ZOMBIE_THRESHOLD:
-                        if session.status != "zombie":
-                            logger.warning(f"[sessions] zombie detected: {session.tmux_session}")
-                            async with self._lock:
-                                session.status = "zombie"
-                            await self.hard_interrupt(session.relay_session_id)
+            # Track relay heartbeat for status display only.  We no longer
+            # take disruptive action on "zombie" sessions — the old hard_interrupt
+            # recovery was a workaround for MCP-standby SSE drops that don't
+            # apply now that voice routes through send-keys + hooks.
+            if session.relay_session_id and session.relay_session_id in relay_sessions:
+                session.last_relay_heartbeat = time.time()
+                if session.status not in ("active",):
+                    session.status = "standby"
 
     async def _reap_caffeinate(self):
         """Kill excess caffeinate processes spawned by managed Claude sessions.
