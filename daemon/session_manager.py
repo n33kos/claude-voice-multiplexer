@@ -513,9 +513,10 @@ class SessionManager:
         Transcribed speech arrives here, gets sent as literal keystrokes
         (just like a human typing), and is submitted with Enter.
 
-        Newlines in the input are flattened to semicolons so multi-line
+        Newlines in the input are flattened to spaces so multi-line
         transcriptions do not prematurely submit the turn.  The trailing
         Enter is sent separately to submit the whole turn atomically.
+        Spaces (rather than semicolons) avoid corrupting dictated code.
         """
         async with self._lock:
             session = self._find_session(session_id)
@@ -523,7 +524,7 @@ class SessionManager:
                 return False
             tmux_session = session.tmux_session
         try:
-            safe_text = text.replace("\r\n", "; ").replace("\n", "; ").replace("\r", "; ")
+            safe_text = text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
             # Stage 1: send literal text
             p1 = await asyncio.create_subprocess_exec(
                 "tmux", "send-keys", "-t", tmux_session, "-l", safe_text,

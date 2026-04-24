@@ -364,57 +364,60 @@ async def _sync_sessions_from_daemon():
     """Repopulate the in-memory registry from the daemon's known sessions.
 
     The daemon is the source of truth for which tmux sessions exist.
-    The relay's registry is in-memory and wiped on restart — without this
-    sync, a relay restart leaves the Stop/SessionStart hooks unable to
-    find the session and voice breaks silently.
+    The relay's registry is in-memory and wiped on restart — without
+    this sync, a relay restart leaves the Stop/SessionStart hooks
+    unable to find the session and voice breaks silently.
 
-    We give the daemon a brief window to be reachable after startup, since
-    the relay typically starts before the daemon finishes its own init.
+    Retries with backoff until the daemon is reachable AND reports at
+    least one session.  The relay may start before the daemon, and the
+    daemon takes a couple seconds to enumerate existing tmux sessions
+    after it comes up.  This loop ends on first successful populate.
     """
-    # Let the daemon fully initialize first (it may still be scanning
-    # existing tmux sessions).
-    await asyncio.sleep(1.0)
+    delays = [1.0, 2.0, 3.0, 5.0, 10.0, 10.0, 15.0, 30.0, 60.0]
+    attempt = 0
+    while True:
+        attempt += 1
+        # Wait before the next attempt — delay[0] gives the daemon a
+        # head start on its initial tmux scan before the first try.
+        await asyncio.sleep(delays[min(attempt - 1, len(delays) - 1)])
 
-    for attempt in range(1, 4):
         result = await _daemon_ipc({"cmd": "list"})
-        if result.get("ok"):
-            break
-        await asyncio.sleep(1.0)
-    else:
-        print("[server] session sync: daemon unreachable after 3 attempts, skipping")
-        return
-
-    sessions = result.get("sessions", []) or []
-    if not sessions:
-        print("[server] session sync: no sessions reported by daemon")
-        return
-
-    registered = 0
-    for s in sessions:
-        cwd = s.get("cwd") or ""
-        if not cwd:
+        if not result.get("ok"):
+            if attempt <= 3:
+                print(f"[server] session sync attempt {attempt}: daemon unreachable, will retry")
             continue
-        session_id = s.get("relay_session_id") or hashlib.sha256(cwd.encode()).hexdigest()[:12]
-        name = s.get("session_name") or Path(cwd).name
-        dir_name = Path(cwd).name
-        try:
-            session, _is_reconnect = await registry.register(
-                session_id=session_id,
-                name=name,
-                cwd=cwd,
-                dir_name=dir_name,
-            )
-            if _agent:
-                try:
-                    await _agent.add_session(session_id, session.room_name)
-                except Exception as e:
-                    print(f"[server] session sync: add_session failed for {session_id}: {e}")
-            registered += 1
-        except Exception as e:
-            print(f"[server] session sync: register failed for {session_id}: {e}")
 
-    print(f"[server] session sync: registered {registered} session(s) from daemon")
-    await _broadcast_sessions()
+        sessions = [
+            s for s in (result.get("sessions") or [])
+            if s.get("cwd") and s.get("status") != "spawning"
+        ]
+        if not sessions:
+            if attempt <= 3:
+                print(f"[server] session sync attempt {attempt}: no sessions yet, will retry")
+            continue
+
+        registered = 0
+        for s in sessions:
+            cwd = s["cwd"]
+            session_id = s.get("relay_session_id") or hashlib.sha256(cwd.encode()).hexdigest()[:12]
+            name = s.get("session_name") or Path(cwd).name
+            dir_name = Path(cwd).name
+            try:
+                session, _is_reconnect = await registry.register(
+                    session_id=session_id, name=name, cwd=cwd, dir_name=dir_name,
+                )
+                if _agent:
+                    try:
+                        await _agent.add_session(session_id, session.room_name)
+                    except Exception as e:
+                        print(f"[server] session sync: add_session failed for {session_id}: {e}")
+                registered += 1
+            except Exception as e:
+                print(f"[server] session sync: register failed for {session_id}: {e}")
+
+        print(f"[server] session sync: registered {registered} session(s) from daemon (attempt {attempt})")
+        await _broadcast_sessions()
+        return
 
 
 @asynccontextmanager
@@ -1065,25 +1068,54 @@ async def interrupt_session(session_id: str, request: Request):
     _require_auth(request)
     result = await _daemon_ipc({"cmd": "hard-interrupt", "session_id": session_id})
     if result.get("ok"):
+        # The interrupt cancels the current turn, so the Stop hook won't
+        # fire.  Manually route through handle_claude_listening + the
+        # turn-complete broadcast so the mic re-enables and the UI
+        # transitions to idle.
+        if _agent:
+            _spawn_background(_agent.handle_claude_listening(session_id))
+        msg = json.dumps({
+            "type": "turn-complete",
+            "session_id": session_id,
+            "ts": time.time(),
+        })
+        for client_ws in list(_clients.values()):
+            try:
+                await client_ws.send_text(msg)
+            except Exception:
+                pass
         return JSONResponse({"success": True})
     return JSONResponse({"error": result.get("error", "Interrupt failed")}, status_code=500)
 
 
 @app.post("/api/sessions/{session_id}/register")
 async def register_session_from_hook(session_id: str, request: Request):
-    """Register a Claude Code session from the SessionStart hook.
+    """Register a Claude Code session from the SessionStart/Stop hook.
 
-    IMPORTANT: only registers when the daemon has a tmux session for this
-    cwd.  The SessionStart hook fires for EVERY Claude Code launch — even
-    quick one-off sessions outside tmux — so we must gate registration on
-    the daemon actually managing a tmux pane, or a random Claude in a
-    managed cwd would overwrite the real session's registration.
+    Fast path: if the session is already registered with the expected cwd
+    we return OK without touching anything.  This matters — the Stop hook
+    hits this endpoint on every turn for self-healing, and unconditionally
+    re-registering would tear down and rebuild the LiveKit room each time,
+    dropping audio mid-conversation.
+
+    Gating: only registers when the daemon has a tmux session for this
+    cwd.  SessionStart fires for every Claude Code launch, including quick
+    one-off Claudes that aren't vmux-managed; without the gate, opening
+    a random Claude in a managed cwd would overwrite the real session.
     """
     _require_auth(request)
     body = await request.json()
     cwd = (body.get("cwd") or "").strip()
     if not cwd:
         return JSONResponse({"error": "cwd is required"}, status_code=400)
+
+    # Fast path: already registered with matching cwd.
+    existing = await registry.get(session_id)
+    if existing and existing.cwd == cwd:
+        await registry.heartbeat(session_id)
+        return JSONResponse({
+            "ok": True, "session_id": session_id, "reconnect": False, "fast_path": True,
+        })
 
     # Gate: verify the daemon knows about a tmux session with this cwd.
     list_result = await _daemon_ipc({"cmd": "list"})
@@ -1164,9 +1196,10 @@ async def turn_complete_session(session_id: str, request: Request):
         return JSONResponse({"error": "Session not found"}, status_code=404)
 
     # Tell the agent Claude's turn is done — it will transition to idle
-    # when any currently-playing TTS finishes.
+    # when any currently-playing TTS finishes.  Await rather than spawn
+    # so the broadcast below cannot race ahead of the state transition.
     if _agent:
-        _spawn_background(_agent.handle_claude_listening(session_id))
+        await _agent.handle_claude_listening(session_id)
 
     # Also broadcast a turn-complete event for the web client.
     msg = json.dumps({

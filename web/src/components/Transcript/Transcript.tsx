@@ -272,6 +272,17 @@ export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, o
                   <div className={styles.Markdown}>
                     <ReactMarkdown
                       remarkPlugins={[remarkGfm]}
+                      // Only allow safe URL schemes.  Assistant text is
+                      // attacker-influenceable via tool output / prompt
+                      // injection; without this a javascript:... link
+                      // would pass straight through ReactMarkdown.
+                      urlTransform={(url) => {
+                        const trimmed = (url || "").trim().toLowerCase();
+                        if (/^(https?:|mailto:|tel:|vscode:|#|\/|\.\/|\.\.\/)/.test(trimmed)) {
+                          return url;
+                        }
+                        return "";
+                      }}
                       components={{
                         a: ({ href, children }) => (
                           <a href={href} target="_blank" rel="noopener noreferrer" className={styles.InlineLink}>
