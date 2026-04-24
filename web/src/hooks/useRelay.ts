@@ -897,6 +897,10 @@ export function useRelay(authenticated: boolean = true) {
     wsRef.current?.send(JSON.stringify({ type: "terminal_input", special_key: key }));
   }, []);
 
+  const sendTerminalResize = useCallback((cols: number, rows: number) => {
+    wsRef.current?.send(JSON.stringify({ type: "terminal_resize", cols, rows }));
+  }, []);
+
   const dismissTerminalSnapshot = useCallback(() => {
     setState((s) => ({
       ...s,
@@ -1008,6 +1012,7 @@ export function useRelay(authenticated: boolean = true) {
     dismissTerminalSnapshot,
     sendTerminalKeys,
     sendTerminalSpecialKey,
+    sendTerminalResize,
     startTerminalStream,
     stopTerminalStream,
     setTerminalDataCallback,

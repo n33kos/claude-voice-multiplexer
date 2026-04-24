@@ -546,6 +546,36 @@ class SessionManager:
             logger.error(f"[sessions] inject_text failed: {e}")
             return False
 
+    async def resize_pane(self, session_id: str, cols: int, rows: int) -> bool:
+        """Resize a session's tmux window to the given character dimensions.
+
+        Called when the user refits the terminal overlay — the xterm widget
+        now has a new cols x rows, and we want the tmux pane underneath to
+        match so that the shell wraps at the new width instead of staying
+        at whatever dimensions tmux inherited when the session started.
+
+        Uses `tmux resize-window` (not resize-pane) because our sessions
+        are single-pane and tmux's window size governs the effective pane
+        size for detached sessions.
+        """
+        async with self._lock:
+            session = self._find_session(session_id)
+            if not session:
+                return False
+            tmux_session = session.tmux_session
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "tmux", "resize-window", "-t", tmux_session,
+                "-x", str(cols), "-y", str(rows),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+            return proc.returncode == 0
+        except Exception as e:
+            logger.error(f"[sessions] resize_pane failed: {e}")
+            return False
+
     async def get_attach_info(self, session_id: str) -> Optional[dict]:
         async with self._lock:
             session = self._find_session(session_id)

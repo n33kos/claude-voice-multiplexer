@@ -337,6 +337,7 @@ export default function App() {
           onStartStream={relay.startTerminalStream}
           onStopStream={relay.stopTerminalStream}
           onSetTerminalDataCallback={relay.setTerminalDataCallback}
+          onResizePane={relay.sendTerminalResize}
         />
 
         {relay.connectedSessionId && !navigator.mediaDevices && (

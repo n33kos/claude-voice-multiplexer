@@ -360,6 +360,51 @@ async def _warmup_kokoro():
         print(f"[server] Kokoro TTS warm-up failed (non-fatal): {e}")
 
 
+async def _periodic_session_resync():
+    """Refresh the registry from the daemon on a schedule.
+
+    Idle Claude Code sessions have nothing that naturally heartbeats
+    them on the relay side — no MCP tool calls, no Stop hook firing —
+    so `_prune_stale` removes them after SESSION_TIMEOUT (10 min).
+    Re-running the sync every couple minutes keeps them alive as long
+    as their tmux pane exists in the daemon's view.
+    """
+    while True:
+        try:
+            await asyncio.sleep(120)  # 2 minutes — well under SESSION_TIMEOUT
+            result = await _daemon_ipc({"cmd": "list"})
+            if not result.get("ok"):
+                continue
+            sessions = [
+                s for s in (result.get("sessions") or [])
+                if s.get("cwd") and s.get("status") != "spawning"
+            ]
+            for s in sessions:
+                cwd = s["cwd"]
+                session_id = s.get("relay_session_id") or hashlib.sha256(cwd.encode()).hexdigest()[:12]
+                existing = await registry.get(session_id)
+                if existing and existing.cwd == cwd:
+                    # Already known — just refresh heartbeat.
+                    await registry.heartbeat(session_id)
+                    continue
+                # Missing (pruned) or mismatched — re-register.
+                name = s.get("session_name") or Path(cwd).name
+                session, _is_reconnect = await registry.register(
+                    session_id=session_id, name=name, cwd=cwd, dir_name=Path(cwd).name,
+                )
+                if _agent:
+                    try:
+                        await _agent.add_session(session_id, session.room_name)
+                    except Exception:
+                        pass
+            # Broadcast so the web UI reflects the resync.
+            await _broadcast_sessions()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[server] periodic session resync error: {e}")
+
+
 async def _sync_sessions_from_daemon():
     """Repopulate the in-memory registry from the daemon's known sessions.
 
@@ -469,11 +514,12 @@ async def lifespan(app: FastAPI):
     _spawn_background(_warmup_kokoro())
 
     # Resilience: repopulate the session registry from the daemon's known
-    # sessions.  If the relay restarts without Claude Code restarting,
-    # nothing re-registers automatically (SessionStart hook only fires
-    # once per Claude Code session).  Syncing from the daemon on boot
-    # closes that gap.
+    # sessions.  Runs once at boot to close the startup gap, then again
+    # periodically so idle sessions don't get pruned while their tmux
+    # pane still exists.  SESSION_TIMEOUT is 10 minutes, so re-syncing
+    # every 2 minutes keeps the heartbeat fresh with headroom.
     _spawn_background(_sync_sessions_from_daemon())
+    _spawn_background(_periodic_session_resync())
 
     yield
     _fd_monitor_task.cancel()
@@ -1561,6 +1607,24 @@ async def client_ws(ws: WebSocket):
                                 "content": capture["output"],
                                 "timestamp": time.time(),
                             }))
+
+            elif msg_type == "terminal_resize":
+                # Resize the tmux pane to match the web terminal's new
+                # xterm dimensions after a refit.  Keeps the shell from
+                # wrapping at the old column width.
+                if connected_session_id:
+                    try:
+                        cols = int(data.get("cols") or 0)
+                        rows = int(data.get("rows") or 0)
+                    except (TypeError, ValueError):
+                        cols = rows = 0
+                    if cols > 0 and rows > 0:
+                        await _daemon_ipc({
+                            "cmd": "resize-pane",
+                            "session_id": connected_session_id,
+                            "cols": cols,
+                            "rows": rows,
+                        })
 
             elif msg_type == "capture_terminal":
                 # Capture terminal snapshot from daemon — bypasses Claude entirely

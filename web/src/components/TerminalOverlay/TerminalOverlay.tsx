@@ -14,6 +14,7 @@ interface TerminalOverlayProps {
   onStartStream?: () => void;
   onStopStream?: () => void;
   onSetTerminalDataCallback?: (cb: ((data: string) => void) | null) => void;
+  onResizePane?: (cols: number, rows: number) => void;
 }
 
 export function TerminalOverlay({
@@ -24,6 +25,7 @@ export function TerminalOverlay({
   onStartStream,
   onStopStream,
   onSetTerminalDataCallback,
+  onResizePane,
 }: TerminalOverlayProps) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -154,7 +156,22 @@ export function TerminalOverlay({
     } catch {
       // Ignore fit errors
     }
-  }, []);
+    // After fit(), xterm updates term.cols/rows synchronously but the
+    // layout may still settle — wait one frame before reading so we get
+    // the final dimensions, then push them to the tmux pane so the
+    // underlying shell stops wrapping at the old width.
+    if (onResizePane) {
+      requestAnimationFrame(() => {
+        const term = terminalRef.current;
+        if (!term) return;
+        const cols = term.cols;
+        const rows = term.rows;
+        if (cols > 0 && rows > 0) {
+          onResizePane(cols, rows);
+        }
+      });
+    }
+  }, [onResizePane]);
 
   const handleQuickKey = useCallback(
     (key: string) => {
