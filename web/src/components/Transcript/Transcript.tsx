@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import classNames from "classnames";
 import hljs from "highlight.js/lib/core";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { sessionHue } from "../../utils/sessionHue";
 import type { TranscriptProps } from "./Transcript.types";
 import styles from "./Transcript.module.scss";
@@ -247,10 +249,6 @@ export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, o
               </div>
             );
           }
-          // Split long responses into paragraphs (~2-3 sentences each)
-          const paragraphs = entry.speaker === "claude"
-            ? splitIntoParagraphs(entry.text)
-            : [entry.text];
           return (
             <div
               key={i}
@@ -270,9 +268,36 @@ export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, o
                   backgroundColor: `hsla(${hue}, 55%, 35%, 0.85)`,
                 } : undefined}
               >
-                {paragraphs.map((p, j) => (
-                  <p key={j} className={styles.Paragraph}>{linkify(p)}</p>
-                ))}
+                {entry.speaker === "claude" ? (
+                  <div className={styles.Markdown}>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        a: ({ href, children }) => (
+                          <a href={href} target="_blank" rel="noopener noreferrer" className={styles.InlineLink}>
+                            {children}
+                          </a>
+                        ),
+                        code: ({ className, children, ...props }) => {
+                          const match = /language-(\w+)/.exec(className || "");
+                          const text = String(children).replace(/\n$/, "");
+                          // Block code (```...```) — render as CodeBlock
+                          if (match || text.includes("\n")) {
+                            return <CodeBlock code={text} language={match?.[1]} cwd={cwd} />;
+                          }
+                          // Inline code
+                          return <code className={styles.InlineCode} {...props}>{children}</code>;
+                        },
+                      }}
+                    >
+                      {entry.text}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  splitIntoParagraphs(entry.text).map((p, j) => (
+                    <p key={j} className={styles.Paragraph}>{linkify(p)}</p>
+                  ))
+                )}
               </div>
             </div>
           );

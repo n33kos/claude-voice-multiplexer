@@ -1073,16 +1073,31 @@ async def interrupt_session(session_id: str, request: Request):
 async def register_session_from_hook(session_id: str, request: Request):
     """Register a Claude Code session from the SessionStart hook.
 
-    Replaces the old '/voice-multiplexer:standby' invocation for initial
-    registration.  The hook posts {cwd, name} and we create a registry
-    entry plus a LiveKit room so the session shows up in the web UI and
-    can receive voice input.
+    IMPORTANT: only registers when the daemon has a tmux session for this
+    cwd.  The SessionStart hook fires for EVERY Claude Code launch — even
+    quick one-off sessions outside tmux — so we must gate registration on
+    the daemon actually managing a tmux pane, or a random Claude in a
+    managed cwd would overwrite the real session's registration.
     """
     _require_auth(request)
     body = await request.json()
     cwd = (body.get("cwd") or "").strip()
     if not cwd:
         return JSONResponse({"error": "cwd is required"}, status_code=400)
+
+    # Gate: verify the daemon knows about a tmux session with this cwd.
+    list_result = await _daemon_ipc({"cmd": "list"})
+    if not list_result.get("ok"):
+        return JSONResponse(
+            {"ok": False, "error": "daemon unreachable"},
+            status_code=503,
+        )
+    managed_cwds = {s.get("cwd") for s in (list_result.get("sessions") or [])}
+    if cwd not in managed_cwds:
+        return JSONResponse(
+            {"ok": False, "error": "cwd is not managed by vmuxd (no tmux session)"},
+            status_code=404,
+        )
 
     name = (body.get("name") or cwd).strip()
     dir_name = Path(cwd).name
