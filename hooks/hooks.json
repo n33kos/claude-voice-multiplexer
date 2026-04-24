@@ -10,16 +10,6 @@
         ]
       }
     ],
-    "PreToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vmux-pre-tool-use-hook.sh"
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [

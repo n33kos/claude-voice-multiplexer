@@ -57,45 +57,29 @@ fi
 
 relay_session_id=$(printf '%s' "$session_cwd" | shasum -a 256 | awk '{print substr($1, 1, 12)}')
 
-# Extract any assistant text newer than our TTS watermark.
+# Extract the latest assistant text written in the last few seconds.
 #
-# The PreToolUse hook may have already spoken intermediate chunks of this
-# turn and advanced the watermark; we only speak what's left.  If the
-# turn was tool-only (no new text), last_text stays empty and we skip TTS.
+# Claude Code flushes the current turn's final text to the JSONL async,
+# so we poll for up to ~2.5 seconds looking for fresh assistant content.
+# Tool-only turns leave last_text empty and we skip TTS.
 #
-# We poll for up to ~2.5 seconds because Claude Code flushes the final
-# turn text asynchronously relative to the Stop hook firing.
-watermark_dir="$VMUX_DIR/tts-watermarks"
-mkdir -p "$watermark_dir" 2>/dev/null
-watermark_file="$watermark_dir/${claude_session_id}.ts"
-if [ -f "$watermark_file" ]; then
-    watermark=$(cat "$watermark_file" 2>/dev/null)
-else
-    watermark=""
-fi
-
+# jq slurp mode keeps multi-paragraph content intact — an earlier
+# head -n 1 truncated at the first newline.
 _extract_fresh_text() {
-    jq -rs --arg watermark "$watermark" '
+    local cutoff=$(($(date +%s) - 5))
+    jq -rs --argjson cutoff "$cutoff" '
         [.[]
          | select(.message.role == "assistant")
-         | select((.timestamp // "") > $watermark)]
-        | sort_by(.timestamp // "")
-        | {
-            text: (map(.message.content | map(select(.type == "text") | .text) | join("\n"))
-                   | map(select(length > 0))
-                   | join("\n\n")),
-            latest_ts: (map(.timestamp // "") | max // "")
-          }
-        | "\(.latest_ts)\n\(.text)"
+         | select((.timestamp // "" | sub("\\.\\d+Z$"; "Z") | fromdate? // 0) >= $cutoff)]
+        | map(.message.content | map(select(.type == "text") | .text) | join("\n"))
+        | map(select(length > 0))
+        | .[-1] // ""
     ' "$transcript_path" 2>/dev/null
 }
 
 last_text=""
-new_watermark=""
 for i in 1 2 3 4 5 6 7 8; do
-    result=$(_extract_fresh_text)
-    new_watermark=$(echo "$result" | head -n 1)
-    last_text=$(echo "$result" | tail -n +2)
+    last_text=$(_extract_fresh_text)
     if [ -n "$last_text" ]; then
         break
     fi
@@ -128,11 +112,6 @@ if [ -n "$last_text" ]; then
         --max-time 5 \
         "$RELAY_URL/api/sessions/$relay_session_id/tts" \
         -d "$payload" >/dev/null 2>&1
-
-    # Advance watermark so subsequent hooks don't re-speak this text.
-    if [ -n "$new_watermark" ]; then
-        echo "$new_watermark" > "$watermark_file"
-    fi
 fi
 
 # Always signal turn-complete so the mic re-enables after TTS — even for
