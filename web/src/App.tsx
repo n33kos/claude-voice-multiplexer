@@ -298,7 +298,6 @@ export default function App() {
           onConnect={connectAndClearUnread}
           onDisconnect={relay.disconnectSession}
           onClearTranscript={relay.clearTranscript}
-          onReconnectSession={relay.reconnectSession}
           onRemoveSession={relay.removeSession}
           onRenameSession={relay.renameSession}
           onRecolorSession={relay.recolorSession}

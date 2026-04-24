@@ -103,7 +103,6 @@ export function SessionList({
   onConnect,
   onDisconnect,
   onClearTranscript,
-  onReconnectSession,
   onRemoveSession,
   onRenameSession,
   onRecolorSession,
@@ -349,7 +348,6 @@ export function SessionList({
                       <SessionMenu
                         session={session}
                         onClearTranscript={onClearTranscript}
-                        onReconnectSession={onReconnectSession}
                         onRemoveSession={onRemoveSession}
                         onRenameSession={onRenameSession}
                         onRecolorSession={onRecolorSession}

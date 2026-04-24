@@ -290,8 +290,9 @@ a.CodeFilename {
   border: 1px solid var(--color-border);
   color: var(--color-text);
   max-width: 100%;
-  overflow-x: auto;
-  white-space: pre;
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   margin: 0;
   user-select: text;
   -webkit-user-select: text;

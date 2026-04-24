@@ -41,7 +41,7 @@ For remote access: expose relay server via tunnel (Cloudflare/ngrok/Tailscale)
 `vmuxd` is a persistent macOS launchd agent that owns the entire lifecycle of all services:
 
 - **Service manager**: Starts Whisper, Kokoro, LiveKit, and relay server. Monitors each with health checks and auto-restarts on crash with exponential backoff.
-- **Session manager**: Spawns Claude Code sessions inside named tmux windows. Each session runs `claude --dangerously-skip-permissions '/voice-multiplexer:standby'` and immediately registers with the relay server.
+- **Session manager**: Spawns Claude Code sessions inside named tmux windows. Each session runs `claude --permission-mode auto` and immediately registers with the relay server.
 - **Unix socket IPC**: Exposes `/tmp/vmuxd.sock` (mode 0600) for the `vmux` CLI and the relay server to send commands.
 - **Auto-update**: Polls the plugin cache every 60 seconds. If a newer version is found, copies daemon files and restarts via launchd.
 
@@ -62,7 +62,7 @@ Web app "New Session" → POST /api/sessions/spawn {"cwd": "/path/to/project"}
   → relay server → vmux IPC (Unix socket)
     → vmuxd session manager
       → tmux new-session -s "vmux-project-a3f2" -c /path/to/project
-        → send-keys: claude --dangerously-skip-permissions '/voice-multiplexer:standby'
+        → send-keys: claude --permission-mode auto
           → poll relay /api/sessions until session appears (up to 60s)
             → session visible in web UI → auto-connect
 ```

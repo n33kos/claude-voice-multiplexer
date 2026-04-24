@@ -802,29 +802,6 @@ export function useRelay(authenticated: boolean = true) {
     [],
   );
 
-  const reconnectSession = useCallback(
-    async (
-      sessionId: string,
-      cwd?: string,
-    ): Promise<{ ok: boolean; error?: string; session_id?: string }> => {
-      try {
-        const resp = await authFetch("/api/sessions/reconnect", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId, cwd }),
-        });
-        const data = await resp.json();
-        if (!resp.ok) {
-          return { ok: false, error: data.error || "Reconnect failed" };
-        }
-        return { ok: true, session_id: data.session_id };
-      } catch {
-        return { ok: false, error: "Network error" };
-      }
-    },
-    [],
-  );
-
   const killSession = useCallback(
     async (sessionId: string): Promise<boolean> => {
       try {
@@ -1078,7 +1055,6 @@ export function useRelay(authenticated: boolean = true) {
     interruptAgent,
     sendTextMessage,
     clearTranscript,
-    reconnectSession,
     removeSession,
     renameSession,
     recolorSession,

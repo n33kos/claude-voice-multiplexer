@@ -14,7 +14,6 @@ interface SessionMenuProps {
   onRestartSession: (sessionId: string) => Promise<boolean>;
   onHardInterrupt: (sessionId: string) => Promise<boolean>;
   onSpawnSession: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
-  onReconnectSession: (sessionId: string, cwd?: string) => Promise<{ ok: boolean; error?: string }>;
   onClearContext: (sessionId: string) => Promise<boolean>;
   onCompact: (sessionId: string) => Promise<boolean>;
   onMenuOpenChange?: (open: boolean) => void;
@@ -30,7 +29,6 @@ export function SessionMenu({
   onRestartSession,
   onHardInterrupt,
   onSpawnSession,
-  onReconnectSession,
   onClearContext,
   onCompact,
   onMenuOpenChange,
@@ -223,16 +221,10 @@ export function SessionMenu({
                 className={styles.MenuItem}
                 onSelect={() =>
                   runAction(() =>
-                    onReconnectSession(session.session_id, session.cwd).then((r) => r.ok),
+                    session.online
+                      ? onRestartSession(session.session_id)
+                      : onSpawnSession(session.cwd).then((r) => r.ok),
                   )
-                }
-              >
-                Reconnect
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                className={styles.MenuItem}
-                onSelect={() =>
-                  runAction(() => onSpawnSession(session.cwd).then((r) => r.ok))
                 }
               >
                 Respawn
@@ -244,14 +236,6 @@ export function SessionMenu({
                 }
               >
                 Hard interrupt
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                className={styles.MenuItem}
-                onSelect={() =>
-                  runAction(() => onRestartSession(session.session_id))
-                }
-              >
-                Restart session
               </DropdownMenu.Item>
               <DropdownMenu.Item
                 className={styles.DeleteItem}

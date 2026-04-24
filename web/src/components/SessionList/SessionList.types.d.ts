@@ -10,10 +10,6 @@ export interface SessionListProps {
   onConnect: (sessionId: string) => void;
   onDisconnect: () => void;
   onClearTranscript: (sessionId: string) => void;
-  onReconnectSession: (
-    sessionId: string,
-    cwd?: string,
-  ) => Promise<{ ok: boolean; error?: string; session_id?: string }>;
   onRemoveSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, displayName: string) => void;
   onRecolorSession: (sessionId: string, hue: number | null) => void;

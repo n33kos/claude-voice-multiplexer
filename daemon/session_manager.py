@@ -155,8 +155,8 @@ class SessionManager:
             # send the standby command as a separate step (same pattern as
             # hard_interrupt and reconnect_session).
             claude_cmd = (
-                f"claude --continue --dangerously-skip-permissions || "
-                f"claude --dangerously-skip-permissions"
+                f"claude --continue --permission-mode auto || "
+                f"claude --permission-mode auto"
             )
             await self._run(["tmux", "send-keys", "-t", tmux_session, "-l", claude_cmd])
             await asyncio.sleep(0.3)
