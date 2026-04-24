@@ -143,7 +143,7 @@ function CodeBlock({ code, filename, language, cwd }: { code: string; filename?:
   );
 }
 
-export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, onCaptureTerminal }: TranscriptProps & { onCaptureTerminal?: () => void }) {
+export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, onAnswerQuestion, onAnswerPermission, onCaptureTerminal }: TranscriptProps & { onCaptureTerminal?: () => void }) {
   const endRef = useRef<HTMLDivElement>(null);
   const [textInput, setTextInput] = useState("");
   const hue = hueOverride != null ? hueOverride : (sessionId ? sessionHue(sessionId) : null);
@@ -215,6 +215,108 @@ export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, o
                 </span>
                 <div className={classNames(styles.Bubble, styles.BubbleSystem)}>
                   <p className={styles.Paragraph}>{entry.text}</p>
+                </div>
+              </div>
+            );
+          }
+          if (entry.speaker === "permission" && entry.permission) {
+            const p = entry.permission;
+            const answered = entry.permissionAnswered;
+            const choices: { id: "allow" | "allow_always" | "deny"; label: string; desc: string; danger?: boolean }[] = [
+              { id: "allow", label: "Allow once", desc: "Approve this single call" },
+              { id: "allow_always", label: "Allow for session", desc: "Don't ask again this session" },
+              { id: "deny", label: "Deny", desc: "Cancel and let Claude try differently", danger: true },
+            ];
+            return (
+              <div key={i} className={styles.MessageRow}>
+                <span className={styles.SpeakerLabel}>Permission needed</span>
+                <div className={classNames(styles.Bubble, styles.BubblePermission)}>
+                  <p className={styles.QuestionText}>
+                    Claude wants to use <code className={styles.InlineCode}>{p.tool_name}</code>
+                  </p>
+                  {p.summary && <p className={styles.PermissionSummary}>{p.summary}</p>}
+                  <div className={styles.OptionList}>
+                    {choices.map((c) => {
+                      const isSelected = answered === c.id;
+                      const isDisabled = !!answered;
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          disabled={isDisabled || !onAnswerPermission || !sessionId}
+                          onClick={() => {
+                            if (onAnswerPermission && sessionId) {
+                              onAnswerPermission(sessionId, c.id);
+                            }
+                          }}
+                          className={classNames(styles.OptionButton, {
+                            [styles.OptionButtonSelected]: isSelected,
+                            [styles.OptionButtonFaded]: isDisabled && !isSelected,
+                            [styles.OptionButtonDanger]: c.danger,
+                          })}
+                        >
+                          <span className={styles.OptionContent}>
+                            <span className={styles.OptionLabel}>{c.label}</span>
+                            <span className={styles.OptionDescription}>{c.desc}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {answered && (
+                    <p className={styles.QuestionAnsweredNote}>
+                      {answered === "allow" && "Allowed once."}
+                      {answered === "allow_always" && "Allowed for the rest of this session."}
+                      {answered === "deny" && "Denied."}
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          }
+          if (entry.speaker === "question" && entry.question) {
+            const q = entry.question;
+            const answered = entry.answered;
+            return (
+              <div key={i} className={styles.MessageRow}>
+                <span className={styles.SpeakerLabel}>
+                  {q.header || "Question"}
+                </span>
+                <div className={classNames(styles.Bubble, styles.BubbleQuestion)}>
+                  <p className={styles.QuestionText}>{q.question}</p>
+                  <div className={styles.OptionList}>
+                    {q.options.map((opt, idx) => {
+                      const isSelected = answered?.optionIndex === idx;
+                      const isDisabled = !!answered;
+                      return (
+                        <button
+                          key={idx}
+                          type="button"
+                          disabled={isDisabled || !onAnswerQuestion || !sessionId}
+                          onClick={() => {
+                            if (onAnswerQuestion && sessionId) {
+                              onAnswerQuestion(sessionId, idx, opt.label);
+                            }
+                          }}
+                          className={classNames(styles.OptionButton, {
+                            [styles.OptionButtonSelected]: isSelected,
+                            [styles.OptionButtonFaded]: isDisabled && !isSelected,
+                          })}
+                        >
+                          <span className={styles.OptionNumber}>{idx + 1}</span>
+                          <span className={styles.OptionContent}>
+                            <span className={styles.OptionLabel}>{opt.label}</span>
+                            {opt.description && (
+                              <span className={styles.OptionDescription}>{opt.description}</span>
+                            )}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {answered && (
+                    <p className={styles.QuestionAnsweredNote}>Answered: {answered.label}</p>
+                  )}
                 </div>
               </div>
             );

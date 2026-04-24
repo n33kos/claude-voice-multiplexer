@@ -1272,6 +1272,116 @@ async def cancel_tts_session(session_id: str, request: Request):
     return JSONResponse({"ok": True})
 
 
+@app.post("/api/sessions/{session_id}/activity")
+async def activity_from_hook(session_id: str, request: Request):
+    """Post an activity status update for a session.
+
+    Mirrors the relay_activity MCP tool but is callable from hook scripts
+    (and anywhere else with the daemon secret).  Used by the PreToolUse
+    hook to surface what Claude is about to do — "Running Bash", "Reading
+    file", etc. — as activity badges in the web UI.  Silent (no TTS).
+    """
+    _require_auth(request)
+    body = await request.json()
+    activity = (body.get("activity") or "").strip()
+    if not activity:
+        return JSONResponse({"ok": False, "error": "activity required"}, status_code=400)
+    if _agent:
+        _spawn_background(_agent.handle_status_update(session_id, activity))
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/sessions/{session_id}/permission-request")
+async def permission_request_from_hook(session_id: str, request: Request):
+    """Broadcast a permission-request card to web clients.
+
+    The web UI renders Approve / Allow-all-this-session / Deny buttons
+    that map to the 1 / 2 / Escape sequence Claude Code's permission
+    picker expects.
+    """
+    _require_auth(request)
+    body = await request.json()
+    tool_name = (body.get("tool_name") or "").strip()
+    summary = (body.get("summary") or "").strip()
+    if not tool_name:
+        return JSONResponse({"ok": False, "error": "tool_name required"}, status_code=400)
+
+    session = await registry.get(session_id)
+    if not session:
+        return JSONResponse({"ok": False, "error": "Session not found"}, status_code=404)
+
+    entry = {
+        "type": "transcript",
+        "speaker": "permission",
+        "text": f"Permission requested for {tool_name}",
+        "session_id": session_id,
+        "session_name": session.name,
+        "ts": time.time(),
+        "permission": {
+            "tool_name": tool_name,
+            "summary": summary,
+        },
+    }
+    msg = json.dumps(entry)
+    for client_ws in list(_clients.values()):
+        try:
+            await client_ws.send_text(msg)
+        except Exception:
+            pass
+    buf = _transcript_buffers.setdefault(session_id, [])
+    buf.append(entry)
+    if len(buf) > MAX_TRANSCRIPT_BUFFER:
+        _transcript_buffers[session_id] = buf[-MAX_TRANSCRIPT_BUFFER:]
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/sessions/{session_id}/question")
+async def question_from_hook(session_id: str, request: Request):
+    """Broadcast a structured AskUserQuestion prompt to web clients.
+
+    Called by the PreToolUse hook when Claude is about to invoke the
+    AskUserQuestion tool.  The web UI renders a click-to-answer card
+    so the user can respond without switching to the terminal.
+    """
+    _require_auth(request)
+    body = await request.json()
+    question = (body.get("question") or "").strip()
+    options = body.get("options") or []
+    if not question or not options:
+        return JSONResponse({"ok": False, "error": "question and options required"}, status_code=400)
+
+    session = await registry.get(session_id)
+    if not session:
+        return JSONResponse({"ok": False, "error": "Session not found"}, status_code=404)
+
+    entry = {
+        "type": "transcript",
+        "speaker": "question",
+        "text": question,
+        "session_id": session_id,
+        "session_name": session.name,
+        "ts": time.time(),
+        "question": {
+            "question": question,
+            "header": body.get("header") or "",
+            "multiSelect": bool(body.get("multiSelect")),
+            "options": options,
+        },
+    }
+    msg = json.dumps(entry)
+    for client_ws in list(_clients.values()):
+        try:
+            await client_ws.send_text(msg)
+        except Exception:
+            pass
+    # Buffer so reconnecting clients still see the open question.
+    buf = _transcript_buffers.setdefault(session_id, [])
+    buf.append(entry)
+    if len(buf) > MAX_TRANSCRIPT_BUFFER:
+        _transcript_buffers[session_id] = buf[-MAX_TRANSCRIPT_BUFFER:]
+    return JSONResponse({"ok": True})
+
+
 @app.post("/api/sessions/{session_id}/clear-context")
 async def clear_context_session(session_id: str, request: Request):
     """Send /clear to a Claude session to reset conversation context."""
@@ -1580,6 +1690,62 @@ async def client_ws(ws: WebSocket):
                 # User pressed interrupt — force agent to idle
                 if connected_session_id and _agent:
                     _spawn_background(_agent.handle_claude_listening(connected_session_id))
+
+            elif msg_type == "answer_permission":
+                # User clicked Approve / Allow-always / Deny on a
+                # permission card.  Claude Code's permission picker is:
+                #   1 = Allow once
+                #   2 = Allow & don't ask again this session
+                #   Esc or "3" = Deny
+                if connected_session_id:
+                    choice = (data.get("choice") or "").strip()
+                    if choice in ("allow", "allow_always"):
+                        keys = "1" if choice == "allow" else "2"
+                        await _daemon_ipc({
+                            "cmd": "send-keys",
+                            "session_id": connected_session_id,
+                            "keys": keys,
+                        })
+                        await asyncio.sleep(0.2)
+                        await _daemon_ipc({
+                            "cmd": "send-keys",
+                            "session_id": connected_session_id,
+                            "special_key": "Enter",
+                        })
+                    elif choice == "deny":
+                        # Escape dismisses the picker and sends Claude
+                        # the "no, tell me what to do differently" path.
+                        await _daemon_ipc({
+                            "cmd": "send-keys",
+                            "session_id": connected_session_id,
+                            "special_key": "Escape",
+                        })
+
+            elif msg_type == "answer_question":
+                # User clicked an option on an AskUserQuestion card.
+                # Claude Code's picker accepts a numeric selection (1-based
+                # for real options, with "Other" implicit at the end) or
+                # an arrow-key navigation.  Typing the number + Enter is
+                # the most reliable pattern and matches what a user would
+                # do at the terminal.
+                if connected_session_id:
+                    try:
+                        option_index = int(data.get("option_index"))
+                    except (TypeError, ValueError):
+                        option_index = -1
+                    if option_index >= 0:
+                        selection = str(option_index + 1)
+                        await _daemon_ipc({
+                            "cmd": "send-keys",
+                            "session_id": connected_session_id,
+                            "keys": selection,
+                        })
+                        await asyncio.sleep(0.2)
+                        await _daemon_ipc({
+                            "cmd": "send-keys",
+                            "session_id": connected_session_id,
+                            "special_key": "Enter",
+                        })
 
             elif msg_type == "terminal_input":
                 # Send keystrokes to the connected session's tmux pane

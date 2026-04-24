@@ -57,14 +57,11 @@ fi
 
 relay_session_id=$(printf '%s' "$session_cwd" | shasum -a 256 | awk '{print substr($1, 1, 12)}')
 
-# Extract the latest assistant text written in the last few seconds.
+# Extract the latest assistant text from the last ~5 seconds.
 #
 # Claude Code flushes the current turn's final text to the JSONL async,
-# so we poll for up to ~2.5 seconds looking for fresh assistant content.
-# Tool-only turns leave last_text empty and we skip TTS.
-#
-# jq slurp mode keeps multi-paragraph content intact — an earlier
-# head -n 1 truncated at the first newline.
+# so we poll for up to ~2.5 seconds looking for fresh content.  Tool-only
+# turns with no text leave last_text empty and we skip TTS.
 _extract_fresh_text() {
     local cutoff=$(($(date +%s) - 5))
     jq -rs --argjson cutoff "$cutoff" '

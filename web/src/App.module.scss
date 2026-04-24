@@ -3,9 +3,7 @@
   height: 100dvh;
   display: flex;
   flex-direction: column;
-  max-width: 640px;
-  margin: 0 auto;
-  padding: 1rem;
+  padding: 1rem clamp(1rem, 4vw, 3rem);
   user-select: none;
   z-index: 1;
   align-items: center;

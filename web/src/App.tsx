@@ -325,6 +325,8 @@ export default function App() {
               )?.hue_override
             }
             onSendText={relay.sendTextMessage}
+            onAnswerQuestion={relay.answerQuestion}
+            onAnswerPermission={relay.answerPermission}
             onCaptureTerminal={() => setTerminalOpen(true)}
           />
         )}

@@ -52,6 +52,25 @@ export interface DisplaySession {
   daemon_managed?: boolean; // true if managed by vmuxd
 }
 
+export interface AskOption {
+  label: string;
+  description?: string;
+}
+
+export interface AskQuestion {
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  options: AskOption[];
+}
+
+export interface PermissionRequest {
+  tool_name: string;
+  summary?: string;
+}
+
+export type PermissionChoice = "allow" | "allow_always" | "deny";
+
 export interface TranscriptEntry {
   speaker:
     | "user"
@@ -60,13 +79,19 @@ export interface TranscriptEntry {
     | "activity"
     | "code"
     | "file"
-    | "image";
+    | "image"
+    | "question"
+    | "permission";
   text: string;
   session_id: string;
   timestamp: number;
   filename?: string;
   language?: string;
   mimeType?: string;
+  question?: AskQuestion;
+  answered?: { optionIndex: number; label: string };
+  permission?: PermissionRequest;
+  permissionAnswered?: PermissionChoice;
 }
 
 export type AgentState = "idle" | "thinking" | "speaking" | "error";
@@ -438,6 +463,8 @@ export function useRelay(authenticated: boolean = true) {
               ...(data.filename ? { filename: data.filename } : {}),
               ...(data.language ? { language: data.language } : {}),
               ...(data.mime_type ? { mimeType: data.mime_type } : {}),
+              ...(data.question ? { question: data.question as AskQuestion } : {}),
+              ...(data.permission ? { permission: data.permission as PermissionRequest } : {}),
             };
             return {
               ...s,
@@ -901,6 +928,61 @@ export function useRelay(authenticated: boolean = true) {
     wsRef.current?.send(JSON.stringify({ type: "terminal_resize", cols, rows }));
   }, []);
 
+  const answerQuestion = useCallback(
+    (sessionId: string, optionIndex: number, label: string) => {
+      wsRef.current?.send(
+        JSON.stringify({ type: "answer_question", session_id: sessionId, option_index: optionIndex }),
+      );
+      // Mark the open question entry as answered so the UI disables buttons.
+      setState((s) => {
+        const entries = s.transcripts[sessionId] || [];
+        let updated = false;
+        const nextEntries = [...entries];
+        for (let i = nextEntries.length - 1; i >= 0; i--) {
+          const e = nextEntries[i];
+          if (e.speaker === "question" && !e.answered) {
+            nextEntries[i] = { ...e, answered: { optionIndex, label } };
+            updated = true;
+            break;
+          }
+        }
+        if (!updated) return s;
+        return {
+          ...s,
+          transcripts: { ...s.transcripts, [sessionId]: nextEntries },
+        };
+      });
+    },
+    [],
+  );
+
+  const answerPermission = useCallback(
+    (sessionId: string, choice: PermissionChoice) => {
+      wsRef.current?.send(
+        JSON.stringify({ type: "answer_permission", session_id: sessionId, choice }),
+      );
+      setState((s) => {
+        const entries = s.transcripts[sessionId] || [];
+        let updated = false;
+        const nextEntries = [...entries];
+        for (let i = nextEntries.length - 1; i >= 0; i--) {
+          const e = nextEntries[i];
+          if (e.speaker === "permission" && !e.permissionAnswered) {
+            nextEntries[i] = { ...e, permissionAnswered: choice };
+            updated = true;
+            break;
+          }
+        }
+        if (!updated) return s;
+        return {
+          ...s,
+          transcripts: { ...s.transcripts, [sessionId]: nextEntries },
+        };
+      });
+    },
+    [],
+  );
+
   const dismissTerminalSnapshot = useCallback(() => {
     setState((s) => ({
       ...s,
@@ -1013,6 +1095,8 @@ export function useRelay(authenticated: boolean = true) {
     sendTerminalKeys,
     sendTerminalSpecialKey,
     sendTerminalResize,
+    answerQuestion,
+    answerPermission,
     startTerminalStream,
     stopTerminalStream,
     setTerminalDataCallback,

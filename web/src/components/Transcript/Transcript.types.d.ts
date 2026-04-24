@@ -1,4 +1,4 @@
-import type { TranscriptEntry } from "../../hooks/useRelay";
+import type { TranscriptEntry, PermissionChoice } from "../../hooks/useRelay";
 
 export interface TranscriptProps {
   entries: TranscriptEntry[];
@@ -6,4 +6,6 @@ export interface TranscriptProps {
   sessionId?: string | null;
   hueOverride?: number;
   onSendText?: (text: string) => void;
+  onAnswerQuestion?: (sessionId: string, optionIndex: number, label: string) => void;
+  onAnswerPermission?: (sessionId: string, choice: PermissionChoice) => void;
 }

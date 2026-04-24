@@ -6,23 +6,14 @@
 # We extract key fields and write them to a per-session file so the vmux
 # daemon can read accurate context/model info without scraping JSONL logs.
 #
-# Output directory: ~/.claude/voice-multiplexer/sessions/<session_id>.json
-#
 
 SESSIONS_DIR="$HOME/.claude/voice-multiplexer/sessions"
 mkdir -p "$SESSIONS_DIR" 2>/dev/null
 
-# Read full JSON from stdin
 input=$(cat)
-
-# Extract session_id — bail if missing
 session_id=$(echo "$input" | jq -r '.session_id // empty' 2>/dev/null)
 if [ -z "$session_id" ]; then
     exit 0
 fi
 
-# Write the complete JSON payload plus a timestamp.
-# We store everything Claude provides — small footprint, maximum future utility.
 echo "$input" | jq -c '. + {updated_at: (now | todate)}' > "$SESSIONS_DIR/${session_id}.json" 2>/dev/null
-
-# No visible output — we're using this purely as a data pipeline
