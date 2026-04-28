@@ -47,6 +47,21 @@ VERSION_FILE = DAEMON_DIR / "VERSION"
 # Plugin cache path (n33kos marketplace)
 PLUGIN_CACHE_DIR = Path.home() / ".claude" / "plugins" / "cache" / "n33kos" / "voice-multiplexer"
 
+# Auto-update output log — npm install/build output lands here for debugging.
+UPDATE_LOG = LOG_DIR / "update.log"
+
+# PATH supplement for finding npm/node when launched by launchd (which has a
+# minimal default PATH that excludes Homebrew, asdf, nvm, etc.).
+_NPM_PATH_CANDIDATES = [
+    "/opt/homebrew/bin",            # Apple Silicon Homebrew
+    "/usr/local/bin",               # Intel Homebrew + manual installs
+    "/usr/bin",
+    "/bin",
+    str(Path.home() / ".local" / "bin"),
+    str(Path.home() / ".asdf" / "shims"),
+    str(Path.home() / ".volta" / "bin"),
+]
+
 RELAY_URL = "http://127.0.0.1:3100"
 AUTO_UPDATE_INTERVAL = 60  # seconds between version checks
 
@@ -649,8 +664,95 @@ class VmuxDaemon:
             import shutil
             import subprocess
             import tempfile
+            import datetime
 
-            # 1. Daemon files — clean replace, preserving the vmuxd wrapper
+            # 1. PRE-FLIGHT: stage the new web/dist BEFORE touching daemon/relay
+            #    files, so a failed npm build aborts the update with the running
+            #    daemon, relay, and UI all left untouched.  This avoids the
+            #    "daemon bumped to N+1 but UI still on N" schema-drift state.
+            src_web_dist = latest_dir / "web" / "dist"
+            staging_root = DATA_DIR / ".update-staging"
+            staged_web_dist: Optional[Path] = None
+
+            if src_web_dist.exists():
+                logger.info("[update] using pre-built web dist from cache")
+                staged_web_dist = src_web_dist
+            else:
+                src_web = latest_dir / "web"
+                if not src_web.exists() or not (src_web / "package.json").exists():
+                    logger.error("[update] no web source in cache — aborting update")
+                    return {"ok": False, "error": "web/ source missing in plugin cache"}
+
+                npm = _resolve_npm()
+                if not npm:
+                    logger.error(
+                        "[update] npm not found on PATH or in common locations "
+                        "(/opt/homebrew/bin, /usr/local/bin, ...) — aborting update"
+                    )
+                    return {"ok": False, "error": "npm not found; install Node.js or fix PATH"}
+                logger.info(f"[update] resolved npm: {npm}")
+
+                # Stream npm output to a dedicated log file.  capture_output
+                # buffers everything and only the first 300 chars of stderr
+                # ever reach the daemon log on failure — useless for diagnosis.
+                UPDATE_LOG.parent.mkdir(parents=True, exist_ok=True)
+                npm_env = _build_npm_env()
+                with open(UPDATE_LOG, "ab") as logf:
+                    stamp = datetime.datetime.now().isoformat(timespec="seconds")
+                    logf.write(
+                        f"\n=== {stamp} update {installed_version} → "
+                        f"{latest_version}: building web ===\n".encode()
+                    )
+                    logf.flush()
+
+                    with tempfile.TemporaryDirectory() as tmp:
+                        build_dir = Path(tmp) / "web"
+                        shutil.copytree(str(src_web), str(build_dir))
+
+                        logger.info("[update] running npm ci (output → update.log)")
+                        r = subprocess.run(
+                            [npm, "ci", "--prefer-offline", "--no-audit", "--no-fund"],
+                            cwd=str(build_dir),
+                            env=npm_env,
+                            stdout=logf,
+                            stderr=subprocess.STDOUT,
+                            timeout=300,
+                        )
+                        if r.returncode != 0:
+                            logger.error(
+                                f"[update] npm ci failed (exit={r.returncode}); "
+                                f"see {UPDATE_LOG}; aborting update"
+                            )
+                            return {"ok": False, "error": "npm ci failed; see update.log"}
+
+                        logger.info("[update] running npm run build (output → update.log)")
+                        r = subprocess.run(
+                            [npm, "run", "build"],
+                            cwd=str(build_dir),
+                            env=npm_env,
+                            stdout=logf,
+                            stderr=subprocess.STDOUT,
+                            timeout=300,
+                        )
+                        built = build_dir / "dist"
+                        if r.returncode != 0 or not built.exists():
+                            logger.error(
+                                f"[update] npm run build failed (exit={r.returncode}); "
+                                f"see {UPDATE_LOG}; aborting update"
+                            )
+                            return {"ok": False, "error": "npm build failed; see update.log"}
+
+                        # Persist the freshly-built dist to a staging dir that
+                        # outlives this TemporaryDirectory so we can copy from
+                        # it after the daemon/relay swap.
+                        if staging_root.exists():
+                            shutil.rmtree(staging_root)
+                        staging_root.mkdir(parents=True)
+                        staged_web_dist = staging_root / "web-dist"
+                        shutil.copytree(str(built), str(staged_web_dist))
+                logger.info(f"[update] web build OK; staged at {staged_web_dist}")
+
+            # 2. Daemon files — clean replace, preserving the vmuxd wrapper
             #    The vmuxd wrapper is generated by install.sh and not part of
             #    the source tree, so we must preserve it across updates.
             logger.info("[update] replacing daemon/ files")
@@ -676,7 +778,7 @@ class VmuxDaemon:
                 vmuxd_wrapper.chmod(0o755)
                 logger.info("[update] regenerated vmuxd wrapper")
 
-            # 2. Relay-server files — clean replace
+            # 3. Relay-server files — clean replace
             src_relay = latest_dir / "relay-server"
             dst_relay = DATA_DIR / "relay-server"
             if src_relay.exists():
@@ -685,49 +787,20 @@ class VmuxDaemon:
                     shutil.rmtree(dst_relay)
                 shutil.copytree(str(src_relay), str(dst_relay))
 
-            # 3. Web dist — prefer pre-built, else build in temp dir
-            src_web_dist = latest_dir / "web" / "dist"
+            # 4. Web dist — copy from the staged build (or pre-built cache copy)
             dst_web_dist = DATA_DIR / "web" / "dist"
             dst_web_dist.parent.mkdir(parents=True, exist_ok=True)
+            logger.info(f"[update] installing web/dist from {staged_web_dist}")
+            if dst_web_dist.exists():
+                shutil.rmtree(dst_web_dist)
+            shutil.copytree(str(staged_web_dist), str(dst_web_dist))
+            # Clean up staging dir if it was a fresh build (cache pre-built
+            # source path is a read-only reference under PLUGIN_CACHE_DIR; only
+            # remove the staging tree if we created it).
+            if staging_root.exists():
+                shutil.rmtree(staging_root, ignore_errors=True)
 
-            if src_web_dist.exists():
-                logger.info("[update] copying pre-built web dist")
-                if dst_web_dist.exists():
-                    shutil.rmtree(dst_web_dist)
-                shutil.copytree(str(src_web_dist), str(dst_web_dist))
-            else:
-                src_web = latest_dir / "web"
-                if src_web.exists() and (src_web / "package.json").exists():
-                    logger.info("[update] building web app from source")
-                    with tempfile.TemporaryDirectory() as tmp:
-                        build_dir = Path(tmp) / "web"
-                        shutil.copytree(str(src_web), str(build_dir))
-                        r = subprocess.run(
-                            ["npm", "ci", "--prefer-offline"],
-                            cwd=str(build_dir),
-                            capture_output=True,
-                            timeout=120,
-                        )
-                        if r.returncode != 0:
-                            logger.warning(f"[update] npm ci failed: {r.stderr.decode()[:300]}")
-                        else:
-                            r = subprocess.run(
-                                ["npm", "run", "build"],
-                                cwd=str(build_dir),
-                                capture_output=True,
-                                timeout=120,
-                            )
-                            if r.returncode == 0 and (build_dir / "dist").exists():
-                                if dst_web_dist.exists():
-                                    shutil.rmtree(dst_web_dist)
-                                shutil.copytree(str(build_dir / "dist"), str(dst_web_dist))
-                                logger.info("[update] web app built and installed")
-                            else:
-                                logger.warning(f"[update] npm build failed: {r.stderr.decode()[:300]}")
-                else:
-                    logger.warning("[update] no web source found in cache — web UI not updated")
-
-            # 4. Update init service VMUX_PLUGIN_DIR
+            # 5. Update init service VMUX_PLUGIN_DIR
             if sys.platform == "darwin":
                 plist_path = Path.home() / "Library" / "LaunchAgents" / "com.vmux.daemon.plist"
                 if plist_path.exists():
@@ -762,7 +835,7 @@ class VmuxDaemon:
                     except Exception as e:
                         logger.warning(f"[update] systemd unit update failed: {e}")
 
-            # 5. Verify
+            # 6. Verify
             actual = _read_installed_version()
             if actual != latest_version:
                 logger.error(f"[update] verification failed: expected {latest_version}, got {actual}")
@@ -979,6 +1052,33 @@ class VmuxDaemon:
             return total_kb / 1024.0 if total_kb > 0 else None
         except Exception:
             return None
+
+
+def _resolve_npm() -> Optional[str]:
+    """Find an absolute path to npm.  launchd's default PATH excludes
+    /opt/homebrew/bin, /usr/local/bin, ~/.nvm shims, etc., so subprocess
+    calls of bare 'npm' raise FileNotFoundError on most user machines.
+
+    Returns the absolute path to npm, or None if not found.
+    """
+    import shutil
+    npm = shutil.which("npm")
+    if npm:
+        return npm
+    for d in _NPM_PATH_CANDIDATES:
+        candidate = Path(d) / "npm"
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def _build_npm_env() -> dict:
+    """Return os.environ extended with common node bin locations on PATH."""
+    env = os.environ.copy()
+    existing = env.get("PATH", "")
+    extra = ":".join(_NPM_PATH_CANDIDATES)
+    env["PATH"] = f"{extra}:{existing}" if existing else extra
+    return env
 
 
 def _detect_cache_version(cache_entry: Path) -> str:
