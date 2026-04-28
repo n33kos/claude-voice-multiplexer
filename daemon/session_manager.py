@@ -30,10 +30,12 @@ async def _get_session_client():
     return _session_http_client
 
 SPAWN_POLL_INTERVAL = 2.0   # seconds between relay polling attempts
-SPAWN_TIMEOUT = 120.0        # max seconds to wait for session to register
+SPAWN_TIMEOUT = 15.0         # max seconds to wait for session to register
 HEALTH_CHECK_INTERVAL = 30  # seconds between health checks
 ZOMBIE_THRESHOLD = 90.0     # seconds without heartbeat = zombie
 CAFFEINATE_REAP_INTERVAL = 60  # seconds between caffeinate reaper runs
+
+CLAUDE_CONFIG_PATH = Path.home() / ".claude.json"
 
 
 def _make_session_id(cwd: str) -> str:
@@ -43,6 +45,37 @@ def _make_session_id(cwd: str) -> str:
     daemon can resolve relay session IDs without relying on dir_name matching.
     """
     return hashlib.sha256(cwd.encode()).hexdigest()[:12]
+
+
+def _pre_trust_cwd(cwd: str) -> None:
+    """Mark `cwd` as trusted in ~/.claude.json so Claude Code skips the
+    workspace-trust dialog on launch.
+
+    The user explicitly choosing to spawn a vmux session in this directory
+    IS the trust signal — without this, Claude blocks waiting for a human
+    to press "1" on the trust prompt and the SessionStart hook never fires.
+
+    Uses an atomic write (temp file + rename) so a partial write can never
+    corrupt ~/.claude.json.  Failures are logged but never raised — pre-trust
+    is best-effort; if it fails the user just gets the prompt as before.
+    """
+    try:
+        if not CLAUDE_CONFIG_PATH.exists():
+            return
+        with open(CLAUDE_CONFIG_PATH, "r") as f:
+            config = json.load(f)
+        projects = config.setdefault("projects", {})
+        entry = projects.setdefault(cwd, {})
+        if entry.get("hasTrustDialogAccepted") is True:
+            return
+        entry["hasTrustDialogAccepted"] = True
+        tmp_path = CLAUDE_CONFIG_PATH.with_suffix(".json.tmp")
+        with open(tmp_path, "w") as f:
+            json.dump(config, f, indent=2)
+        os.replace(tmp_path, CLAUDE_CONFIG_PATH)
+        logger.info(f"[sessions] pre-trusted cwd in ~/.claude.json: {cwd}")
+    except Exception as e:
+        logger.warning(f"[sessions] pre_trust_cwd failed for {cwd}: {e}")
 
 
 @dataclass
@@ -102,6 +135,12 @@ class SessionManager:
         cwd = os.path.expanduser(cwd)
         if not os.path.isdir(cwd):
             return {"ok": False, "error": f"Directory not found: {cwd}"}
+
+        # Pre-trust the cwd so Claude Code skips the workspace-trust dialog on
+        # launch.  Without this, --permission-mode auto stops at the trust
+        # prompt waiting for human input, the SessionStart hook never fires,
+        # and we time out waiting for /register.
+        _pre_trust_cwd(cwd)
 
         # Kill any existing managed session for this CWD to avoid relay ID collisions
         kill_old = False
@@ -208,8 +247,8 @@ class SessionManager:
                 await self._tmux_kill_session(tmux_session)
                 async with self._lock:
                     session.status = "spawn_failed"
-                    del self._sessions[daemon_id]
-                return {"ok": False, "error": "Session did not register within timeout — check Claude logs"}
+                    self._sessions.pop(daemon_id, None)
+                return {"ok": False, "error": "Session did not register within timeout — check vmuxd logs"}
 
         except Exception as e:
             logger.error(f"[sessions] spawn failed: {e}")

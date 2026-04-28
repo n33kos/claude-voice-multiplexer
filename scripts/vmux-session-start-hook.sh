@@ -57,11 +57,40 @@ relay_session_id=$(printf '%s' "$session_cwd" | shasum -a 256 | awk '{print subs
 dir_name=$(basename "$session_cwd")
 payload=$(jq -n --arg cwd "$session_cwd" --arg name "$dir_name" '{cwd: $cwd, name: $name}')
 
-curl -sS -X POST \
+# Register, capturing the HTTP status code.  200 = vmuxd manages this cwd
+# (we're inside a vmux session); 404 = not vmux-managed; anything else =
+# transient error.  This is also our gate for whether to inject the voice
+# style guidance below — same gate the relay uses for /register.
+http_code=$(curl -sS -X POST \
     -H "X-Daemon-Secret: $DAEMON_SECRET" \
     -H "Content-Type: application/json" \
     --max-time 5 \
+    -o /dev/null \
+    -w "%{http_code}" \
     "$RELAY_URL/api/sessions/$relay_session_id/register" \
-    -d "$payload" >/dev/null 2>&1
+    -d "$payload" 2>/dev/null)
+
+# If vmuxd manages this cwd, push voice-mode style guidance into Claude's
+# context so replies are optimized for spoken delivery.  Plain Claude Code
+# sessions (not spawned by vmux) get nothing — http_code will be 404.
+if [ "$http_code" = "200" ]; then
+    # NOTE: using `read -r -d ''` instead of `$(cat <<EOF)` because bash's
+    # parser tracks single-quote balance across command substitution even
+    # for quoted heredocs — apostrophes ("don't", "I'll") inside `$(cat <<'EOF')`
+    # cause unexpected-EOF parse errors.  `read -d ''` keeps the heredoc out
+    # of `$()` and sidesteps the bug.
+    read -r -d '' voice_instructions <<'INSTR_EOF' || true
+You are being driven through Voice Multiplexer — replies are spoken aloud after each turn. Optimize for the ear:
+
+- Default to short, conversational prose. One or two sentences when you can.
+- Skip preamble ("Great question!", "Sure, I'll do that for you"). Just answer.
+- Save bullets, headers, tables for when the user explicitly asks for structure or you're showing code, diffs, or data via relay_code_block.
+- For long answers: give a one-line summary, then offer to expand if they want more.
+- Don't volunteer big code dumps unless asked — narrate intent, render code only when it earns its space.
+- Markdown is fine when it carries meaning; avoid it when it'd just narrate longer.
+INSTR_EOF
+    jq -nc --arg ctx "$voice_instructions" \
+        '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
+fi
 
 exit 0
