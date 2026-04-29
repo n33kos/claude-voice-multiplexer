@@ -606,22 +606,49 @@ class VmuxDaemon:
             return {"ok": False, "error": str(e)}
 
     async def _auto_update_loop(self):
-        """Poll plugin cache every 60s and self-update if a newer version is available."""
+        """Poll plugin cache every 60s and self-update if a newer version is available.
+
+        The actual restart-after-update is handled by `_cmd_update_if_newer`
+        scheduling `_restart_after_update` on success — that way both this
+        auto-loop and IPC-triggered updates (vmux update / `cmd: update-if-newer`)
+        get identical restart semantics.  Without this, IPC-triggered updates
+        leave the daemon running stale in-memory code while files on disk are
+        swapped — silent and easy to miss.
+        """
         while True:
             try:
                 await asyncio.sleep(AUTO_UPDATE_INTERVAL)
-                result = await self._cmd_update_if_newer()
-                if result.get("updated"):
-                    logger.info("[update] auto-update applied — forcing restart via launchd")
-                    self._shutdown_event.set()
-                    # Watchdog: if graceful shutdown stalls, force-kill after 15s
-                    await asyncio.sleep(15)
-                    logger.warning("[update] graceful shutdown timed out — forcing exit")
-                    os._exit(0)
+                await self._cmd_update_if_newer()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.warning(f"[update] check failed: {e}")
+
+    async def _restart_after_update(self):
+        """Trigger a clean daemon restart after a successful update.
+
+        Runs as a detached task so the IPC response (or auto-loop call site)
+        can return BEFORE shutdown begins — otherwise the IPC server closes
+        before the success payload flushes to the client.
+
+        Sequence:
+          1. Brief delay so the in-flight response can flush.
+          2. Set _shutdown_event → main loop runs `_shutdown()` which calls
+             `service_manager.stop_all()` killing relay/kokoro/whisper/livekit
+             child process groups (start_new_session=True spawn means children
+             survive a parent crash; the explicit kill_pg in stop_all is the
+             only thing that takes them down).
+          3. After 15s, if graceful shutdown stalled, force-exit so launchd
+             respawns vmuxd from disk (fresh imports, fresh session_manager,
+             fresh service_manager → fresh relay/kokoro/whisper).
+        """
+        await asyncio.sleep(1.0)
+        logger.info("[update] update applied — triggering full restart via launchd")
+        if self._shutdown_event:
+            self._shutdown_event.set()
+        await asyncio.sleep(15)
+        logger.warning("[update] graceful shutdown timed out — forcing exit")
+        os._exit(0)
 
     async def _cmd_update_if_newer(self) -> dict:
         """Check plugin cache for newer version and apply if found."""
@@ -842,6 +869,12 @@ class VmuxDaemon:
                 return {"ok": False, "error": f"version mismatch after copy: {actual} != {latest_version}"}
 
             logger.info(f"[update] complete: {installed_version} → {latest_version}")
+            # Schedule a full daemon restart so the new code is actually loaded
+            # AND all child services (relay/kokoro/whisper/livekit) are killed
+            # and respawned by the freshly-launched vmuxd from on-disk files.
+            # Detaches as a task so this function can return its success result
+            # before shutdown begins.
+            asyncio.create_task(self._restart_after_update())
             return {"ok": True, "updated": True, "version": latest_version}
         except Exception as e:
             logger.error(f"[update] failed: {e}")

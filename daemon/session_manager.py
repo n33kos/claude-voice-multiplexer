@@ -251,7 +251,7 @@ class SessionManager:
                 return {"ok": False, "error": "Session did not register within timeout — check vmuxd logs"}
 
         except Exception as e:
-            logger.error(f"[sessions] spawn failed: {e}")
+            logger.exception(f"[sessions] spawn failed: {e}")
             await self._tmux_kill_session(tmux_session)
             async with self._lock:
                 self._sessions.pop(daemon_id, None)
