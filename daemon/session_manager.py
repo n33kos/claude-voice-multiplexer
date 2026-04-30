@@ -546,16 +546,23 @@ class SessionManager:
             return False
 
     async def inject_text(self, session_id: str, text: str) -> bool:
-        """Inject text as typed input into a session's tmux pane and submit.
+        """Inject transcribed voice text into a session's tmux pane and submit.
 
-        This is the primary voice-in mechanism in the post-standby world.
-        Transcribed speech arrives here, gets sent as literal keystrokes
-        (just like a human typing), and is submitted with Enter.
+        Uses tmux's bracketed-paste path (set-buffer + paste-buffer -p) instead
+        of `send-keys -l`.  Why: send-keys -l blasts characters faster than
+        human typing, which trips Claude Code's TUI paste-detection heuristic
+        ("[Pasted N chars]") for long inputs.  In that condensed-paste state,
+        the trailing Enter gets absorbed into the paste content instead of
+        submitting the turn — so users see their long voice messages sit in
+        the input box waiting for a manual Enter press.
 
-        Newlines in the input are flattened to spaces so multi-line
-        transcriptions do not prematurely submit the turn.  The trailing
-        Enter is sent separately to submit the whole turn atomically.
-        Spaces (rather than semicolons) avoid corrupting dictated code.
+        Bracketed-paste mode wraps the content in \\e[200~...\\e[201~ markers
+        so the TUI knows exactly where the paste ends.  Any Enter sent AFTER
+        the closing marker is unambiguously a submit, not paste content.
+
+        Newlines are still flattened to spaces — the TUI may interpret a
+        bare \\n as a multi-line newline within the paste, and we want voice
+        messages to render as a single conversational message.
         """
         async with self._lock:
             session = self._find_session(session_id)
@@ -564,23 +571,47 @@ class SessionManager:
             tmux_session = session.tmux_session
         try:
             safe_text = text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
-            # Stage 1: send literal text
+            # Use a session-scoped buffer name so concurrent injects to
+            # different sessions don't stomp on each other.
+            buffer_name = f"vmux-inject-{session_id[:12]}"
+
+            # Stage 1: load text into a tmux paste buffer.  `--` stops option
+            # parsing in case `safe_text` starts with a dash.
             p1 = await asyncio.create_subprocess_exec(
-                "tmux", "send-keys", "-t", tmux_session, "-l", safe_text,
+                "tmux", "set-buffer", "-b", buffer_name, "--", safe_text,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
             await p1.wait()
             if p1.returncode != 0:
                 return False
-            # Stage 2: press Enter to submit
+
+            # Stage 2: paste with bracketed-paste markers; -d deletes the
+            # buffer after pasting so we don't leak buffers over time.
             p2 = await asyncio.create_subprocess_exec(
-                "tmux", "send-keys", "-t", tmux_session, "Enter", "",
+                "tmux", "paste-buffer", "-d", "-p", "-b", buffer_name,
+                "-t", tmux_session,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
             await p2.wait()
-            return p2.returncode == 0
+            if p2.returncode != 0:
+                # Best-effort cleanup if paste failed but set-buffer succeeded.
+                await asyncio.create_subprocess_exec(
+                    "tmux", "delete-buffer", "-b", buffer_name,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                return False
+
+            # Stage 3: press Enter to submit the now-complete paste.
+            p3 = await asyncio.create_subprocess_exec(
+                "tmux", "send-keys", "-t", tmux_session, "Enter", "",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await p3.wait()
+            return p3.returncode == 0
         except Exception as e:
             logger.error(f"[sessions] inject_text failed: {e}")
             return False
