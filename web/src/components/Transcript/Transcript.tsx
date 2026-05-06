@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import { memo, useEffect, useRef, useState, useMemo } from "react";
+import type { CSSProperties } from "react";
 import classNames from "classnames";
 import hljs from "highlight.js/lib/core";
 import ReactMarkdown from "react-markdown";
@@ -143,19 +144,25 @@ function CodeBlock({ code, filename, language, cwd }: { code: string; filename?:
   );
 }
 
-export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, onAnswerQuestion, onAnswerPermission, onCaptureTerminal }: TranscriptProps & { onCaptureTerminal?: () => void }) {
-  const endRef = useRef<HTMLDivElement>(null);
+/**
+ * Leaf component that owns its own `textInput` state.  Prior implementation
+ * lived directly inside Transcript, which meant every keystroke re-rendered
+ * the entire entries list (ReactMarkdown, hljs, regex passes, ...) and made
+ * typing feel laggy on long sessions.  Lifting the state into a leaf scopes
+ * keystroke re-renders to just this small component.
+ */
+function MessageInputBar({
+  onSendText,
+  sendButtonStyle,
+}: {
+  onSendText: (text: string) => void;
+  sendButtonStyle?: CSSProperties;
+}) {
   const [textInput, setTextInput] = useState("");
-  const hue = hueOverride != null ? hueOverride : (sessionId ? sessionHue(sessionId) : null);
-  const sendButtonStyle = hue !== null ? { backgroundColor: `hsla(${hue}, 55%, 40%, 0.9)` } : undefined;
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "instant" });
-  }, [entries.length]);
 
   const handleSend = () => {
     const text = textInput.trim();
-    if (!text || !onSendText) return;
+    if (!text) return;
     onSendText(text);
     setTextInput("");
   };
@@ -167,34 +174,77 @@ export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, o
     }
   };
 
+  return (
+    <div className={styles.TextInputBar}>
+      <textarea
+        className={styles.TextInput}
+        placeholder="Type a message..."
+        rows={1}
+        value={textInput}
+        onChange={(e) => setTextInput(e.target.value)}
+        onKeyDown={handleKeyDown}
+      />
+      <button
+        className={styles.SendButton}
+        onClick={handleSend}
+        disabled={!textInput.trim()}
+        style={sendButtonStyle}
+      >
+        <svg className={styles.SendIcon} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
+type EntryRowProps = {
+  entry: import("../../hooks/useRelay").TranscriptEntry;
+  isLatest: boolean;
+  cwd?: string;
+  sessionId: string | null | undefined;
+  hue: number | null;
+  onAnswerQuestion?: (sessionId: string, optionIndex: number, label: string) => void;
+  onAnswerPermission?: (sessionId: string, choice: "allow" | "allow_always" | "deny") => void;
+  onCaptureTerminal?: () => void;
+};
+
+/**
+ * Memoized renderer for a single transcript entry.  Memo'd so unrelated
+ * re-renders (e.g. a new entry arriving) don't repaint every prior entry's
+ * markdown / code blocks / regex passes.  Default shallow comparison is
+ * sufficient because the parent passes stable refs (entries are immutable
+ * in the relay state, callbacks are useCallback'd in App.tsx and useRelay).
+ */
+const EntryRow = memo(function EntryRow({
+  entry,
+  isLatest,
+  cwd,
+  sessionId,
+  hue,
+  onAnswerQuestion,
+  onAnswerPermission,
+  onCaptureTerminal,
+}: EntryRowProps) {
+  return renderEntry(entry, isLatest, cwd, sessionId, hue, onAnswerQuestion, onAnswerPermission, onCaptureTerminal);
+});
+
+export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, onAnswerQuestion, onAnswerPermission, onCaptureTerminal }: TranscriptProps & { onCaptureTerminal?: () => void }) {
+  const endRef = useRef<HTMLDivElement>(null);
+  const hue = hueOverride != null ? hueOverride : (sessionId ? sessionHue(sessionId) : null);
+  const sendButtonStyle = hue !== null ? { backgroundColor: `hsla(${hue}, 55%, 40%, 0.9)` } : undefined;
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "instant" });
+  }, [entries.length]);
+
   if (entries.length === 0) {
     return (
       <div data-component="Transcript" className={styles.Root}>
         <div className={styles.EmptyState}>
           Conversation will appear here
         </div>
-        {onSendText && (
-          <div className={styles.TextInputBar}>
-            <textarea
-              className={styles.TextInput}
-              placeholder="Type a message..."
-              rows={1}
-              value={textInput}
-              onChange={(e) => setTextInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-            />
-            <button
-              className={styles.SendButton}
-              onClick={handleSend}
-              disabled={!textInput.trim()}
-              style={sendButtonStyle}
-            >
-              <svg className={styles.SendIcon} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
-              </svg>
-            </button>
-          </div>
-        )}
+        {onSendText && <MessageInputBar onSendText={onSendText} sendButtonStyle={sendButtonStyle} />}
       </div>
     );
   }
@@ -203,242 +253,241 @@ export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, o
     <div data-component="Transcript" className={styles.Root}>
       <div className={styles.GradientFade} />
       <div className={styles.ScrollContainer}>
-        {entries.map((entry, i) => {
-          if (entry.speaker === "system") {
-            return (
-              <div key={i} className={styles.MessageRow}>
-                <span className={styles.SpeakerLabel}>
-                  <svg className={styles.AgentIcon} viewBox="0 0 24 24" fill="none" strokeWidth={2} stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h9a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0015.75 4.5h-9A2.25 2.25 0 004.5 6.75v10.5A2.25 2.25 0 006.75 19.5z" />
-                  </svg>
-                  Background Agent
-                </span>
-                <div className={classNames(styles.Bubble, styles.BubbleSystem)}>
-                  <p className={styles.Paragraph}>{entry.text}</p>
-                </div>
-              </div>
-            );
-          }
-          if (entry.speaker === "permission" && entry.permission) {
-            const p = entry.permission;
-            const answered = entry.permissionAnswered;
-            const choices: { id: "allow" | "allow_always" | "deny"; label: string; desc: string; danger?: boolean }[] = [
-              { id: "allow", label: "Allow once", desc: "Approve this single call" },
-              { id: "allow_always", label: "Allow for session", desc: "Don't ask again this session" },
-              { id: "deny", label: "Deny", desc: "Cancel and let Claude try differently", danger: true },
-            ];
-            return (
-              <div key={i} className={styles.MessageRow}>
-                <span className={styles.SpeakerLabel}>Permission needed</span>
-                <div className={classNames(styles.Bubble, styles.BubblePermission)}>
-                  <p className={styles.QuestionText}>
-                    Claude wants to use <code className={styles.InlineCode}>{p.tool_name}</code>
-                  </p>
-                  {p.summary && <p className={styles.PermissionSummary}>{p.summary}</p>}
-                  <div className={styles.OptionList}>
-                    {choices.map((c) => {
-                      const isSelected = answered === c.id;
-                      const isDisabled = !!answered;
-                      return (
-                        <button
-                          key={c.id}
-                          type="button"
-                          disabled={isDisabled || !onAnswerPermission || !sessionId}
-                          onClick={() => {
-                            if (onAnswerPermission && sessionId) {
-                              onAnswerPermission(sessionId, c.id);
-                            }
-                          }}
-                          className={classNames(styles.OptionButton, {
-                            [styles.OptionButtonSelected]: isSelected,
-                            [styles.OptionButtonFaded]: isDisabled && !isSelected,
-                            [styles.OptionButtonDanger]: c.danger,
-                          })}
-                        >
-                          <span className={styles.OptionContent}>
-                            <span className={styles.OptionLabel}>{c.label}</span>
-                            <span className={styles.OptionDescription}>{c.desc}</span>
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {answered && (
-                    <p className={styles.QuestionAnsweredNote}>
-                      {answered === "allow" && "Allowed once."}
-                      {answered === "allow_always" && "Allowed for the rest of this session."}
-                      {answered === "deny" && "Denied."}
-                    </p>
-                  )}
-                </div>
-              </div>
-            );
-          }
-          if (entry.speaker === "question" && entry.question) {
-            const q = entry.question;
-            const answered = entry.answered;
-            return (
-              <div key={i} className={styles.MessageRow}>
-                <span className={styles.SpeakerLabel}>
-                  {q.header || "Question"}
-                </span>
-                <div className={classNames(styles.Bubble, styles.BubbleQuestion)}>
-                  <p className={styles.QuestionText}>{q.question}</p>
-                  <div className={styles.OptionList}>
-                    {q.options.map((opt, idx) => {
-                      const isSelected = answered?.optionIndex === idx;
-                      const isDisabled = !!answered;
-                      return (
-                        <button
-                          key={idx}
-                          type="button"
-                          disabled={isDisabled || !onAnswerQuestion || !sessionId}
-                          onClick={() => {
-                            if (onAnswerQuestion && sessionId) {
-                              onAnswerQuestion(sessionId, idx, opt.label);
-                            }
-                          }}
-                          className={classNames(styles.OptionButton, {
-                            [styles.OptionButtonSelected]: isSelected,
-                            [styles.OptionButtonFaded]: isDisabled && !isSelected,
-                          })}
-                        >
-                          <span className={styles.OptionNumber}>{idx + 1}</span>
-                          <span className={styles.OptionContent}>
-                            <span className={styles.OptionLabel}>{opt.label}</span>
-                            {opt.description && (
-                              <span className={styles.OptionDescription}>{opt.description}</span>
-                            )}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {answered && (
-                    <p className={styles.QuestionAnsweredNote}>Answered: {answered.label}</p>
-                  )}
-                </div>
-              </div>
-            );
-          }
-          if (entry.speaker === "activity") {
-            const isLatest = i === entries.length - 1;
-            return (
-              <div key={i} className={styles.ActivityMessage}>
-                <button
-                  className={classNames(styles.ActivityBadge, { [styles.ActivityBadgeClickable]: !!onCaptureTerminal })}
-                  onClick={() => onCaptureTerminal?.()}
-                  title={onCaptureTerminal ? "Click to view terminal" : undefined}
-                >
-                  <svg className={classNames(styles.ActivityIcon, { [styles.ActivityIconSpin]: isLatest })} viewBox="0 0 24 24" fill="none" strokeWidth={2} stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                  {entry.text}
-                </button>
-              </div>
-            );
-          }
-          if (entry.speaker === "code" || entry.speaker === "file") {
-            return <CodeBlock key={i} code={entry.text} filename={entry.filename} language={entry.language} cwd={cwd} />;
-          }
-          if (entry.speaker === "image") {
-            const dataUrl = `data:${entry.mimeType || 'image/jpeg'};base64,${entry.text}`;
-            return (
-              <div key={i} className={styles.ImageRow}>
-                {entry.filename && <span className={styles.ImageFilename}>{entry.filename}</span>}
-                <img src={dataUrl} alt={entry.filename || 'image'} className={styles.InlineImage} />
-              </div>
-            );
-          }
-          return (
-            <div
-              key={i}
-              className={classNames(styles.MessageRow, {
-                [styles.MessageRowUser]: entry.speaker === "user",
-              })}
-            >
-              <span className={styles.SpeakerLabel}>
-                {entry.speaker === "user" ? "You" : "Claude"}
-              </span>
-              <div
-                className={classNames(
-                  styles.Bubble,
-                  entry.speaker === "user" ? styles.BubbleUser : styles.BubbleClaude,
-                )}
-                style={entry.speaker === "user" && hue !== null ? {
-                  backgroundColor: `hsla(${hue}, 55%, 35%, 0.85)`,
-                } : undefined}
-              >
-                {entry.speaker === "claude" ? (
-                  <div className={styles.Markdown}>
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      // Only allow safe URL schemes.  Assistant text is
-                      // attacker-influenceable via tool output / prompt
-                      // injection; without this a javascript:... link
-                      // would pass straight through ReactMarkdown.
-                      urlTransform={(url) => {
-                        const trimmed = (url || "").trim().toLowerCase();
-                        if (/^(https?:|mailto:|tel:|vscode:|#|\/|\.\/|\.\.\/)/.test(trimmed)) {
-                          return url;
-                        }
-                        return "";
-                      }}
-                      components={{
-                        a: ({ href, children }) => (
-                          <a href={href} target="_blank" rel="noopener noreferrer" className={styles.InlineLink}>
-                            {children}
-                          </a>
-                        ),
-                        code: ({ className, children, ...props }) => {
-                          const match = /language-(\w+)/.exec(className || "");
-                          const text = String(children).replace(/\n$/, "");
-                          // Block code (```...```) — render as CodeBlock
-                          if (match || text.includes("\n")) {
-                            return <CodeBlock code={text} language={match?.[1]} cwd={cwd} />;
-                          }
-                          // Inline code
-                          return <code className={styles.InlineCode} {...props}>{children}</code>;
-                        },
-                      }}
-                    >
-                      {entry.text}
-                    </ReactMarkdown>
-                  </div>
-                ) : (
-                  splitIntoParagraphs(entry.text).map((p, j) => (
-                    <p key={j} className={styles.Paragraph}>{linkify(p)}</p>
-                  ))
-                )}
-              </div>
-            </div>
-          );
-        })}
+        {entries.map((entry, i) => (
+          <EntryRow
+            key={i}
+            entry={entry}
+            isLatest={i === entries.length - 1}
+            cwd={cwd}
+            sessionId={sessionId}
+            hue={hue}
+            onAnswerQuestion={onAnswerQuestion}
+            onAnswerPermission={onAnswerPermission}
+            onCaptureTerminal={onCaptureTerminal}
+          />
+        ))}
         <div ref={endRef} />
       </div>
-      {onSendText && (
-        <div className={styles.TextInputBar}>
-          <textarea
-            className={styles.TextInput}
-            placeholder="Type a message..."
-            rows={1}
-            value={textInput}
-            onChange={(e) => setTextInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-          />
-          <button
-            className={styles.SendButton}
-            onClick={handleSend}
-            disabled={!textInput.trim()}
-            style={sendButtonStyle}
-          >
-            <svg className={styles.SendIcon} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
-            </svg>
-          </button>
-        </div>
-      )}
+      {onSendText && <MessageInputBar onSendText={onSendText} sendButtonStyle={sendButtonStyle} />}
     </div>
   );
 }
+
+/**
+ * The big switch over entry types — extracted so EntryRow's React.memo can
+ * call it without affecting the JSX shape.  Each branch returns a JSX node.
+ */
+function renderEntry(
+  entry: import("../../hooks/useRelay").TranscriptEntry,
+  isLatest: boolean,
+  cwd: string | undefined,
+  sessionId: string | null | undefined,
+  hue: number | null,
+  onAnswerQuestion: ((sessionId: string, optionIndex: number, label: string) => void) | undefined,
+  onAnswerPermission: ((sessionId: string, choice: "allow" | "allow_always" | "deny") => void) | undefined,
+  onCaptureTerminal: (() => void) | undefined,
+): React.ReactElement {
+  if (entry.speaker === "system") {
+    return (
+      <div className={styles.MessageRow}>
+        <span className={styles.SpeakerLabel}>
+          <svg className={styles.AgentIcon} viewBox="0 0 24 24" fill="none" strokeWidth={2} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h9a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0015.75 4.5h-9A2.25 2.25 0 004.5 6.75v10.5A2.25 2.25 0 006.75 19.5z" />
+          </svg>
+          Background Agent
+        </span>
+        <div className={classNames(styles.Bubble, styles.BubbleSystem)}>
+          <p className={styles.Paragraph}>{entry.text}</p>
+        </div>
+      </div>
+    );
+  }
+  if (entry.speaker === "permission" && entry.permission) {
+    const p = entry.permission;
+    const answered = entry.permissionAnswered;
+    const choices: { id: "allow" | "allow_always" | "deny"; label: string; desc: string; danger?: boolean }[] = [
+      { id: "allow", label: "Allow once", desc: "Approve this single call" },
+      { id: "allow_always", label: "Allow for session", desc: "Don't ask again this session" },
+      { id: "deny", label: "Deny", desc: "Cancel and let Claude try differently", danger: true },
+    ];
+    return (
+      <div className={styles.MessageRow}>
+        <span className={styles.SpeakerLabel}>Permission needed</span>
+        <div className={classNames(styles.Bubble, styles.BubblePermission)}>
+          <p className={styles.QuestionText}>
+            Claude wants to use <code className={styles.InlineCode}>{p.tool_name}</code>
+          </p>
+          {p.summary && <p className={styles.PermissionSummary}>{p.summary}</p>}
+          <div className={styles.OptionList}>
+            {choices.map((c) => {
+              const isSelected = answered === c.id;
+              const isDisabled = !!answered;
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  disabled={isDisabled || !onAnswerPermission || !sessionId}
+                  onClick={() => {
+                    if (onAnswerPermission && sessionId) {
+                      onAnswerPermission(sessionId, c.id);
+                    }
+                  }}
+                  className={classNames(styles.OptionButton, {
+                    [styles.OptionButtonSelected]: isSelected,
+                    [styles.OptionButtonFaded]: isDisabled && !isSelected,
+                    [styles.OptionButtonDanger]: c.danger,
+                  })}
+                >
+                  <span className={styles.OptionContent}>
+                    <span className={styles.OptionLabel}>{c.label}</span>
+                    <span className={styles.OptionDescription}>{c.desc}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {answered && (
+            <p className={styles.QuestionAnsweredNote}>
+              {answered === "allow" && "Allowed once."}
+              {answered === "allow_always" && "Allowed for the rest of this session."}
+              {answered === "deny" && "Denied."}
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
+  if (entry.speaker === "question" && entry.question) {
+    const q = entry.question;
+    const answered = entry.answered;
+    return (
+      <div className={styles.MessageRow}>
+        <span className={styles.SpeakerLabel}>
+          {q.header || "Question"}
+        </span>
+        <div className={classNames(styles.Bubble, styles.BubbleQuestion)}>
+          <p className={styles.QuestionText}>{q.question}</p>
+          <div className={styles.OptionList}>
+            {q.options.map((opt, idx) => {
+              const isSelected = answered?.optionIndex === idx;
+              const isDisabled = !!answered;
+              return (
+                <button
+                  key={idx}
+                  type="button"
+                  disabled={isDisabled || !onAnswerQuestion || !sessionId}
+                  onClick={() => {
+                    if (onAnswerQuestion && sessionId) {
+                      onAnswerQuestion(sessionId, idx, opt.label);
+                    }
+                  }}
+                  className={classNames(styles.OptionButton, {
+                    [styles.OptionButtonSelected]: isSelected,
+                    [styles.OptionButtonFaded]: isDisabled && !isSelected,
+                  })}
+                >
+                  <span className={styles.OptionNumber}>{idx + 1}</span>
+                  <span className={styles.OptionContent}>
+                    <span className={styles.OptionLabel}>{opt.label}</span>
+                    {opt.description && (
+                      <span className={styles.OptionDescription}>{opt.description}</span>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {answered && (
+            <p className={styles.QuestionAnsweredNote}>Answered: {answered.label}</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+  if (entry.speaker === "activity") {
+    return (
+      <div className={styles.ActivityMessage}>
+        <button
+          className={classNames(styles.ActivityBadge, { [styles.ActivityBadgeClickable]: !!onCaptureTerminal })}
+          onClick={() => onCaptureTerminal?.()}
+          title={onCaptureTerminal ? "Click to view terminal" : undefined}
+        >
+          <svg className={classNames(styles.ActivityIcon, { [styles.ActivityIconSpin]: isLatest })} viewBox="0 0 24 24" fill="none" strokeWidth={2} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+          {entry.text}
+        </button>
+      </div>
+    );
+  }
+  if (entry.speaker === "code" || entry.speaker === "file") {
+    return <CodeBlock code={entry.text} filename={entry.filename} language={entry.language} cwd={cwd} />;
+  }
+  if (entry.speaker === "image") {
+    const dataUrl = `data:${entry.mimeType || 'image/jpeg'};base64,${entry.text}`;
+    return (
+      <div className={styles.ImageRow}>
+        {entry.filename && <span className={styles.ImageFilename}>{entry.filename}</span>}
+        <img src={dataUrl} alt={entry.filename || 'image'} className={styles.InlineImage} />
+      </div>
+    );
+  }
+  return (
+    <div
+      className={classNames(styles.MessageRow, {
+        [styles.MessageRowUser]: entry.speaker === "user",
+      })}
+    >
+      <span className={styles.SpeakerLabel}>
+        {entry.speaker === "user" ? "You" : "Claude"}
+      </span>
+      <div
+        className={classNames(
+          styles.Bubble,
+          entry.speaker === "user" ? styles.BubbleUser : styles.BubbleClaude,
+        )}
+        style={entry.speaker === "user" && hue !== null ? {
+          backgroundColor: `hsla(${hue}, 55%, 35%, 0.85)`,
+        } : undefined}
+      >
+        {entry.speaker === "claude" ? (
+          <div className={styles.Markdown}>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              urlTransform={(url) => {
+                const trimmed = (url || "").trim().toLowerCase();
+                if (/^(https?:|mailto:|tel:|vscode:|#|\/|\.\/|\.\.\/)/.test(trimmed)) {
+                  return url;
+                }
+                return "";
+              }}
+              components={{
+                a: ({ href, children }) => (
+                  <a href={href} target="_blank" rel="noopener noreferrer" className={styles.InlineLink}>
+                    {children}
+                  </a>
+                ),
+                code: ({ className, children, ...props }) => {
+                  const match = /language-(\w+)/.exec(className || "");
+                  const text = String(children).replace(/\n$/, "");
+                  if (match || text.includes("\n")) {
+                    return <CodeBlock code={text} language={match?.[1]} cwd={cwd} />;
+                  }
+                  return <code className={styles.InlineCode} {...props}>{children}</code>;
+                },
+              }}
+            >
+              {entry.text}
+            </ReactMarkdown>
+          </div>
+        ) : (
+          splitIntoParagraphs(entry.text).map((p, j) => (
+            <p key={j} className={styles.Paragraph}>{linkify(p)}</p>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+

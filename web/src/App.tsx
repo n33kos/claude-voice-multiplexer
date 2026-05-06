@@ -102,6 +102,10 @@ export default function App() {
   const { settings, updateSettings } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  // Stable callback so memoized children (e.g. Transcript's EntryRow) can
+  // skip re-renders when nothing else changes.  Inline arrow fns get a new
+  // identity every render and defeat React.memo.
+  const handleCaptureTerminal = useCallback(() => setTerminalOpen(true), []);
   const particleAnalyserRef = useRef<AnalyserNode | null>(null);
   const [sessionsExpanded, setSessionsExpanded] = useState(
     !relay.connectedSessionId,
@@ -326,7 +330,7 @@ export default function App() {
             onSendText={relay.sendTextMessage}
             onAnswerQuestion={relay.answerQuestion}
             onAnswerPermission={relay.answerPermission}
-            onCaptureTerminal={() => setTerminalOpen(true)}
+            onCaptureTerminal={handleCaptureTerminal}
           />
         )}
 

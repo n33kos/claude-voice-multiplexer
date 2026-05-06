@@ -122,9 +122,15 @@ export function TerminalOverlay({
       }
     });
 
-    // Register the callback to receive terminal_data from the relay
+    // Register the callback to receive terminal_data from the relay.
+    // Each `data` is a full pane snapshot from `tmux capture-pane -e`.
+    // We send `\x1b[H` (cursor home) to overwrite in-place rather than
+    // `\x1b[2J\x1b[H` (clear-screen + home) — the clear used to flash the
+    // canvas blank for a frame on every 150ms poll, causing visible flicker
+    // and unnecessary repaint work.  Cursor-home alone overwrites the same
+    // cells with the new content; xterm.js's renderer skips unchanged cells.
     const writeCallback = (data: string) => {
-      term.write("\x1b[2J\x1b[H" + data);
+      term.write("\x1b[H" + data);
     };
     onSetTerminalDataCallback?.(writeCallback);
 
