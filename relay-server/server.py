@@ -1314,6 +1314,42 @@ async def activity_from_hook(session_id: str, request: Request):
     return JSONResponse({"ok": True})
 
 
+@app.post("/api/sessions/{session_id}/notify")
+async def notify_from_hook(session_id: str, request: Request):
+    """Post a system-speaker bubble into the transcript, optionally with TTS.
+
+    Used by the SubagentStart / SubagentStop hooks to surface "Spawning
+    research subagent." / "Research complete." callouts.  Mirrors the
+    relay_notify MCP tool but is callable from hook scripts via the
+    daemon secret.
+
+    Body:
+        message: text rendered in the system bubble (required)
+        source:  optional agent label (e.g. "Explore") — prefixed if set
+        speak:   when true, also TTS the message (default false)
+    """
+    _require_auth(request)
+    body = await request.json()
+    message = (body.get("message") or "").strip()
+    if not message:
+        return JSONResponse({"ok": False, "error": "message required"}, status_code=400)
+    source = (body.get("source") or "").strip()
+    speak = bool(body.get("speak"))
+
+    session = await registry.get(session_id)
+    if not session:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+
+    full_message = f"[{source}] {message}" if source else message
+
+    await _notify_client_transcript(session_id, "system", full_message)
+
+    if speak and _agent:
+        _spawn_background(_agent.handle_claude_response(session_id, message))
+
+    return JSONResponse({"ok": True})
+
+
 @app.post("/api/sessions/{session_id}/permission-request")
 async def permission_request_from_hook(session_id: str, request: Request):
     """Broadcast a permission-request card to web clients.
