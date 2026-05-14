@@ -415,41 +415,29 @@ else
         echo "AUTH_SECRET=${AUTH_SECRET_VAL}" >> "$CONFIG_FILE"
         log "AUTH_SECRET added."
     fi
-    # Ensure text-replacement pipeline rules exist (added in later version).
-    # We always want users to see these vars in the env file so they know
-    # they can edit them — even if they default to empty/no-op values.
-    if ! grep -q "^VMUX_INBOUND_RULES=" "$CONFIG_FILE" 2>/dev/null; then
-        log "Adding text-replacement pipeline rules to existing config..."
-        cat >> "$CONFIG_FILE" <<'PIPELINE_EOF'
-
-# --- Text-replacement pipeline ---
-# Rules applied to text in two directions:
-#   * Inbound  — STT transcription → Claude  (post-Whisper, pre-Claude)
-#   * Outbound — Claude response   → TTS     (post-Claude, pre-Kokoro)
-#
-# Each rule is a JSON object:
-#   { "name":          "<for logs>",
-#     "pattern":       "<python regex>",
-#     "replacement":   "<literal string>",
-#     "scope":         "prefix" | "anywhere" | "line",   (default "anywhere")
-#     "short_circuit": true | false,                       (default false)
-#     "flags":         "i" | "m" | "s" | "x" or combos    (default "") }
-#
-# NOTE on backslash escaping: python-dotenv unescapes one level of "\\"
-# even inside single quotes, and json.loads also unescapes "\\" — so each
-# regex backslash needs FOUR backslashes in this file. A pattern like
-# \s in regex is written as "\\\\s" in the JSON value below.
-#
-# Set a value to '[]' to explicitly disable that direction.
-#
-# The default inbound rule rewrites "by the way, …" → "/btw …" at the start
-# of an utterance so dictated side-chat routes through the /btw slash
-# command.
-VMUX_INBOUND_RULES='[{"name":"btw_prefix","pattern":"^\\\\s*by\\\\s+the\\\\s+way\\\\b[\\\\s,]*","replacement":"/btw ","scope":"prefix","short_circuit":true,"flags":"i"}]'
-VMUX_OUTBOUND_RULES='[]'
-PIPELINE_EOF
-        log "Pipeline rules added."
+    # Strip the legacy VMUX_INBOUND_RULES / VMUX_OUTBOUND_RULES block — those
+    # used to live here as JSON strings with quadruple-backslash escaping;
+    # rules now live in replacements.json instead.
+    if grep -q "^VMUX_INBOUND_RULES=\|^VMUX_OUTBOUND_RULES=" "$CONFIG_FILE" 2>/dev/null; then
+        log "Removing legacy VMUX_INBOUND_RULES/OUTBOUND_RULES from existing config..."
+        # Remove from "# --- Text-replacement pipeline ---" through the
+        # VMUX_OUTBOUND_RULES line. POSIX-portable sed via temp file.
+        sed -e '/^# --- Text-replacement pipeline ---$/,/^VMUX_OUTBOUND_RULES=/d' \
+            "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+        log "Legacy block removed."
     fi
+fi
+
+# --- Replacements file ---
+# Inbound/outbound regex replacements live in their own JSON file so users
+# can edit them without dealing with .env escaping. Ship the default on
+# fresh installs and backfill on upgrades when the file is missing.
+REPLACEMENTS_FILE="$DATA_DIR/replacements.json"
+if [ ! -f "$REPLACEMENTS_FILE" ] || [ "$FORCE" = true ]; then
+    cp "$SCRIPT_DIR/replacements.json" "$REPLACEMENTS_FILE"
+    log "Replacements written to $REPLACEMENTS_FILE"
+else
+    log "Replacements already exist at $REPLACEMENTS_FILE (not overwriting)"
 fi
 
 # --- Install daemon ---

@@ -1,0 +1,10 @@
+{
+  "inbound": [
+    {
+      "name": "btw_prefix",
+      "pattern": "(?i)^\\s*by\\s+the\\s+way\\b[\\s,]*",
+      "replacement": "/btw "
+    }
+  ],
+  "outbound": []
+}

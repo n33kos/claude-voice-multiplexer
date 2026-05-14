@@ -53,7 +53,7 @@ async def _daemon_inject_text(session_id: str, text: str) -> bool:
                 pass
 
 import audio as audio_pipeline
-from text_pipeline import apply_inbound, apply_outbound
+from replacements import apply_inbound, apply_outbound
 from tts_sanitize import sanitize_for_tts
 from config import (
     LIVEKIT_URL,
