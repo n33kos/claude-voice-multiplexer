@@ -238,21 +238,11 @@ export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, o
     endRef.current?.scrollIntoView({ behavior: "instant" });
   }, [entries.length]);
 
-  if (entries.length === 0) {
-    return (
-      <div data-component="Transcript" className={styles.Root}>
-        <div className={styles.EmptyState}>
-          Conversation will appear here
-        </div>
-        {onSendText && <MessageInputBar onSendText={onSendText} sendButtonStyle={sendButtonStyle} />}
-      </div>
-    );
-  }
-
   // Multi-question AskUserQuestion arrives as N broadcasts up-front, but the
   // terminal-side picker is strictly sequential.  Hide questions whose prior
   // sibling (question_index - 1, same question_count) is still unanswered so
   // the user can only click the currently-active prompt.
+  // NOTE: must run BEFORE the early-return below — hooks can't be conditional.
   const hiddenEntries = useMemo(() => {
     const hidden = new Set<number>();
     for (let i = 0; i < entries.length; i++) {
@@ -274,6 +264,17 @@ export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, o
     }
     return hidden;
   }, [entries]);
+
+  if (entries.length === 0) {
+    return (
+      <div data-component="Transcript" className={styles.Root}>
+        <div className={styles.EmptyState}>
+          Conversation will appear here
+        </div>
+        {onSendText && <MessageInputBar onSendText={onSendText} sendButtonStyle={sendButtonStyle} />}
+      </div>
+    );
+  }
 
   return (
     <div data-component="Transcript" className={styles.Root}>
