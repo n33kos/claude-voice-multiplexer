@@ -112,11 +112,36 @@ export function MicControls({
     }
   }, [agentState, autoListen, room.localParticipant]);
 
+  // Immediately silence any buffered TTS audio that's still flowing through
+  // the LiveKit pipeline. Cancelling on the server only stops new chunks —
+  // chunks already in flight keep playing for ~200ms otherwise. setVolume
+  // on the receive side takes effect instantly.
+  const muteRemoteAudio = () => {
+    const t = remoteTrackRef?.publication?.track as
+      | { setVolume?: (v: number) => void }
+      | undefined;
+    t?.setVolume?.(0);
+  };
+
+  // Restore remote audio volume when a new TTS turn starts. Tied to the
+  // speaking transition so a fresh response unmutes itself; we never
+  // override speakerMuted (that's a separate user control).
+  useEffect(() => {
+    if (agentState !== "speaking") return;
+    const t = remoteTrackRef?.publication?.track as
+      | { setVolume?: (v: number) => void }
+      | undefined;
+    t?.setVolume?.(1);
+  }, [agentState, remoteTrackRef]);
+
   const toggleMic = async () => {
     initAudio();
-    // If Claude is currently speaking and the user taps the mic, treat
-    // that as a barge-in: cancel TTS and enable the mic immediately.
-    if (agentState === "speaking") {
+    // Mic-tap during speaking OR thinking is a deliberate escape hatch:
+    // cancel TTS, force the agent out of whatever it's stuck on, and
+    // enable the mic so the user can speak again. The thinking branch is
+    // critical — if Claude never replies, there's no other way out.
+    if (agentState === "speaking" || agentState === "thinking") {
+      muteRemoteAudio();
       onInterrupt();
       await room.localParticipant.setMicrophoneEnabled(true);
       onAutoListenChange(true);

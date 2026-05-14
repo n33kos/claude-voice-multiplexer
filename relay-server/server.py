@@ -1687,8 +1687,14 @@ async def client_ws(ws: WebSocket):
                                 connected_session_id = None
 
             elif msg_type == "interrupt":
-                # User pressed interrupt — force agent to idle
+                # User pressed interrupt (mic tap during speaking or thinking,
+                # or the dedicated interrupt control). Cancel any in-flight
+                # TTS AND force the agent state back toward idle so the user
+                # isn't stuck waiting for a Stop hook that may never fire.
                 if connected_session_id and _agent:
+                    room = _agent.get_room(connected_session_id)
+                    if room:
+                        _spawn_background(room.cancel_tts())
                     _spawn_background(_agent.handle_claude_listening(connected_session_id))
 
             elif msg_type == "answer_permission":
