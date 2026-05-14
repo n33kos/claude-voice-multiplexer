@@ -249,23 +249,51 @@ export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, o
     );
   }
 
+  // Multi-question AskUserQuestion arrives as N broadcasts up-front, but the
+  // terminal-side picker is strictly sequential.  Hide questions whose prior
+  // sibling (question_index - 1, same question_count) is still unanswered so
+  // the user can only click the currently-active prompt.
+  const hiddenEntries = useMemo(() => {
+    const hidden = new Set<number>();
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      if (e.speaker !== "question" || !e.question) continue;
+      const qc = e.question.question_count ?? 1;
+      const qi = e.question.question_index ?? 0;
+      if (qc <= 1 || qi === 0) continue;
+      for (let j = i - 1; j >= 0; j--) {
+        const prev = entries[j];
+        if (prev.speaker !== "question" || !prev.question) continue;
+        const pqc = prev.question.question_count ?? 1;
+        const pqi = prev.question.question_index ?? 0;
+        if (pqc === qc && pqi === qi - 1) {
+          if (!prev.answered) hidden.add(i);
+          break;
+        }
+      }
+    }
+    return hidden;
+  }, [entries]);
+
   return (
     <div data-component="Transcript" className={styles.Root}>
       <div className={styles.GradientFade} />
       <div className={styles.ScrollContainer}>
-        {entries.map((entry, i) => (
-          <EntryRow
-            key={i}
-            entry={entry}
-            isLatest={i === entries.length - 1}
-            cwd={cwd}
-            sessionId={sessionId}
-            hue={hue}
-            onAnswerQuestion={onAnswerQuestion}
-            onAnswerPermission={onAnswerPermission}
-            onCaptureTerminal={onCaptureTerminal}
-          />
-        ))}
+        {entries.map((entry, i) =>
+          hiddenEntries.has(i) ? null : (
+            <EntryRow
+              key={i}
+              entry={entry}
+              isLatest={i === entries.length - 1}
+              cwd={cwd}
+              sessionId={sessionId}
+              hue={hue}
+              onAnswerQuestion={onAnswerQuestion}
+              onAnswerPermission={onAnswerPermission}
+              onCaptureTerminal={onCaptureTerminal}
+            />
+          ),
+        )}
         <div ref={endRef} />
       </div>
       {onSendText && <MessageInputBar onSendText={onSendText} sendButtonStyle={sendButtonStyle} />}
