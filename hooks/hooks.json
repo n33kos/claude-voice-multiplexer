@@ -10,6 +10,16 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vmux-user-prompt-submit-hook.sh"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
