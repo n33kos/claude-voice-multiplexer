@@ -15,6 +15,7 @@ export interface VoiceControlsProps {
   onConnected: () => void;
   onDisconnected: () => void;
   onInterrupt: () => void;
+  onTerminalOpen: () => void;
   particleAnalyserRef?: React.MutableRefObject<AnalyserNode | null>;
 }
 
@@ -28,5 +29,6 @@ export interface MicControlsProps {
   onAutoListenChange: (value: boolean) => void;
   onSpeakerMutedChange: (value: boolean) => void;
   onInterrupt: () => void;
+  onTerminalOpen: () => void;
   particleAnalyserRef?: React.MutableRefObject<AnalyserNode | null>;
 }

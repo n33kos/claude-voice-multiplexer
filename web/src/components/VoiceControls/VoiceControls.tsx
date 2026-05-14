@@ -92,6 +92,7 @@ export function VoiceControls({
   onConnected,
   onDisconnected,
   onInterrupt,
+  onTerminalOpen,
   particleAnalyserRef,
 }: VoiceControlsProps) {
   return (
@@ -116,6 +117,7 @@ export function VoiceControls({
           onAutoListenChange={onAutoListenChange}
           onSpeakerMutedChange={onSpeakerMutedChange}
           onInterrupt={onInterrupt}
+          onTerminalOpen={onTerminalOpen}
           particleAnalyserRef={particleAnalyserRef}
         />
       </LiveKitRoom>

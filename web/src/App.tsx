@@ -287,8 +287,6 @@ export default function App() {
       <div className={styles.Layout}>
         <Header
           onSettingsOpen={() => setSettingsOpen(true)}
-          onTerminalOpen={() => setTerminalOpen(true)}
-          showTerminalButton={!!relay.connectedSessionId}
           showTitle={settings.showTitle}
         />
 
@@ -382,6 +380,7 @@ export default function App() {
                     relay.cancelTts(relay.connectedSessionId);
                   }
                 }}
+                onTerminalOpen={() => setTerminalOpen(true)}
                 particleAnalyserRef={particleAnalyserRef}
               />
             </Suspense>
