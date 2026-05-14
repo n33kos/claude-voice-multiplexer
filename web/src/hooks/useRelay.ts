@@ -908,23 +908,28 @@ export function useRelay(authenticated: boolean = true) {
   }, []);
 
   const answerQuestion = useCallback(
-    (sessionId: string, optionIndex: number, label: string) => {
+    (sessionId: string, optionIndex: number, label: string, entryTimestamp: number) => {
       wsRef.current?.send(
         JSON.stringify({ type: "answer_question", session_id: sessionId, option_index: optionIndex }),
       );
-      // Mark the open question entry as answered so the UI disables buttons.
+      // Mark the *specific* question entry the user clicked.  Previously this
+      // searched backwards for "the last unanswered question" which mis-routed
+      // every click when multiple AskUserQuestion cards were on screen.
       setState((s) => {
         const entries = s.transcripts[sessionId] || [];
         let updated = false;
-        const nextEntries = [...entries];
-        for (let i = nextEntries.length - 1; i >= 0; i--) {
-          const e = nextEntries[i];
-          if (e.speaker === "question" && !e.answered) {
-            nextEntries[i] = { ...e, answered: { optionIndex, label } };
+        const nextEntries = entries.map((e) => {
+          if (
+            !updated &&
+            e.speaker === "question" &&
+            !e.answered &&
+            e.timestamp === entryTimestamp
+          ) {
             updated = true;
-            break;
+            return { ...e, answered: { optionIndex, label } };
           }
-        }
+          return e;
+        });
         if (!updated) return s;
         return {
           ...s,

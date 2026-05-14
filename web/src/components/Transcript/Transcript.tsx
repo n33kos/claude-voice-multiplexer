@@ -204,7 +204,7 @@ type EntryRowProps = {
   cwd?: string;
   sessionId: string | null | undefined;
   hue: number | null;
-  onAnswerQuestion?: (sessionId: string, optionIndex: number, label: string) => void;
+  onAnswerQuestion?: (sessionId: string, optionIndex: number, label: string, entryTimestamp: number) => void;
   onAnswerPermission?: (sessionId: string, choice: "allow" | "allow_always" | "deny") => void;
   onCaptureTerminal?: () => void;
 };
@@ -311,7 +311,7 @@ function renderEntry(
   cwd: string | undefined,
   sessionId: string | null | undefined,
   hue: number | null,
-  onAnswerQuestion: ((sessionId: string, optionIndex: number, label: string) => void) | undefined,
+  onAnswerQuestion: ((sessionId: string, optionIndex: number, label: string, entryTimestamp: number) => void) | undefined,
   onAnswerPermission: ((sessionId: string, choice: "allow" | "allow_always" | "deny") => void) | undefined,
   onCaptureTerminal: (() => void) | undefined,
 ): React.ReactElement {
@@ -409,7 +409,7 @@ function renderEntry(
                   disabled={isDisabled || !onAnswerQuestion || !sessionId}
                   onClick={() => {
                     if (onAnswerQuestion && sessionId) {
-                      onAnswerQuestion(sessionId, idx, opt.label);
+                      onAnswerQuestion(sessionId, idx, opt.label, entry.timestamp);
                     }
                   }}
                   className={classNames(styles.OptionButton, {

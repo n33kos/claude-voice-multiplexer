@@ -133,16 +133,18 @@ _app = {
     "notify_transcript": None,
     "notify_status": None,
     "broadcast_sessions": None,
+    "mark_tts": None,
 }
 
 
-def init(registry, get_agent, notify_transcript, notify_status, broadcast_sessions):
+def init(registry, get_agent, notify_transcript, notify_status, broadcast_sessions, mark_tts=None):
     """Initialize MCP tools with relay server dependencies."""
     _app["registry"] = registry
     _app["get_agent"] = get_agent
     _app["notify_transcript"] = notify_transcript
     _app["notify_status"] = notify_status
     _app["broadcast_sessions"] = broadcast_sessions
+    _app["mark_tts"] = mark_tts
 
 
 @mcp.tool()
@@ -228,6 +230,11 @@ async def relay_respond(ctx: Context, text: str) -> str:
 
     if not text:
         return "No text provided."
+
+    # Prime TTS dedup so the Stop hook's /tts call (which re-extracts the
+    # same final text from the transcript JSONL) is skipped.
+    if _app.get("mark_tts"):
+        _app["mark_tts"](session_id, text)
 
     agent = _app["get_agent"]()
     if agent:

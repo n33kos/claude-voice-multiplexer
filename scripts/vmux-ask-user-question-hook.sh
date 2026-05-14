@@ -127,12 +127,14 @@ while [ "$i" -lt "$count" ]; do
         }
     ')
     if [ -n "$struct_payload" ]; then
+        # Sequential (no trailing &) so the broadcasts arrive in order; otherwise
+        # the web client can see question 3 before question 1 and gating fails.
         curl -sS -X POST \
             -H "X-Daemon-Secret: $DAEMON_SECRET" \
             -H "Content-Type: application/json" \
             --max-time 5 \
             "$RELAY_URL/api/sessions/$relay_session_id/question" \
-            -d "$struct_payload" >/dev/null 2>&1 &
+            -d "$struct_payload" >/dev/null 2>&1
     fi
     i=$((i + 1))
 done

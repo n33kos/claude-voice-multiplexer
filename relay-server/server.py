@@ -492,6 +492,7 @@ async def lifespan(app: FastAPI):
         notify_transcript=_notify_client_transcript,
         notify_status=_notify_client_status,
         broadcast_sessions=_broadcast_sessions,
+        mark_tts=lambda sid, txt: _last_tts.__setitem__(sid, (time.time(), txt)),
     )
     print("[server] MCP tools initialized (SSE endpoint at /mcp)")
 
@@ -1200,6 +1201,22 @@ async def register_session_from_hook(session_id: str, request: Request):
     return JSONResponse({"ok": True, "session_id": session_id, "reconnect": is_reconnect})
 
 
+# Per-session dedup of recent TTS text.  Claude may speak the same final
+# message via both relay_respond (MCP tool) and the Stop hook (JSONL scrape);
+# without this, the user hears every response twice.
+_last_tts: dict[str, tuple[float, str]] = {}
+_TTS_DEDUP_WINDOW = 30.0  # seconds
+
+
+def _tts_is_duplicate(session_id: str, text: str) -> bool:
+    prev = _last_tts.get(session_id)
+    now = time.time()
+    if prev and (now - prev[0]) < _TTS_DEDUP_WINDOW and prev[1] == text:
+        return True
+    _last_tts[session_id] = (now, text)
+    return False
+
+
 @app.post("/api/sessions/{session_id}/tts")
 async def tts_session(session_id: str, request: Request):
     """Play TTS audio for a session.
@@ -1207,6 +1224,9 @@ async def tts_session(session_id: str, request: Request):
     Called by the Stop hook (via daemon secret) to speak Claude's last
     assistant message.  Routes through the same LiveKit agent pipeline as
     relay_respond, but does not require a live MCP connection.
+
+    Skipped silently if the same text was just sent via relay_respond — the
+    Stop hook re-extracts the same final message from the transcript JSONL.
     """
     _require_auth(request)
     body = await request.json()
@@ -1217,6 +1237,9 @@ async def tts_session(session_id: str, request: Request):
     session = await registry.get(session_id)
     if not session:
         return JSONResponse({"error": "Session not found"}, status_code=404)
+
+    if _tts_is_duplicate(session_id, text):
+        return JSONResponse({"ok": True, "deduped": True})
 
     if _agent:
         # Await the queueing so the response_queue is populated before
