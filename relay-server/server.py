@@ -34,7 +34,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response, 
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import RELAY_HOST, RELAY_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AUTH_ENABLED, WHISPER_URL, KOKORO_URL, DAEMON_SECRET
+from config import RELAY_HOST, RELAY_PORT, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, AUTH_ENABLED, WHISPER_URL, KOKORO_URL, DAEMON_SECRET, ANTHROPIC_API_KEY, ANTHROPIC_API_URL
 import auth
 from registry import SessionRegistry
 from livekit_agent import RelayAgent
@@ -1414,6 +1414,101 @@ async def change_model(session_id: str, request: Request):
     if result.get("ok"):
         return JSONResponse({"success": True})
     return JSONResponse({"error": result.get("error", "Model change failed")}, status_code=500)
+
+
+# Fallback list used when ANTHROPIC_API_KEY is unset or the live call fails.
+# Matches Claude Code's current top-of-list options so the selector still works
+# offline / unconfigured.
+_MODELS_FALLBACK = [
+    {"id": "claude-opus-4-7", "display_name": "Opus 4.7"},
+    {"id": "claude-opus-4-6", "display_name": "Opus 4.6"},
+    {"id": "claude-sonnet-4-6", "display_name": "Sonnet 4.6"},
+    {"id": "claude-haiku-4-5", "display_name": "Haiku 4.5"},
+]
+
+_models_cache: list[dict] | None = None
+_models_cache_ts: float = 0.0
+_MODELS_CACHE_TTL = 3600  # 1 hour
+
+
+def _filter_model_id(model_id: str) -> bool:
+    """Drop dated snapshots (e.g. `claude-opus-4-5-20250929`) and retired aliases.
+
+    Keeps canonical model IDs only — the ones a user would actually want to
+    select in a dropdown.
+    """
+    # Dated snapshot — trailing 8-digit date
+    import re as _re
+    if _re.search(r"-\d{8}$", model_id):
+        return False
+    # Older 3.x snapshots / retired families
+    if model_id.startswith("claude-2") or model_id.startswith("claude-instant"):
+        return False
+    return True
+
+
+async def _fetch_anthropic_models() -> list[dict]:
+    """Fetch available models from the Anthropic API with caching.
+
+    Returns the fallback list if no API key is configured or the call fails.
+    """
+    global _models_cache, _models_cache_ts
+
+    now = time.time()
+    if _models_cache is not None and (now - _models_cache_ts) < _MODELS_CACHE_TTL:
+        return _models_cache
+
+    if not ANTHROPIC_API_KEY:
+        return _MODELS_FALLBACK
+
+    try:
+        client = get_http_client()
+        resp = await client.get(
+            f"{ANTHROPIC_API_URL}/models",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+            },
+            params={"limit": 1000},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        raw = resp.json().get("data", [])
+    except Exception as e:
+        print(f"[server] Failed to fetch Anthropic models: {e}")
+        if _models_cache is not None:
+            return _models_cache
+        return _MODELS_FALLBACK
+
+    models = []
+    for m in raw:
+        mid = m.get("id", "")
+        if not mid or not _filter_model_id(mid):
+            continue
+        models.append({
+            "id": mid,
+            "display_name": m.get("display_name") or mid,
+        })
+
+    if not models:
+        return _MODELS_FALLBACK
+
+    _models_cache = models
+    _models_cache_ts = now
+    print(f"[server] Loaded {len(models)} models from Anthropic (filtered from {len(raw)} total)")
+    return models
+
+
+@app.get("/api/models")
+async def list_models(request: Request):
+    """List available Claude models for the model-selector dropdown.
+
+    Sources from the Anthropic API when ANTHROPIC_API_KEY is configured;
+    otherwise returns a curated fallback list. Cached for an hour.
+    """
+    _require_auth(request)
+    models = await _fetch_anthropic_models()
+    return JSONResponse({"models": models})
 
 
 @app.get("/api/sessions/{session_id}/context")

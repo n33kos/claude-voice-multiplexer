@@ -50,6 +50,12 @@ AUTH_ENABLED = bool(AUTH_SECRET)
 # Daemon calls relay endpoints with X-Daemon-Secret header to bypass user auth.
 DAEMON_SECRET = os.environ.get("VMUX_DAEMON_SECRET", "")
 
+# --- Anthropic API ---
+# Used by /api/models to populate the model-selector dropdown from a live
+# source. Optional — if unset, /api/models returns a static fallback list.
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_API_URL = os.environ.get("ANTHROPIC_API_URL", "https://api.anthropic.com/v1")
+
 # --- VAD (Voice Activity Detection) ---
 VAD_AGGRESSIVENESS = int(os.environ.get("VAD_AGGRESSIVENESS", "2"))  # 0=permissive, 3=strict
 SILENCE_THRESHOLD_MS = int(os.environ.get("SILENCE_THRESHOLD_MS", "1000"))

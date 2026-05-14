@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import type { ContextBarFields } from "../../hooks/useSettings";
+import { authFetch } from "../../hooks/useAuth";
 import styles from "./ContextBar.module.scss";
 
 export interface ContextUsage {
@@ -26,11 +27,46 @@ interface ContextBarProps {
   fields: ContextBarFields;
 }
 
-const AVAILABLE_MODELS = [
-  { id: "claude-opus-4-6", label: "Opus 4.6", shortFilter: "opus" },
-  { id: "claude-sonnet-4-6", label: "Sonnet 4.6", shortFilter: "sonnet" },
-  { id: "claude-haiku-4-5", label: "Haiku 4.5", shortFilter: "haiku" },
+interface AvailableModel {
+  id: string;
+  display_name: string;
+}
+
+// Curated fallback shown while the live list is in-flight or if /api/models
+// fails. Mirrors the server-side fallback in relay-server/server.py.
+const FALLBACK_MODELS: AvailableModel[] = [
+  { id: "claude-opus-4-7", display_name: "Opus 4.7" },
+  { id: "claude-opus-4-6", display_name: "Opus 4.6" },
+  { id: "claude-sonnet-4-6", display_name: "Sonnet 4.6" },
+  { id: "claude-haiku-4-5", display_name: "Haiku 4.5" },
 ];
+
+// Session-level cache so we only hit /api/models once per page load.
+let _modelsCache: AvailableModel[] | null = null;
+let _modelsInFlight: Promise<AvailableModel[]> | null = null;
+
+async function fetchAvailableModels(): Promise<AvailableModel[]> {
+  if (_modelsCache) return _modelsCache;
+  if (_modelsInFlight) return _modelsInFlight;
+  _modelsInFlight = (async () => {
+    try {
+      const resp = await authFetch("/api/models");
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const models: AvailableModel[] = Array.isArray(data.models) ? data.models : [];
+      if (models.length > 0) {
+        _modelsCache = models;
+        return models;
+      }
+      return FALLBACK_MODELS;
+    } catch {
+      return FALLBACK_MODELS;
+    } finally {
+      _modelsInFlight = null;
+    }
+  })();
+  return _modelsInFlight;
+}
 
 function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -76,7 +112,18 @@ function ModelSwitcher({
 }) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const [models, setModels] = useState<AvailableModel[]>(_modelsCache ?? FALLBACK_MODELS);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchAvailableModels().then((list) => {
+      if (!cancelled) setModels(list);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!dropdownOpen) return;
@@ -118,13 +165,13 @@ function ModelSwitcher({
       </button>
       {dropdownOpen && (
         <div className={styles.Dropdown}>
-          {AVAILABLE_MODELS.map((m) => (
+          {models.map((m) => (
             <button
               key={m.id}
               className={`${styles.DropdownItem} ${m.id === currentModel ? styles.DropdownItemActive : ""}`}
               onClick={() => handleModelSelect(m.id)}
             >
-              {m.label}
+              {m.display_name}
               {m.id === currentModel && (
                 <svg className={styles.CheckIcon} viewBox="0 0 12 12" fill="currentColor">
                   <path d="M2 6L5 9L10 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
