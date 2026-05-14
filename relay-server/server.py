@@ -1416,6 +1416,20 @@ async def change_model(session_id: str, request: Request):
     return JSONResponse({"error": result.get("error", "Model change failed")}, status_code=500)
 
 
+@app.post("/api/sessions/{session_id}/effort")
+async def change_effort(session_id: str, request: Request):
+    """Switch the Claude Code effort level via /effort <level>."""
+    _require_auth(request)
+    body = await request.json()
+    level = body.get("level", "")
+    if level not in ("low", "medium", "high", "max", "xhigh"):
+        return JSONResponse({"error": "invalid effort level"}, status_code=400)
+    result = await _daemon_ipc({"cmd": "change-effort", "session_id": session_id, "level": level})
+    if result.get("ok"):
+        return JSONResponse({"success": True})
+    return JSONResponse({"error": result.get("error", "Effort change failed")}, status_code=500)
+
+
 # Fallback list used when ANTHROPIC_API_KEY is unset or the live call fails.
 # Matches Claude Code's current top-of-list options so the selector still works
 # offline / unconfigured.

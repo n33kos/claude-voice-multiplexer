@@ -396,6 +396,18 @@ export default function App() {
                 ? (model) => relay.changeModel(relay.connectedSessionId!, model)
                 : undefined
             }
+            effortLevel={settings.effortLevel}
+            onChangeEffort={
+              relay.connectedSessionId
+                ? async (level) => {
+                    const ok = await relay.changeEffort(
+                      relay.connectedSessionId!,
+                      level,
+                    );
+                    if (ok) updateSettings({ effortLevel: level });
+                  }
+                : undefined
+            }
           />
         )}
 

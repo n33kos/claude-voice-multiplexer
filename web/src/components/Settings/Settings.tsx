@@ -289,6 +289,7 @@ export function Settings({
               {(
                 [
                   { key: "model", label: "Model switcher", desc: "Active model with switch dropdown" },
+                  { key: "effort", label: "Effort level", desc: "Claude Code /effort selector" },
                   { key: "contextUsage", label: "Context usage", desc: "Token count and percentage" },
                   { key: "cost", label: "Session cost", desc: "Running cost in USD" },
                   { key: "rateLimit5h", label: "5-hour usage", desc: "Rolling 5-hour rate limit %" },

@@ -996,6 +996,22 @@ export function useRelay(authenticated: boolean = true) {
     [],
   );
 
+  const changeEffort = useCallback(
+    async (sessionId: string, level: string): Promise<boolean> => {
+      try {
+        const resp = await authFetch(`/api/sessions/${sessionId}/effort`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ level }),
+        });
+        return resp.ok;
+      } catch {
+        return false;
+      }
+    },
+    [],
+  );
+
   const recolorSession = useCallback(
     (sessionId: string, hue: number | null) => {
       // Optimistic local update
@@ -1066,6 +1082,7 @@ export function useRelay(authenticated: boolean = true) {
     clearContextSession,
     compactSession,
     changeModel,
+    changeEffort,
     requestTerminalCapture,
     dismissTerminalSnapshot,
     sendTerminalKeys,

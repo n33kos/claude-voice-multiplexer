@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import type { ContextBarFields } from "../../hooks/useSettings";
+import type { ContextBarFields, EffortLevel } from "../../hooks/useSettings";
 import { authFetch } from "../../hooks/useAuth";
 import styles from "./ContextBar.module.scss";
 
@@ -24,6 +24,8 @@ interface ContextBarProps {
   usage: ContextUsage | null;
   alwaysShow?: boolean;
   onChangeModel?: (model: string) => void;
+  effortLevel?: EffortLevel;
+  onChangeEffort?: (level: EffortLevel) => void;
   fields: ContextBarFields;
 }
 
@@ -185,6 +187,104 @@ function ModelSwitcher({
   );
 }
 
+const EFFORT_OPTIONS: { id: EffortLevel; label: string; requiresOpus47?: boolean }[] = [
+  { id: "low", label: "Low" },
+  { id: "medium", label: "Medium" },
+  { id: "high", label: "High" },
+  { id: "max", label: "Max" },
+  { id: "xhigh", label: "XHigh", requiresOpus47: true },
+];
+
+/** True when the active model is an Opus 4.7-class model (gates xhigh). */
+function isOpus47Class(modelId: string | undefined): boolean {
+  if (!modelId) return false;
+  return modelId.startsWith("claude-opus-4-7");
+}
+
+/** Effort-level switcher widget with dropdown. */
+function EffortSelector({
+  usage,
+  effortLevel,
+  onChangeEffort,
+}: {
+  usage: ContextUsage | null;
+  effortLevel: EffortLevel;
+  onChangeEffort?: (level: EffortLevel) => void;
+}) {
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [dropdownOpen]);
+
+  const opus47 = isOpus47Class(usage?.model);
+
+  const handleSelect = async (level: EffortLevel, disabled: boolean) => {
+    if (disabled) return;
+    setDropdownOpen(false);
+    if (!onChangeEffort || level === effortLevel) return;
+    setSwitching(true);
+    await onChangeEffort(level);
+    setSwitching(false);
+  };
+
+  const current = EFFORT_OPTIONS.find((o) => o.id === effortLevel) ?? EFFORT_OPTIONS[1];
+
+  return (
+    <div className={styles.ModelContainer} ref={dropdownRef}>
+      <button
+        className={styles.ModelButton}
+        onClick={() => onChangeEffort && setDropdownOpen((o) => !o)}
+        disabled={!onChangeEffort || switching}
+        title={onChangeEffort ? "Change effort level" : undefined}
+      >
+        <span className={styles.Model}>
+          {switching ? "Switching..." : `Effort: ${current.label}`}
+        </span>
+        {onChangeEffort && (
+          <svg className={styles.ChevronIcon} viewBox="0 0 12 12" fill="currentColor">
+            <path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+          </svg>
+        )}
+      </button>
+      {dropdownOpen && (
+        <div className={styles.Dropdown}>
+          {EFFORT_OPTIONS.map((opt) => {
+            const disabled = !!opt.requiresOpus47 && !opus47;
+            const active = opt.id === effortLevel;
+            return (
+              <button
+                key={opt.id}
+                className={`${styles.DropdownItem} ${active ? styles.DropdownItemActive : ""}`}
+                onClick={() => handleSelect(opt.id, disabled)}
+                disabled={disabled}
+                title={disabled ? "Available only with Opus 4.7" : undefined}
+                style={disabled ? { opacity: 0.4, cursor: "not-allowed" } : undefined}
+              >
+                {opt.label}
+                {active && (
+                  <svg className={styles.CheckIcon} viewBox="0 0 12 12" fill="currentColor">
+                    <path d="M2 6L5 9L10 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                  </svg>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Token usage text widget. */
 function TokenUsage({ usage }: { usage: ContextUsage | null }) {
   const pct = usage ? Math.min(usage.percentage, 100) : 0;
@@ -232,10 +332,21 @@ function renderField(
   fieldId: string,
   usage: ContextUsage | null,
   onChangeModel?: (model: string) => void,
+  effortLevel: EffortLevel = "medium",
+  onChangeEffort?: (level: EffortLevel) => void,
 ) {
   switch (fieldId) {
     case "model":
       return <ModelSwitcher key="model" usage={usage} onChangeModel={onChangeModel} />;
+    case "effort":
+      return (
+        <EffortSelector
+          key="effort"
+          usage={usage}
+          effortLevel={effortLevel}
+          onChangeEffort={onChangeEffort}
+        />
+      );
     case "contextUsage":
       return <TokenUsage key="contextUsage" usage={usage} />;
     case "cost":
@@ -253,7 +364,14 @@ function renderField(
   }
 }
 
-export function ContextBar({ usage, alwaysShow, onChangeModel, fields }: ContextBarProps) {
+export function ContextBar({
+  usage,
+  alwaysShow,
+  onChangeModel,
+  effortLevel = "medium",
+  onChangeEffort,
+  fields,
+}: ContextBarProps) {
   if (!usage && !alwaysShow) return null;
 
   // Group fields by position
@@ -275,13 +393,13 @@ export function ContextBar({ usage, alwaysShow, onChangeModel, fields }: Context
     <div data-component="ContextBar" className={styles.Root}>
       <div className={styles.Labels}>
         <div className={styles.FieldGroup}>
-          {left.map((id) => renderField(id, usage, onChangeModel))}
+          {left.map((id) => renderField(id, usage, onChangeModel, effortLevel, onChangeEffort))}
         </div>
         <div className={`${styles.FieldGroup} ${styles.FieldGroupCenter}`}>
-          {center.map((id) => renderField(id, usage, onChangeModel))}
+          {center.map((id) => renderField(id, usage, onChangeModel, effortLevel, onChangeEffort))}
         </div>
         <div className={styles.FieldGroup}>
-          {right.map((id) => renderField(id, usage, onChangeModel))}
+          {right.map((id) => renderField(id, usage, onChangeModel, effortLevel, onChangeEffort))}
         </div>
       </div>
       {showBar && (

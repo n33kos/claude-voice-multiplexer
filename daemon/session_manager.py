@@ -451,6 +451,27 @@ class SessionManager:
             logger.error(f"[sessions] change_model failed: {e}")
             return False
 
+    async def change_effort(self, session_id: str, level: str) -> bool:
+        """Switch the Claude Code effort level via `/effort <level>`.
+
+        Sends the slash command into the tmux session's stdin. No interrupt —
+        the user is expected to flip effort before issuing the next prompt.
+        """
+        async with self._lock:
+            session = self._find_session(session_id)
+            if not session:
+                return False
+            tmux_session = session.tmux_session
+        try:
+            await self._run(["tmux", "send-keys", "-t", tmux_session,
+                             "-l", f"/effort {level}"])
+            await asyncio.sleep(0.2)
+            await self._run(["tmux", "send-keys", "-t", tmux_session, "Enter"])
+            return True
+        except Exception as e:
+            logger.error(f"[sessions] change_effort failed: {e}")
+            return False
+
     async def restart_session(self, session_id: str) -> dict:
         """Kill and respawn a session in the same directory."""
         async with self._lock:

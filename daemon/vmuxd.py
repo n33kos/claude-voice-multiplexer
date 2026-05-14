@@ -465,6 +465,13 @@ class VmuxDaemon:
                     return {"ok": False, "error": "model is required"}
                 ok = await self._session_manager.change_model(session_id, model)
                 return {"ok": ok}
+            elif cmd == "change-effort":
+                session_id = request.get("session_id", "")
+                level = request.get("level", "")
+                if level not in ("low", "medium", "high", "max", "xhigh"):
+                    return {"ok": False, "error": "invalid effort level"}
+                ok = await self._session_manager.change_effort(session_id, level)
+                return {"ok": ok}
             elif cmd == "context-usage":
                 session_id = request.get("session_id", "")
                 usage = await self._session_manager.get_context_usage(session_id)

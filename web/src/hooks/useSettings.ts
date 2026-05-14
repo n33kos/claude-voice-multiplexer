@@ -8,9 +8,13 @@ export type FieldPosition = 'hidden' | 'left' | 'center' | 'right'
 /** Visibility for the progress bar (only hidden/visible). */
 export type BarVisibility = 'hidden' | 'visible'
 
+/** Claude Code effort levels sent via /effort &lt;level&gt;. */
+export type EffortLevel = 'low' | 'medium' | 'high' | 'max' | 'xhigh'
+
 /** Configurable context bar field placement. */
 export interface ContextBarFields {
   model: FieldPosition
+  effort: FieldPosition
   contextUsage: FieldPosition
   cost: FieldPosition
   rateLimit5h: FieldPosition
@@ -30,12 +34,14 @@ export interface Settings {
   showTitle: boolean
   showContextBar: boolean
   contextBarFields: ContextBarFields
+  effortLevel: EffortLevel
 }
 
 const STORAGE_KEY = 'voice-multiplexer-settings'
 
 export const DEFAULT_CONTEXT_BAR_FIELDS: ContextBarFields = {
   model: 'left',
+  effort: 'left',
   contextUsage: 'right',
   cost: 'hidden',
   rateLimit5h: 'hidden',
@@ -55,13 +61,22 @@ const DEFAULTS: Settings = {
   showTitle: true,
   showContextBar: true,
   contextBarFields: DEFAULT_CONTEXT_BAR_FIELDS,
+  effortLevel: 'medium',
 }
 
 function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
-      return { ...DEFAULTS, ...JSON.parse(raw) }
+      const parsed = JSON.parse(raw)
+      return {
+        ...DEFAULTS,
+        ...parsed,
+        contextBarFields: {
+          ...DEFAULT_CONTEXT_BAR_FIELDS,
+          ...(parsed.contextBarFields ?? {}),
+        },
+      }
     }
   } catch {
     // ignore
@@ -93,7 +108,15 @@ export function useSettings() {
     const handler = (e: StorageEvent) => {
       if (e.key === STORAGE_KEY && e.newValue) {
         try {
-          setSettingsState({ ...DEFAULTS, ...JSON.parse(e.newValue) })
+          const parsed = JSON.parse(e.newValue)
+          setSettingsState({
+            ...DEFAULTS,
+            ...parsed,
+            contextBarFields: {
+              ...DEFAULT_CONTEXT_BAR_FIELDS,
+              ...(parsed.contextBarFields ?? {}),
+            },
+          })
         } catch {
           // ignore
         }
