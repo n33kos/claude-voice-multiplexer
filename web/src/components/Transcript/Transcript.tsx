@@ -364,6 +364,9 @@ function renderEntry(
       <div className={styles.MessageRow}>
         <span className={styles.SpeakerLabel}>
           {q.header || "Question"}
+          {q.question_count && q.question_count > 1
+            ? ` (${(q.question_index ?? 0) + 1} of ${q.question_count})`
+            : ""}
         </span>
         <div className={classNames(styles.Bubble, styles.BubbleQuestion)}>
           <p className={styles.QuestionText}>{q.question}</p>

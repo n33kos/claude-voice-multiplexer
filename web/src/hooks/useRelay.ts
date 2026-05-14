@@ -62,6 +62,8 @@ export interface AskQuestion {
   header?: string;
   multiSelect?: boolean;
   options: AskOption[];
+  question_index?: number;
+  question_count?: number;
 }
 
 export interface PermissionRequest {

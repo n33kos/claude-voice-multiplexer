@@ -1366,6 +1366,8 @@ async def question_from_hook(session_id: str, request: Request):
             "header": body.get("header") or "",
             "multiSelect": bool(body.get("multiSelect")),
             "options": options,
+            "question_index": int(body.get("question_index") or 0),
+            "question_count": int(body.get("question_count") or 1),
         },
     }
     msg = json.dumps(entry)
