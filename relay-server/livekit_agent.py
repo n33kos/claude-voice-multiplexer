@@ -53,6 +53,7 @@ async def _daemon_inject_text(session_id: str, text: str) -> bool:
                 pass
 
 import audio as audio_pipeline
+from tts_sanitize import sanitize_for_tts
 from config import (
     LIVEKIT_URL,
     LIVEKIT_API_KEY,
@@ -744,7 +745,11 @@ class SessionRoom:
 
     async def _play_tts_response(self, text: str):
         """Stream-synthesize and play a single TTS response."""
-        print(f"[room:{self.room_name}] Streaming TTS response: {text[:50]}...")
+        spoken_text = sanitize_for_tts(text)
+        if not spoken_text:
+            print(f"[room:{self.room_name}] TTS skipped: sanitized text is empty")
+            return
+        print(f"[room:{self.room_name}] Streaming TTS response: {spoken_text[:50]}...")
 
         self._is_speaking = True
         tts_started_at = time.time()
@@ -755,7 +760,7 @@ class SessionRoom:
             got_audio = False
 
             try:
-                async for pcm_chunk in audio_pipeline.synthesize_pcm_stream(text):
+                async for pcm_chunk in audio_pipeline.synthesize_pcm_stream(spoken_text):
                     if self._tts_cancel_event.is_set():
                         print(f"[room:{self.room_name}] TTS cancelled mid-stream")
                         break
