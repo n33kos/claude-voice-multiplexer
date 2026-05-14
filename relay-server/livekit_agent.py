@@ -53,6 +53,7 @@ async def _daemon_inject_text(session_id: str, text: str) -> bool:
                 pass
 
 import audio as audio_pipeline
+from text_pipeline import apply_inbound, apply_outbound
 from tts_sanitize import sanitize_for_tts
 from config import (
     LIVEKIT_URL,
@@ -673,6 +674,14 @@ class SessionRoom:
                 await self._notify_status("idle", disable_auto_listen=True)
             return
 
+        # Apply inbound text-replacement rules (e.g. "by the way …" → "/btw …")
+        # before the transcript broadcast so the UI shows what actually goes
+        # to Claude.
+        transformed = apply_inbound(text)
+        if transformed != text:
+            print(f"[room:{self.room_name}] Inbound rule fired: {text!r} → {transformed!r}")
+            text = transformed
+
         print(f"[room:{self.room_name}] Transcribed: {text}")
 
         if not session:
@@ -745,7 +754,12 @@ class SessionRoom:
 
     async def _play_tts_response(self, text: str):
         """Stream-synthesize and play a single TTS response."""
-        spoken_text = sanitize_for_tts(text)
+        # tts_sanitize handles markdown/code/path stripping; outbound rules
+        # cover anything else (acronym expansion, replacements, etc.). Order
+        # is sanitize-then-rules so future outbound rules see clean prose.
+        # When sanitize_for_tts is eventually folded into OUTBOUND_RULES this
+        # collapses to a single apply_outbound call.
+        spoken_text = apply_outbound(sanitize_for_tts(text))
         if not spoken_text:
             print(f"[room:{self.room_name}] TTS skipped: sanitized text is empty")
             return
