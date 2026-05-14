@@ -908,9 +908,17 @@ export function useRelay(authenticated: boolean = true) {
   }, []);
 
   const answerQuestion = useCallback(
-    (sessionId: string, optionIndex: number, label: string, entryTimestamp: number) => {
+    (sessionId: string, optionIndex: number, label: string, entryTimestamp: number, isFinal: boolean) => {
+      // Claude Code shows a final "Submit (1) / Cancel (2)" prompt after the
+      // last answer in a multi-question set — when `isFinal`, the relay
+      // presses Enter so the user doesn't have to jump to the terminal.
       wsRef.current?.send(
-        JSON.stringify({ type: "answer_question", session_id: sessionId, option_index: optionIndex }),
+        JSON.stringify({
+          type: "answer_question",
+          session_id: sessionId,
+          option_index: optionIndex,
+          submit_after: isFinal,
+        }),
       );
       // Mark the *specific* question entry the user clicked.  Previously this
       // searched backwards for "the last unanswered question" which mis-routed

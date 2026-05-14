@@ -204,7 +204,7 @@ type EntryRowProps = {
   cwd?: string;
   sessionId: string | null | undefined;
   hue: number | null;
-  onAnswerQuestion?: (sessionId: string, optionIndex: number, label: string, entryTimestamp: number) => void;
+  onAnswerQuestion?: (sessionId: string, optionIndex: number, label: string, entryTimestamp: number, isFinal: boolean) => void;
   onAnswerPermission?: (sessionId: string, choice: "allow" | "allow_always" | "deny") => void;
   onCaptureTerminal?: () => void;
 };
@@ -312,7 +312,7 @@ function renderEntry(
   cwd: string | undefined,
   sessionId: string | null | undefined,
   hue: number | null,
-  onAnswerQuestion: ((sessionId: string, optionIndex: number, label: string, entryTimestamp: number) => void) | undefined,
+  onAnswerQuestion: ((sessionId: string, optionIndex: number, label: string, entryTimestamp: number, isFinal: boolean) => void) | undefined,
   onAnswerPermission: ((sessionId: string, choice: "allow" | "allow_always" | "deny") => void) | undefined,
   onCaptureTerminal: (() => void) | undefined,
 ): React.ReactElement {
@@ -410,7 +410,10 @@ function renderEntry(
                   disabled={isDisabled || !onAnswerQuestion || !sessionId}
                   onClick={() => {
                     if (onAnswerQuestion && sessionId) {
-                      onAnswerQuestion(sessionId, idx, opt.label, entry.timestamp);
+                      const qc = q.question_count ?? 1;
+                      const qi = q.question_index ?? 0;
+                      const isFinal = qi + 1 >= qc;
+                      onAnswerQuestion(sessionId, idx, opt.label, entry.timestamp, isFinal);
                     }
                   }}
                   className={classNames(styles.OptionButton, {

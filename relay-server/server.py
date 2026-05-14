@@ -1863,11 +1863,12 @@ async def client_ws(ws: WebSocket):
 
             elif msg_type == "answer_question":
                 # User clicked an option on an AskUserQuestion card.
-                # Claude Code's picker accepts a numeric selection (1-based
-                # for real options, with "Other" implicit at the end) or
-                # an arrow-key navigation.  Typing the number + Enter is
-                # the most reliable pattern and matches what a user would
-                # do at the terminal.
+                # Claude Code's picker auto-confirms on the number keypress —
+                # do NOT send a trailing Enter on intermediate questions, or
+                # it leaks into the next picker and auto-confirms its default.
+                # On the FINAL question, Claude Code shows a "Submit (1) /
+                # Cancel (2)" prompt and waits for Enter — `submit_after`
+                # tells us to press Enter after a short delay.
                 if connected_session_id:
                     try:
                         option_index = int(data.get("option_index"))
@@ -1880,12 +1881,13 @@ async def client_ws(ws: WebSocket):
                             "session_id": connected_session_id,
                             "keys": selection,
                         })
-                        await asyncio.sleep(0.2)
-                        await _daemon_ipc({
-                            "cmd": "send-keys",
-                            "session_id": connected_session_id,
-                            "special_key": "Enter",
-                        })
+                        if data.get("submit_after"):
+                            await asyncio.sleep(0.3)
+                            await _daemon_ipc({
+                                "cmd": "send-keys",
+                                "session_id": connected_session_id,
+                                "special_key": "Enter",
+                            })
 
             elif msg_type == "terminal_input":
                 # Send keystrokes to the connected session's tmux pane
