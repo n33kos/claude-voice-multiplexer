@@ -34,11 +34,11 @@ export function MicControls({
   const { isMicrophoneEnabled } = useLocalParticipant();
   const hue = hueOverride != null ? hueOverride : (sessionId ? sessionHue(sessionId) : null);
 
-  // Tri-state mic flow: active (autoListen=true, wakeWordMode=false),
-  // muted (autoListen=false, wakeWordMode=false), wake (autoListen=false,
-  // wakeWordMode=true). Wake state is only available when the feature is
-  // enabled in settings AND templates exist.
-  const [wakeWordMode, setWakeWordMode] = useState(false);
+  // Single source of truth for mic state. Derive autoListen + LiveKit mic
+  // enabled from this. Three mutually-exclusive modes.
+  type MicMode = "muted" | "wake" | "active";
+  const [micMode, setMicMode] = useState<MicMode>(autoListen ? "active" : "muted");
+
   // Sticky flag: only set when the wake word itself transitioned us into
   // active. After the agent's turn ends, we use this to decide whether to
   // return to wake (true) or stay in whatever mode the user picked (false).
@@ -46,25 +46,43 @@ export function MicControls({
 
   // Drop out of wake mode if the feature is turned off.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!wakeWordEnabled && wakeWordMode) setWakeWordMode(false);
-  }, [wakeWordEnabled, wakeWordMode]);
+    if (!wakeWordEnabled && micMode === "wake") {
+       
+      setMicMode("muted");
+    }
+  }, [wakeWordEnabled, micMode]);
 
-  // Suspend wake-word matching whenever Claude is speaking or thinking —
-  // we don't want her own voice to trigger the matcher, and we don't want
-  // to interrupt the agent mid-turn.
+  // Sync FROM external autoListen changes (e.g. server force-disable).
+  // We treat the external prop as the desired "active or not" signal.
+  useEffect(() => {
+    if (autoListen && micMode !== "active") {
+       
+      setMicMode("active");
+    } else if (!autoListen && micMode === "active") {
+       
+      setMicMode("muted");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoListen]);
+
+  // Sync TO autoListen prop whenever our internal mode changes.
+  useEffect(() => {
+    const next = micMode === "active";
+    if (next !== autoListen) onAutoListenChange(next);
+  }, [micMode, autoListen, onAutoListenChange]);
+
+  // Suspend wake-word matching whenever Claude is speaking or thinking.
   const suspendWake = agentStatus.state === "speaking" || agentStatus.state === "thinking";
 
   const onWakeMatch = useCallback(() => {
     if (wakeWordChime) playChime();
     returnToWakeAfterTurn.current = true;
-    setWakeWordMode(false);
-    onAutoListenChange(true);
-  }, [onAutoListenChange, wakeWordChime]);
+    setMicMode("active");
+  }, [wakeWordChime]);
 
   const wake = useWakeWord({
     enabled: wakeWordEnabled,
-    active: wakeWordEnabled && wakeWordMode,
+    active: wakeWordEnabled && micMode === "wake",
     suspend: suspendWake,
     onMatch: onWakeMatch,
   });
@@ -149,8 +167,6 @@ export function MicControls({
 
     if (agentState === "idle") {
       const justFinishedTurn = stateChanged && (prev === "speaking" || prev === "thinking");
-      // Only return to wake when the wake word itself initiated this turn.
-      // Manual mode choices (mute, active) are sticky across turns.
       if (
         justFinishedTurn &&
         returnToWakeAfterTurn.current &&
@@ -158,18 +174,17 @@ export function MicControls({
         wake.hasTemplates
       ) {
         returnToWakeAfterTurn.current = false;
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setWakeWordMode(true);
-        onAutoListenChange(false);
+         
+        setMicMode("wake");
         room.localParticipant.setMicrophoneEnabled(false);
         return;
       }
       // Sync the LiveKit mic with whatever mode the user is currently in.
-      room.localParticipant.setMicrophoneEnabled(autoListen && !wakeWordMode);
+      room.localParticipant.setMicrophoneEnabled(micMode === "active");
     } else if (stateChanged && (agentState === "thinking" || agentState === "speaking")) {
       room.localParticipant.setMicrophoneEnabled(false);
     }
-  }, [agentState, autoListen, wakeWordEnabled, wakeWordMode, wake.hasTemplates, room.localParticipant, onAutoListenChange]);
+  }, [agentState, micMode, wakeWordEnabled, wake.hasTemplates, room.localParticipant]);
 
   const muteRemoteAudio = () => {
     const t = remoteTrackRef?.publication?.track as
@@ -188,46 +203,31 @@ export function MicControls({
 
   const toggleMic = async () => {
     initAudio();
-    // Escape hatch during speaking/thinking: always force listening on.
+    // Escape hatch during speaking/thinking: always force active.
     if (agentState === "speaking" || agentState === "thinking") {
       muteRemoteAudio();
       onInterrupt();
-      setWakeWordMode(false);
+      returnToWakeAfterTurn.current = false;
+      setMicMode("active");
       await room.localParticipant.setMicrophoneEnabled(true);
-      onAutoListenChange(true);
       return;
     }
-    if (agentState === "idle") {
-      // Any manual toggle clears the auto-return flag.
-      returnToWakeAfterTurn.current = false;
-      if (wakeWordEnabled && wake.hasTemplates) {
-        // Cycle: Muted (gray) → Wake (yellow) → Active (red) → Muted.
-        // Whatever the user picks sticks until they click again.
-        if (!autoListen && !wakeWordMode) {
-          // Muted → Wake
-          console.log('[mic] muted → wake');
-          setWakeWordMode(true);
-        } else if (wakeWordMode) {
-          // Wake → Active
-          console.log('[mic] wake → active');
-          setWakeWordMode(false);
-          await room.localParticipant.setMicrophoneEnabled(true);
-          onAutoListenChange(true);
-        } else {
-          // Active → Muted
-          console.log('[mic] active → muted');
-          await room.localParticipant.setMicrophoneEnabled(false);
-          onAutoListenChange(false);
-          setWakeWordMode(false);
-        }
-      } else {
-        const next = !isMicrophoneEnabled;
-        await room.localParticipant.setMicrophoneEnabled(next);
-        onAutoListenChange(next);
-      }
-    } else {
-      onAutoListenChange(!autoListen);
-    }
+    if (agentState !== "idle") return;
+
+    // Any manual toggle clears the auto-return flag — user's choice wins.
+    returnToWakeAfterTurn.current = false;
+    const wakeAvailable = wakeWordEnabled && wake.hasTemplates;
+
+    // Cycle: muted → wake → active → muted (wake step skipped if unavailable).
+    let next: MicMode;
+    if (micMode === "muted") next = wakeAvailable ? "wake" : "active";
+    else if (micMode === "wake") next = "active";
+    else next = "muted";
+
+    console.log("[mic]", micMode, "→", next);
+    setMicMode(next);
+    // Sync the LiveKit mic synchronously to avoid UI flicker.
+    await room.localParticipant.setMicrophoneEnabled(next === "active");
   };
 
   useEffect(() => {
@@ -258,26 +258,24 @@ export function MicControls({
           label: agentStatus.activity || "Error",
         };
       default:
-        if (wakeWordMode) {
+        if (micMode === "wake") {
           return { className: styles.StatusPillWake, label: 'Say "hey claude"' };
         }
-        return autoListen
+        return micMode === "active"
           ? { className: styles.StatusPillListening, label: "Listening" }
           : { className: styles.StatusPillIdle, label: "Idle" };
     }
   })();
 
-  const micButtonClass = wakeWordMode
-    ? styles.MicButtonWake
-    : autoListen
-      ? styles.MicButtonActive
-      : styles.MicButtonInactive;
+  const micButtonClass =
+    micMode === "wake" ? styles.MicButtonWake
+    : micMode === "active" ? styles.MicButtonActive
+    : styles.MicButtonInactive;
 
-  const micIconClass = wakeWordMode
-    ? styles.MicIconWake
-    : autoListen
-      ? styles.MicIconActive
-      : styles.MicIconInactive;
+  const micIconClass =
+    micMode === "wake" ? styles.MicIconWake
+    : micMode === "active" ? styles.MicIconActive
+    : styles.MicIconInactive;
 
   return (
     <div data-component="VoiceControls" className={styles.Root}>
@@ -288,7 +286,7 @@ export function MicControls({
         >
           <span
             className={classNames(styles.StatusDot, {
-              [styles.StatusDotPulse]: agentState === "thinking" || wakeWordMode,
+              [styles.StatusDotPulse]: agentState === "thinking" || micMode === "wake",
             })}
           />
           <span className={styles.StatusLabel}>{pillStyle.label}</span>
@@ -319,9 +317,9 @@ export function MicControls({
           onClick={toggleMic}
           className={classNames(styles.CircleButton, micButtonClass)}
           title={
-            wakeWordMode
+            micMode === "wake"
               ? 'Wake-word listening — say "hey claude" to unmute'
-              : autoListen ? "Mute" : "Unmute"
+              : micMode === "active" ? "Mute" : "Unmute"
           }
         >
           <svg
@@ -331,7 +329,7 @@ export function MicControls({
             strokeWidth={2}
             stroke="currentColor"
           >
-            {autoListen || wakeWordMode ? (
+            {micMode !== "muted" ? (
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
