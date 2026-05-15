@@ -5,7 +5,8 @@ import type { SettingsProps } from "./Settings.types";
 import { useVoiceSettings } from "../../hooks/useVoiceSettings";
 import type { VoiceOption } from "../../hooks/useVoiceSettings";
 import { EnrollmentModal } from "../../wake-word/EnrollmentModal";
-import { buildEnrollment } from "../../wake-word/enroll";
+import type { EnrollmentPayload } from "../../wake-word/EnrollmentModal";
+import { buildEnrollmentTwoStage } from "../../wake-word/enroll";
 import { saveTemplates, clearTemplates, loadTemplates, updateUserThreshold } from "../../wake-word/db";
 import type { WakeWordRecord } from "../../wake-word/db";
 import styles from "./Settings.module.scss";
@@ -121,13 +122,14 @@ export function Settings({
   }, [open]);
 
   const handleEnrollmentComplete = useCallback(
-    async (clips: { buf: Float32Array; sampleRate: number }[]) => {
-      const { templates, threshold, numCoeffs } = buildEnrollment(clips);
+    async (payload: EnrollmentPayload) => {
+      const { templates, threshold, numCoeffs } = buildEnrollmentTwoStage(payload);
       if (templates.length === 0) throw new Error("No usable clips");
       await saveTemplates({
         phrase: "hey claude",
         templates,
         threshold,
+        userThreshold: null,
         enrolledAt: Date.now(),
         numCoeffs,
       });

@@ -52,6 +52,91 @@ export interface EnrolledTemplates {
   numCoeffs: number
 }
 
+export interface TwoStagePayload {
+  positives: { buf: Float32Array; sampleRate: number }[]
+  negatives: { buf: Float32Array; sampleRate: number }[]
+  verify: { buf: Float32Array; sampleRate: number }[]
+}
+
+/**
+ * Two-stage threshold calibration:
+ *   1. Build templates from positives (with outlier rejection).
+ *   2. Slide a 1.5 s window over the silence sample, score each window
+ *      vs the templates — these are NEGATIVE DTW scores.
+ *   3. Score each verify clip vs templates — these are POSITIVE scores.
+ *   4. Pick threshold = midpoint(max positive, min negative). If that
+ *      window is inverted (positives score worse than negatives), fall
+ *      back to the original intra-template heuristic.
+ */
+export function buildEnrollmentTwoStage(p: TwoStagePayload): EnrolledTemplates {
+  const extractor = new MFCCExtractor()
+  const base = buildEnrollment(p.positives) // templates + fallback threshold
+
+  if (base.templates.length === 0) return base
+
+  // Score a recorded clip against the best-matching template.
+  const scoreClip = (buf: Float32Array, sr: number): number => {
+    const re = resampleTo16k(buf, sr)
+    const trimmed = trimSilence(re, 16000)
+    if (trimmed.length < 16000 * 0.3) return Infinity
+    const seq = cmn(extractor.sequence(trimmed))
+    if (seq.length === 0) return Infinity
+    let best = Infinity
+    for (const t of base.templates) {
+      const d = dtw(seq, t)
+      if (Number.isFinite(d) && d < best) best = d
+    }
+    return best
+  }
+
+  // Slide 1.5 s windows (~750 ms hop) over each silence clip.
+  const negScores: number[] = []
+  for (const clip of p.negatives) {
+    const re = resampleTo16k(clip.buf, clip.sampleRate)
+    const winSamples = Math.floor(16000 * 1.5)
+    const hop = Math.floor(16000 * 0.75)
+    for (let off = 0; off + winSamples <= re.length; off += hop) {
+      const slice = re.slice(off, off + winSamples)
+      const s = scoreClip(slice, 16000)
+      if (Number.isFinite(s)) negScores.push(s)
+    }
+  }
+
+  const posScores: number[] = p.verify
+    .map(c => scoreClip(c.buf, c.sampleRate))
+    .filter(s => Number.isFinite(s))
+
+  console.log('[enroll/calibrate] positive scores:', posScores.map(s => s.toFixed(2)))
+  console.log('[enroll/calibrate] negative scores:', negScores.map(s => s.toFixed(2)))
+
+  if (posScores.length === 0 || negScores.length === 0) {
+    console.log('[enroll/calibrate] not enough data, using intra-template threshold:', base.threshold.toFixed(2))
+    return base
+  }
+
+  const maxPos = Math.max(...posScores)
+  const minNeg = Math.min(...negScores)
+  if (maxPos < minNeg) {
+    // Healthy separation — threshold sits between them, biased toward
+    // recall (closer to negatives so future utterances with variation
+    // still match).
+    const threshold = maxPos + (minNeg - maxPos) * 0.6
+    console.log('[enroll/calibrate] separated — maxPos:', maxPos.toFixed(2),
+      'minNeg:', minNeg.toFixed(2), '→ threshold:', threshold.toFixed(2))
+    return { ...base, threshold: Math.max(threshold, 12) }
+  }
+
+  // Inverted: positives are no better than the room. Best we can do is
+  // pick a threshold just above the median positive and warn.
+  const sortedPos = [...posScores].sort((a, b) => a - b)
+  const medianPos = sortedPos[Math.floor(sortedPos.length / 2)]
+  const threshold = Math.max(medianPos * 1.05, 14)
+  console.warn('[enroll/calibrate] positives NOT cleanly separable from room noise',
+    '— maxPos:', maxPos.toFixed(2), 'minNeg:', minNeg.toFixed(2),
+    'falling back to median-pos threshold:', threshold.toFixed(2))
+  return { ...base, threshold }
+}
+
 /**
  * Build MFCC templates from recorded enrollment audio and pick a threshold.
  *
