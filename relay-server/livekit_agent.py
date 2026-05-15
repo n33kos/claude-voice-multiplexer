@@ -856,11 +856,11 @@ class SessionRoom:
         self._waiting_for_response = True
         await self._notify_status("thinking", "Processing text message...")
 
-    async def handle_status_update(self, activity: str, *, agent_id: str = "", agent_type: str = ""):
+    async def handle_status_update(self, activity: str, *, agent_id: str = "", agent_type: str = "", tool_use_id: str = "", tool_name: str = ""):
         """Called when Claude sends a status_update with current activity."""
         self._last_status_update_at = time.time()
         self._current_activity = activity
-        await self._notify_status("thinking", activity=activity, agent_id=agent_id, agent_type=agent_type)
+        await self._notify_status("thinking", activity=activity, agent_id=agent_id, agent_type=agent_type, tool_use_id=tool_use_id, tool_name=tool_name)
 
     def get_current_status(self) -> dict:
         return {"state": self._current_state, "activity": self._current_activity}
@@ -894,14 +894,14 @@ class SessionRoom:
 
         return total_samples
 
-    async def _notify_status(self, state: str, activity: Optional[str] = None, *, disable_auto_listen: bool = False, agent_id: str = "", agent_type: str = ""):
+    async def _notify_status(self, state: str, activity: Optional[str] = None, *, disable_auto_listen: bool = False, agent_id: str = "", agent_type: str = "", tool_use_id: str = "", tool_name: str = ""):
         """Notify connected client of agent status change."""
         self._current_state = state
         self._current_activity = activity
         if state == "idle":
             self._idle_entered_at = time.time()
         if self.notify_status_fn:
-            await self.notify_status_fn(self.session_id, state, activity, disable_auto_listen=disable_auto_listen, agent_id=agent_id, agent_type=agent_type)
+            await self.notify_status_fn(self.session_id, state, activity, disable_auto_listen=disable_auto_listen, agent_id=agent_id, agent_type=agent_type, tool_use_id=tool_use_id, tool_name=tool_name)
 
     def _schedule_error_recovery(self):
         """Schedule auto-recovery from error state to idle."""
@@ -974,10 +974,10 @@ class RelayAgent:
             await room.handle_text_message()
             print(f"[room:{room.room_name}] Text message from {caller}: {text[:50]}...")
 
-    async def handle_status_update(self, session_id: str, activity: str, *, agent_id: str = "", agent_type: str = ""):
+    async def handle_status_update(self, session_id: str, activity: str, *, agent_id: str = "", agent_type: str = "", tool_use_id: str = "", tool_name: str = ""):
         room = self._rooms.get(session_id)
         if room:
-            await room.handle_status_update(activity, agent_id=agent_id, agent_type=agent_type)
+            await room.handle_status_update(activity, agent_id=agent_id, agent_type=agent_type, tool_use_id=tool_use_id, tool_name=tool_name)
 
     def get_current_status(self, session_id: str) -> dict:
         room = self._rooms.get(session_id)

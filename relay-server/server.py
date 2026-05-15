@@ -294,7 +294,7 @@ def _get_ws_device(ws: WebSocket) -> Optional[dict]:
     return None
 
 
-async def _notify_client_status(session_id: str, state: str, activity: Optional[str] = None, *, disable_auto_listen: bool = False, agent_id: str = "", agent_type: str = ""):
+async def _notify_client_status(session_id: str, state: str, activity: Optional[str] = None, *, disable_auto_listen: bool = False, agent_id: str = "", agent_type: str = "", tool_use_id: str = "", tool_name: str = ""):
     """Send agent status update to all web clients connected to a session."""
     session = await registry.get(session_id)
     if session and session.connected_clients:
@@ -310,6 +310,10 @@ async def _notify_client_status(session_id: str, state: str, activity: Optional[
             payload["agent_id"] = agent_id
         if agent_type:
             payload["agent_type"] = agent_type
+        if tool_use_id:
+            payload["tool_use_id"] = tool_use_id
+        if tool_name:
+            payload["tool_name"] = tool_name
         msg = json.dumps(payload)
         for client_id in list(session.connected_clients):
             client_ws = _clients.get(client_id)
@@ -1347,8 +1351,50 @@ async def activity_from_hook(session_id: str, request: Request):
         return JSONResponse({"ok": False, "error": "activity required"}, status_code=400)
     agent_id = (body.get("agent_id") or "").strip()
     agent_type = (body.get("agent_type") or "").strip()
+    tool_use_id = (body.get("tool_use_id") or "").strip()
+    tool_name = (body.get("tool_name") or "").strip()
     if _agent:
-        _spawn_background(_agent.handle_status_update(session_id, activity, agent_id=agent_id, agent_type=agent_type))
+        _spawn_background(_agent.handle_status_update(session_id, activity, agent_id=agent_id, agent_type=agent_type, tool_use_id=tool_use_id, tool_name=tool_name))
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/sessions/{session_id}/tool-result")
+async def tool_result_from_hook(session_id: str, request: Request):
+    """Receive a captured tool result from the PostToolUse hook.
+
+    Broadcasts a `tool_result` WS event so connected web clients can
+    attach the formatted output to the matching activity entry (by
+    tool_use_id) and render it as an expandable accordion.
+    """
+    _require_auth(request)
+    body = await request.json()
+    tool_use_id = (body.get("tool_use_id") or "").strip()
+    if not tool_use_id:
+        return JSONResponse({"ok": False, "error": "tool_use_id required"}, status_code=400)
+    tool_name = (body.get("tool_name") or "").strip()
+    result_text = body.get("result_text") or ""
+    lines_total = int(body.get("lines_total") or 0)
+    truncated = bool(body.get("truncated") or False)
+
+    session = await registry.get(session_id)
+    if not session:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+
+    msg = json.dumps({
+        "type": "tool_result",
+        "session_id": session_id,
+        "tool_use_id": tool_use_id,
+        "tool_name": tool_name,
+        "result_text": result_text,
+        "lines_total": lines_total,
+        "truncated": truncated,
+        "ts": time.time(),
+    })
+    for client_ws in list(_clients.values()):
+        try:
+            await client_ws.send_text(msg)
+        except Exception:
+            pass
     return JSONResponse({"ok": True})
 
 

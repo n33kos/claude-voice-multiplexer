@@ -460,10 +460,103 @@ const ToolCallGroup = memo(function ToolCallGroup({
       forceCollapseSignal={!isTrailing ? "done" : undefined}
       body={entries.map((a, i) => (
         <div key={i} className={styles.CollapsibleActivity}>
-          {a.text}
+          <ActivityRow entry={a} isLatest={false} />
         </div>
       ))}
     />
+  );
+});
+
+/** Pick a hljs language hint for a tool's captured output. */
+function languageForTool(toolName: string | undefined): string | undefined {
+  switch (toolName) {
+    case "Bash":
+      return "bash";
+    case "Edit":
+    case "Write":
+      return "diff";
+    default:
+      return undefined;
+  }
+}
+
+type ToolCallDetailProps = {
+  toolName?: string;
+  result: NonNullable<import("../../hooks/useRelay").TranscriptEntry["tool_result"]>;
+};
+
+const ToolCallDetail = memo(function ToolCallDetail({ toolName, result }: ToolCallDetailProps) {
+  const lang = languageForTool(toolName);
+  let html: string | null = null;
+  if (lang) {
+    try {
+      html = hljs.highlight(result.result_text, { language: lang, ignoreIllegals: true }).value;
+    } catch {
+      html = null;
+    }
+  }
+  return (
+    <div className={styles.ToolCallDetail}>
+      <pre className={styles.ToolCallPre}>
+        {html ? (
+          <code className={`hljs language-${lang}`} dangerouslySetInnerHTML={{ __html: html }} />
+        ) : (
+          <code>{result.result_text}</code>
+        )}
+      </pre>
+      {result.truncated && (
+        <div className={styles.ToolCallTruncated}>
+          Output truncated{result.lines_total ? ` (${result.lines_total} lines total)` : ""}
+        </div>
+      )}
+    </div>
+  );
+});
+
+type ActivityRowProps = {
+  entry: import("../../hooks/useRelay").TranscriptEntry;
+  isLatest: boolean;
+  onCaptureTerminal?: () => void;
+};
+
+const ActivityRow = memo(function ActivityRow({ entry, isLatest, onCaptureTerminal }: ActivityRowProps) {
+  const [expanded, setExpanded] = useState(false);
+  const hasResult = !!entry.tool_result;
+  const handleClick = () => {
+    if (hasResult) {
+      setExpanded((v) => !v);
+    } else if (onCaptureTerminal) {
+      onCaptureTerminal();
+    }
+  };
+  return (
+    <div className={styles.ActivityMessage}>
+      <button
+        className={classNames(styles.ActivityBadge, { [styles.ActivityBadgeClickable]: hasResult || !!onCaptureTerminal })}
+        onClick={handleClick}
+        title={hasResult ? (expanded ? "Hide output" : "Show output") : onCaptureTerminal ? "Click to view terminal" : undefined}
+      >
+        <svg className={classNames(styles.ActivityIcon, { [styles.ActivityIconSpin]: isLatest && !hasResult })} viewBox="0 0 24 24" fill="none" strokeWidth={2} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+        {entry.text}
+        {hasResult && (
+          <svg
+            className={classNames(styles.ActivityChevron, { [styles.ActivityChevronOpen]: expanded })}
+            viewBox="0 0 12 12"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path d="M4 2 L8 6 L4 10" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
+      </button>
+      {hasResult && expanded && entry.tool_result && (
+        <ToolCallDetail toolName={entry.tool_name} result={entry.tool_result} />
+      )}
+    </div>
   );
 });
 
@@ -715,19 +808,11 @@ function renderEntry(
   }
   if (entry.speaker === "activity") {
     return (
-      <div className={styles.ActivityMessage}>
-        <button
-          className={classNames(styles.ActivityBadge, { [styles.ActivityBadgeClickable]: !!onCaptureTerminal })}
-          onClick={() => onCaptureTerminal?.()}
-          title={onCaptureTerminal ? "Click to view terminal" : undefined}
-        >
-          <svg className={classNames(styles.ActivityIcon, { [styles.ActivityIconSpin]: isLatest })} viewBox="0 0 24 24" fill="none" strokeWidth={2} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z" />
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
-          {entry.text}
-        </button>
-      </div>
+      <ActivityRow
+        entry={entry}
+        isLatest={isLatest}
+        onCaptureTerminal={onCaptureTerminal}
+      />
     );
   }
   if (entry.speaker === "code" || entry.speaker === "file") {

@@ -97,6 +97,13 @@ export interface TranscriptEntry {
   agent_id?: string;
   agent_type?: string;
   kind?: string;
+  tool_use_id?: string;
+  tool_name?: string;
+  tool_result?: {
+    result_text: string;
+    lines_total: number;
+    truncated: boolean;
+  };
 }
 
 export type TaskStatus = "pending" | "in_progress" | "completed";
@@ -614,6 +621,8 @@ export function useRelay(authenticated: boolean = true) {
                 timestamp: Date.now(),
                 ...(data.agent_id ? { agent_id: data.agent_id as string } : {}),
                 ...(data.agent_type ? { agent_type: data.agent_type as string } : {}),
+                ...(data.tool_use_id ? { tool_use_id: data.tool_use_id as string } : {}),
+                ...(data.tool_name ? { tool_name: data.tool_name as string } : {}),
               };
               updated.transcripts = {
                 ...s.transcripts,
@@ -625,6 +634,35 @@ export function useRelay(authenticated: boolean = true) {
           // Schedule save if we added a transcript entry
           const sid = stateRef.current.connectedSessionId;
           if (sid && data.activity) scheduleSave(sid);
+          break;
+        }
+        case "tool_result": {
+          const trSessionId = data.session_id as string;
+          const toolUseId = data.tool_use_id as string;
+          if (!trSessionId || !toolUseId) break;
+          const result = {
+            result_text: (data.result_text as string) || "",
+            lines_total: (data.lines_total as number) || 0,
+            truncated: !!data.truncated,
+          };
+          setState((s) => {
+            const list = s.transcripts[trSessionId];
+            if (!list) return s;
+            let changed = false;
+            const updated = list.map((e) => {
+              if (e.tool_use_id === toolUseId && !e.tool_result) {
+                changed = true;
+                return { ...e, tool_result: result };
+              }
+              return e;
+            });
+            if (!changed) return s;
+            return {
+              ...s,
+              transcripts: { ...s.transcripts, [trSessionId]: updated },
+            };
+          });
+          scheduleSave(trSessionId);
           break;
         }
         case "terminal_snapshot":

@@ -28,6 +28,7 @@ claude_session_id=$(echo "$input" | jq -r '.session_id // empty' 2>/dev/null)
 cwd=$(echo "$input" | jq -r '.cwd // empty' 2>/dev/null)
 agent_id=$(echo "$input" | jq -r '.agent_id // empty' 2>/dev/null)
 agent_type=$(echo "$input" | jq -r '.agent_type // empty' 2>/dev/null)
+tool_use_id=$(echo "$input" | jq -r '.tool_use_id // empty' 2>/dev/null)
 if [ -z "$cwd" ] || [ -z "$tool_name" ]; then
     exit 0
 fi
@@ -100,8 +101,8 @@ if [ -f "$statusline_file" ]; then
 fi
 relay_session_id=$(printf '%s' "$session_cwd" | shasum -a 256 | awk '{print substr($1, 1, 12)}')
 
-payload=$(jq -n --arg activity "$activity" --arg agent_id "$agent_id" --arg agent_type "$agent_type" \
-    '{activity: $activity, agent_id: $agent_id, agent_type: $agent_type}')
+payload=$(jq -n --arg activity "$activity" --arg agent_id "$agent_id" --arg agent_type "$agent_type" --arg tool_use_id "$tool_use_id" --arg tool_name "$tool_name" \
+    '{activity: $activity, agent_id: $agent_id, agent_type: $agent_type, tool_use_id: $tool_use_id, tool_name: $tool_name}')
 curl -sS -X POST \
     -H "X-Daemon-Secret: $DAEMON_SECRET" \
     -H "Content-Type: application/json" \
