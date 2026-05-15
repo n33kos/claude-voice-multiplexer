@@ -39,6 +39,10 @@ export function MicControls({
   // wakeWordMode=true). Wake state is only available when the feature is
   // enabled in settings AND templates exist.
   const [wakeWordMode, setWakeWordMode] = useState(false);
+  // Sticky flag: only set when the wake word itself transitioned us into
+  // active. After the agent's turn ends, we use this to decide whether to
+  // return to wake (true) or stay in whatever mode the user picked (false).
+  const returnToWakeAfterTurn = useRef(false);
 
   // Drop out of wake mode if the feature is turned off.
   useEffect(() => {
@@ -53,6 +57,7 @@ export function MicControls({
 
   const onWakeMatch = useCallback(() => {
     if (wakeWordChime) playChime();
+    returnToWakeAfterTurn.current = true;
     setWakeWordMode(false);
     onAutoListenChange(true);
   }, [onAutoListenChange, wakeWordChime]);
@@ -143,18 +148,23 @@ export function MicControls({
     prevAgentState.current = agentState;
 
     if (agentState === "idle") {
-      // After a turn completes (speaking/thinking → idle): if wake-word
-      // is enabled and templates exist, drop into wake mode rather than
-      // listening directly. The user can tap the mic to override.
       const justFinishedTurn = stateChanged && (prev === "speaking" || prev === "thinking");
-      if (justFinishedTurn && wakeWordEnabled && wake.hasTemplates) {
+      // Only return to wake when the wake word itself initiated this turn.
+      // Manual mode choices (mute, active) are sticky across turns.
+      if (
+        justFinishedTurn &&
+        returnToWakeAfterTurn.current &&
+        wakeWordEnabled &&
+        wake.hasTemplates
+      ) {
+        returnToWakeAfterTurn.current = false;
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setWakeWordMode(true);
         onAutoListenChange(false);
         room.localParticipant.setMicrophoneEnabled(false);
         return;
       }
-      // Otherwise sync mic with autoListen while idle (existing behavior).
+      // Sync the LiveKit mic with whatever mode the user is currently in.
       room.localParticipant.setMicrophoneEnabled(autoListen && !wakeWordMode);
     } else if (stateChanged && (agentState === "thinking" || agentState === "speaking")) {
       room.localParticipant.setMicrophoneEnabled(false);
@@ -188,6 +198,8 @@ export function MicControls({
       return;
     }
     if (agentState === "idle") {
+      // Any manual toggle clears the auto-return flag.
+      returnToWakeAfterTurn.current = false;
       if (wakeWordEnabled && wake.hasTemplates) {
         // Cycle: Muted (gray) → Wake (yellow) → Active (red) → Muted.
         // Whatever the user picks sticks until they click again.
