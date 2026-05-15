@@ -42,7 +42,7 @@ export function MicControls({
   // Sticky flag: only set when the wake word itself transitioned us into
   // active. After the agent's turn ends, we use this to decide whether to
   // return to wake (true) or stay in whatever mode the user picked (false).
-  const returnToWakeAfterTurn = useRef(false);
+  const [returnToWakeAfterTurn, setReturnToWakeAfterTurn] = useState(false);
 
   // Drop out of wake mode if the feature is turned off.
   useEffect(() => {
@@ -76,7 +76,7 @@ export function MicControls({
 
   const onWakeMatch = useCallback(() => {
     if (wakeWordChime) playChime();
-    returnToWakeAfterTurn.current = true;
+    setReturnToWakeAfterTurn(true);
     setMicMode("active");
   }, [wakeWordChime]);
 
@@ -169,11 +169,11 @@ export function MicControls({
       const justFinishedTurn = stateChanged && (prev === "speaking" || prev === "thinking");
       if (
         justFinishedTurn &&
-        returnToWakeAfterTurn.current &&
+        returnToWakeAfterTurn &&
         wakeWordEnabled &&
         wake.hasTemplates
       ) {
-        returnToWakeAfterTurn.current = false;
+        setReturnToWakeAfterTurn(false);
          
         setMicMode("wake");
         room.localParticipant.setMicrophoneEnabled(false);
@@ -184,7 +184,7 @@ export function MicControls({
     } else if (stateChanged && (agentState === "thinking" || agentState === "speaking")) {
       room.localParticipant.setMicrophoneEnabled(false);
     }
-  }, [agentState, micMode, wakeWordEnabled, wake.hasTemplates, room.localParticipant]);
+  }, [agentState, micMode, wakeWordEnabled, wake.hasTemplates, returnToWakeAfterTurn, room.localParticipant]);
 
   const muteRemoteAudio = () => {
     const t = remoteTrackRef?.publication?.track as
@@ -207,7 +207,7 @@ export function MicControls({
     if (agentState === "speaking" || agentState === "thinking") {
       muteRemoteAudio();
       onInterrupt();
-      returnToWakeAfterTurn.current = false;
+      setReturnToWakeAfterTurn(false);
       setMicMode("active");
       await room.localParticipant.setMicrophoneEnabled(true);
       return;
@@ -215,7 +215,7 @@ export function MicControls({
     if (agentState !== "idle") return;
 
     // Any manual toggle clears the auto-return flag — user's choice wins.
-    returnToWakeAfterTurn.current = false;
+    setReturnToWakeAfterTurn(false);
     const wakeAvailable = wakeWordEnabled && wake.hasTemplates;
 
     // Cycle: muted → wake → active → muted (wake step skipped if unavailable).
@@ -267,13 +267,17 @@ export function MicControls({
     }
   })();
 
+  // Visual mode: when the wake word brought us into active, keep the
+  // button yellow so the user sees the persistent mode, not the
+  // transient red recording state.
+  const displayWake = micMode === "wake" || returnToWakeAfterTurn;
   const micButtonClass =
-    micMode === "wake" ? styles.MicButtonWake
+    displayWake ? styles.MicButtonWake
     : micMode === "active" ? styles.MicButtonActive
     : styles.MicButtonInactive;
 
   const micIconClass =
-    micMode === "wake" ? styles.MicIconWake
+    displayWake ? styles.MicIconWake
     : micMode === "active" ? styles.MicIconActive
     : styles.MicIconInactive;
 
@@ -286,7 +290,7 @@ export function MicControls({
         >
           <span
             className={classNames(styles.StatusDot, {
-              [styles.StatusDotPulse]: agentState === "thinking" || micMode === "wake",
+              [styles.StatusDotPulse]: agentState === "thinking" || displayWake,
             })}
           />
           <span className={styles.StatusLabel}>{pillStyle.label}</span>
