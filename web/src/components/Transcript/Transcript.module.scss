@@ -66,7 +66,7 @@
   font-size: 0.8125rem;
 }
 
-.SubagentGroup {
+.CollapsibleGroup {
   background-color: var(--color-bubble-claude);
   color: var(--color-bubble-claude-text);
   opacity: 0.75;
@@ -81,7 +81,7 @@
   align-self: flex-start;
 }
 
-.SubagentGroupHeader {
+.CollapsibleHeader {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -99,23 +99,23 @@
   }
 }
 
-.SubagentChevron {
+.CollapsibleChevron {
   width: 12px;
   height: 12px;
   flex-shrink: 0;
   transition: transform 0.15s ease;
 
-  &.SubagentChevronOpen {
+  &.CollapsibleChevronOpen {
     transform: rotate(90deg);
   }
 }
 
-.SubagentLabel {
+.CollapsibleLabel {
   font-weight: 600;
   flex-shrink: 0;
 }
 
-.SubagentSummary {
+.CollapsibleSummary {
   opacity: 0.8;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -123,13 +123,13 @@
   flex: 1;
 }
 
-.SubagentCount {
+.CollapsibleCount {
   opacity: 0.6;
   font-size: 0.75rem;
   flex-shrink: 0;
 }
 
-.SubagentBody {
+.CollapsibleBody {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -138,13 +138,13 @@
   margin-left: 0.25rem;
 }
 
-.SubagentActivity {
+.CollapsibleActivity {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.75rem;
   opacity: 0.85;
 }
 
-.SubagentFooter {
+.CollapsibleFooter {
   font-size: 0.8125rem;
   padding-top: 0.25rem;
   border-top: 1px solid rgba(255, 255, 255, 0.08);

@@ -232,54 +232,176 @@ const EntryRow = memo(function EntryRow({
 });
 
 /**
- * Group consecutive transcript entries that share an agent_id into a single
- * subagent bubble. Entries with no agent_id pass through as singletons.
+ * Group consecutive transcript entries into clusters for collapsed display:
+ *   - "subagent": consecutive entries sharing an agent_id
+ *   - "toolcall": consecutive top-level (no agent_id) activity entries
+ *   - "single":   anything else, rendered inline as before
+ *
+ * A toolcall group only forms when there are 2+ consecutive activity entries;
+ * a lone activity stays inline so a single tool call doesn't get hidden
+ * behind an expander.
  */
-type EntryGroup = {
-  agentId: string | null;
-  agentType: string | null;
-  entries: import("../../hooks/useRelay").TranscriptEntry[];
-  indices: number[];
-};
+type EntryGroup =
+  | {
+      kind: "subagent";
+      agentId: string;
+      agentType: string | null;
+      entries: import("../../hooks/useRelay").TranscriptEntry[];
+      indices: number[];
+    }
+  | {
+      kind: "toolcall";
+      entries: import("../../hooks/useRelay").TranscriptEntry[];
+      indices: number[];
+    }
+  | {
+      kind: "single";
+      entries: import("../../hooks/useRelay").TranscriptEntry[];
+      indices: number[];
+    };
 
 function groupEntries(
   entries: import("../../hooks/useRelay").TranscriptEntry[],
   hidden: Set<number>,
 ): EntryGroup[] {
-  const groups: EntryGroup[] = [];
-  let current: EntryGroup | null = null;
+  // First pass: bucket by subagent vs other, preserving order.
+  type Raw =
+    | { kind: "subagent"; agentId: string; agentType: string | null; entries: import("../../hooks/useRelay").TranscriptEntry[]; indices: number[] }
+    | { kind: "other"; entry: import("../../hooks/useRelay").TranscriptEntry; index: number };
+  const raw: Raw[] = [];
+  let currentSub: Extract<Raw, { kind: "subagent" }> | null = null;
   for (let i = 0; i < entries.length; i++) {
     if (hidden.has(i)) continue;
     const e = entries[i];
     const id = e.agent_id || null;
-    if (id && current && current.agentId === id) {
-      current.entries.push(e);
-      current.indices.push(i);
+    if (id) {
+      if (currentSub && currentSub.agentId === id) {
+        currentSub.entries.push(e);
+        currentSub.indices.push(i);
+      } else {
+        currentSub = {
+          kind: "subagent",
+          agentId: id,
+          agentType: e.agent_type || null,
+          entries: [e],
+          indices: [i],
+        };
+        raw.push(currentSub);
+      }
     } else {
-      current = {
-        agentId: id,
-        agentType: e.agent_type || null,
-        entries: [e],
-        indices: [i],
-      };
-      groups.push(current);
+      currentSub = null;
+      raw.push({ kind: "other", entry: e, index: i });
     }
+  }
+
+  // Second pass: collapse consecutive non-subagent activity entries into a
+  // toolcall group when there are 2+ in a row.
+  const groups: EntryGroup[] = [];
+  let i = 0;
+  while (i < raw.length) {
+    const item = raw[i];
+    if (item.kind === "subagent") {
+      groups.push(item);
+      i++;
+      continue;
+    }
+    // Walk a run of consecutive plain activity entries.
+    if (item.entry.speaker === "activity") {
+      let j = i;
+      const runEntries: import("../../hooks/useRelay").TranscriptEntry[] = [];
+      const runIndices: number[] = [];
+      while (j < raw.length) {
+        const next = raw[j];
+        if (next.kind !== "other" || next.entry.speaker !== "activity") break;
+        runEntries.push(next.entry);
+        runIndices.push(next.index);
+        j++;
+      }
+      if (runEntries.length >= 2) {
+        groups.push({ kind: "toolcall", entries: runEntries, indices: runIndices });
+      } else {
+        groups.push({ kind: "single", entries: runEntries, indices: runIndices });
+      }
+      i = j;
+      continue;
+    }
+    groups.push({ kind: "single", entries: [item.entry], indices: [item.index] });
+    i++;
   }
   return groups;
 }
+
+type CollapsibleGroupShellProps = {
+  label: string;
+  headerText: string;
+  summaryText: string;
+  count: number;
+  defaultExpanded: boolean;
+  // When this becomes true (and the user hasn't toggled since), force the
+  // group closed.  Used to auto-collapse a tool-call burst once a non-tool
+  // entry follows it.
+  forceCollapseSignal?: unknown;
+  body: React.ReactNode;
+  footer?: React.ReactNode;
+};
+
+/**
+ * Generic expandable bubble used by both SubagentGroup (one subagent's run)
+ * and ToolCallGroup (a burst of N tool calls at top level).  Owns its own
+ * expanded state with a manual toggle that overrides external signals.
+ */
+const CollapsibleGroupShell = memo(function CollapsibleGroupShell({
+  label,
+  headerText,
+  summaryText,
+  count,
+  defaultExpanded,
+  forceCollapseSignal,
+  body,
+  footer,
+}: CollapsibleGroupShellProps) {
+  const [expanded, setExpanded] = useState<boolean>(defaultExpanded);
+  const userToggledRef = useRef(false);
+  useEffect(() => {
+    if (forceCollapseSignal && !userToggledRef.current) {
+      setExpanded(false);
+    }
+  }, [forceCollapseSignal]);
+  return (
+    <div className={styles.CollapsibleGroup}>
+      <button
+        type="button"
+        className={styles.CollapsibleHeader}
+        onClick={() => {
+          userToggledRef.current = true;
+          setExpanded((v) => !v);
+        }}
+      >
+        <svg
+          className={classNames(styles.CollapsibleChevron, {
+            [styles.CollapsibleChevronOpen]: expanded,
+          })}
+          viewBox="0 0 12 12"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path d="M4 2 L8 6 L4 10" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span className={styles.CollapsibleLabel}>{label}</span>
+        <span className={styles.CollapsibleSummary}>{expanded ? headerText : summaryText}</span>
+        <span className={styles.CollapsibleCount}>{count}</span>
+      </button>
+      {expanded && <div className={styles.CollapsibleBody}>{body}</div>}
+      {expanded && footer}
+    </div>
+  );
+});
 
 type SubagentGroupProps = {
   agentId: string;
   agentType: string | null;
   entries: import("../../hooks/useRelay").TranscriptEntry[];
-  indices: number[];
-  latestIndex: number;
-  cwd?: string;
-  sessionId: string | null | undefined;
-  hue: number | null;
-  onAnswerQuestion?: (sessionId: string, optionIndex: number, label: string, entryTimestamp: number, isFinal: boolean) => void;
-  onAnswerPermission?: (sessionId: string, choice: "allow" | "allow_always" | "deny") => void;
-  onCaptureTerminal?: () => void;
 };
 
 const SubagentGroup = memo(function SubagentGroup({
@@ -290,50 +412,58 @@ const SubagentGroup = memo(function SubagentGroup({
   const stopEntry = entries.find((e) => e.kind === "subagent_stop");
   const activities = entries.filter((e) => e.speaker === "activity");
   const isRunning = !stopEntry;
-  // Default expanded while running, collapsed after stop.
-  const [expanded, setExpanded] = useState<boolean>(isRunning);
-  useEffect(() => {
-    if (stopEntry) setExpanded(false);
-  }, [stopEntry]);
 
-  const headerText = startEntry?.text || `${agentType || "Subagent"} running`;
+  const label = agentType || "Subagent";
+  const headerText = startEntry?.text || `${label} running`;
   const summaryText = stopEntry?.text || `${activities.length} step${activities.length === 1 ? "" : "s"}`;
 
   return (
-    <div className={styles.SubagentGroup}>
-      <button
-        type="button"
-        className={styles.SubagentGroupHeader}
-        onClick={() => setExpanded((v) => !v)}
-      >
-        <svg
-          className={classNames(styles.SubagentChevron, {
-            [styles.SubagentChevronOpen]: expanded,
-          })}
-          viewBox="0 0 12 12"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={2}
-        >
-          <path d="M4 2 L8 6 L4 10" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-        <span className={styles.SubagentLabel}>{agentType || "Subagent"}</span>
-        <span className={styles.SubagentSummary}>{expanded ? headerText : summaryText}</span>
-        <span className={styles.SubagentCount}>{activities.length}</span>
-      </button>
-      {expanded && (
-        <div className={styles.SubagentBody}>
-          {activities.map((a, i) => (
-            <div key={i} className={styles.SubagentActivity}>
-              {a.text}
-            </div>
-          ))}
+    <CollapsibleGroupShell
+      label={label}
+      headerText={headerText}
+      summaryText={summaryText}
+      count={activities.length}
+      defaultExpanded={isRunning}
+      forceCollapseSignal={stopEntry ? stopEntry.timestamp : undefined}
+      body={activities.map((a, i) => (
+        <div key={i} className={styles.CollapsibleActivity}>
+          {a.text}
         </div>
-      )}
-      {stopEntry && expanded && (
-        <div className={styles.SubagentFooter}>{stopEntry.text}</div>
-      )}
-    </div>
+      ))}
+      footer={stopEntry ? <div className={styles.CollapsibleFooter}>{stopEntry.text}</div> : undefined}
+    />
+  );
+});
+
+type ToolCallGroupProps = {
+  entries: import("../../hooks/useRelay").TranscriptEntry[];
+  // True while this group is the trailing (most recent) cluster — keeps it
+  // expanded so the user sees the live burst.  Once another entry follows,
+  // this flips to false and the group auto-collapses.
+  isTrailing: boolean;
+};
+
+const ToolCallGroup = memo(function ToolCallGroup({
+  entries,
+  isTrailing,
+}: ToolCallGroupProps) {
+  const count = entries.length;
+  const last = entries[entries.length - 1];
+  const summaryText = last?.text || "";
+  return (
+    <CollapsibleGroupShell
+      label={`${count} tool call${count === 1 ? "" : "s"}`}
+      headerText={summaryText}
+      summaryText={summaryText}
+      count={count}
+      defaultExpanded={isTrailing}
+      forceCollapseSignal={!isTrailing ? "done" : undefined}
+      body={entries.map((a, i) => (
+        <div key={i} className={styles.CollapsibleActivity}>
+          {a.text}
+        </div>
+      ))}
+    />
   );
 });
 
@@ -395,43 +525,48 @@ export function Transcript({ entries, tasks, prs, cwd, sessionId, hueOverride, o
     <div data-component="Transcript" className={styles.Root}>
       <div className={styles.GradientFade} />
       <div className={styles.ScrollContainer}>
-        {groupEntries(entries, hiddenEntries).map((g, gi) => {
-          if (g.agentId) {
-            return (
-              <SubagentGroup
-                key={`sub-${gi}-${g.agentId}`}
-                agentId={g.agentId}
-                agentType={g.agentType}
-                entries={g.entries}
-                indices={g.indices}
-                latestIndex={entries.length - 1}
-                cwd={cwd}
-                sessionId={sessionId}
-                hue={hue}
-                onAnswerQuestion={onAnswerQuestion}
-                onAnswerPermission={onAnswerPermission}
-                onCaptureTerminal={onCaptureTerminal}
-              />
-            );
-          }
-          // Ungrouped — render each entry as before.
-          return g.entries.map((entry, k) => {
-            const i = g.indices[k];
-            return (
-              <EntryRow
-                key={i}
-                entry={entry}
-                isLatest={i === entries.length - 1}
-                cwd={cwd}
-                sessionId={sessionId}
-                hue={hue}
-                onAnswerQuestion={onAnswerQuestion}
-                onAnswerPermission={onAnswerPermission}
-                onCaptureTerminal={onCaptureTerminal}
-              />
-            );
+        {(() => {
+          const groups = groupEntries(entries, hiddenEntries);
+          return groups.map((g, gi) => {
+            if (g.kind === "subagent") {
+              return (
+                <SubagentGroup
+                  key={`sub-${gi}-${g.agentId}`}
+                  agentId={g.agentId}
+                  agentType={g.agentType}
+                  entries={g.entries}
+                />
+              );
+            }
+            if (g.kind === "toolcall") {
+              const isTrailing = gi === groups.length - 1;
+              const firstIdx = g.indices[0];
+              return (
+                <ToolCallGroup
+                  key={`tools-${firstIdx}-${g.entries.length}`}
+                  entries={g.entries}
+                  isTrailing={isTrailing}
+                />
+              );
+            }
+            return g.entries.map((entry, k) => {
+              const i = g.indices[k];
+              return (
+                <EntryRow
+                  key={i}
+                  entry={entry}
+                  isLatest={i === entries.length - 1}
+                  cwd={cwd}
+                  sessionId={sessionId}
+                  hue={hue}
+                  onAnswerQuestion={onAnswerQuestion}
+                  onAnswerPermission={onAnswerPermission}
+                  onCaptureTerminal={onCaptureTerminal}
+                />
+              );
+            });
           });
-        })}
+        })()}
         {taskPanel}
         {prPanel}
         <div ref={endRef} />
