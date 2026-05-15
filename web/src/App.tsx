@@ -315,6 +315,7 @@ export default function App() {
           <Transcript
             entries={relay.transcript}
             tasks={relay.tasks}
+            prs={relay.prs}
             cwd={
               relay.sessions.find(
                 (s) => s.session_id === relay.connectedSessionId,

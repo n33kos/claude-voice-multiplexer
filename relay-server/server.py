@@ -219,6 +219,11 @@ _transcript_seq: dict[str, int] = {}  # session_id → next sequence number
 # updated_at}.  Status is one of "pending" / "in_progress" / "completed".
 _task_lists: dict[str, dict[str, dict]] = {}
 
+# Per-session PR lists captured by the PostToolUse hook from Bash output.
+# Keyed by session_id then pr_number (int).  Each entry:
+# {pr_number, url, title, created_at}.  Detect-only: no CI status, no polling.
+_pr_lists: dict[str, dict[int, dict]] = {}
+
 
 # --- Auth helpers ---
 
@@ -616,6 +621,13 @@ async def _memory_cleanup_loop():
             ]
             for sid in stale_task_ids:
                 _task_lists.pop(sid, None)
+
+            stale_pr_ids = [
+                sid for sid in _pr_lists
+                if sid not in active_session_ids
+            ]
+            for sid in stale_pr_ids:
+                _pr_lists.pop(sid, None)
 
             if stale_transcript_ids:
                 print(f"[mem-cleanup] Removed {len(stale_transcript_ids)} stale transcript buffer(s)")
@@ -1479,6 +1491,63 @@ async def task_update_from_hook(session_id: str, request: Request):
     return JSONResponse({"ok": True})
 
 
+def _pr_list_snapshot(session_id: str) -> list[dict]:
+    """Return PRs for a session as an ordered list (creation order)."""
+    prs = _pr_lists.get(session_id) or {}
+    return sorted(prs.values(), key=lambda p: p.get("created_at", 0))
+
+
+async def _broadcast_pr_list(session_id: str) -> None:
+    """Broadcast the current PR list for a session to all WS clients."""
+    msg = json.dumps({
+        "type": "pr_list",
+        "session_id": session_id,
+        "prs": _pr_list_snapshot(session_id),
+        "ts": time.time(),
+    })
+    for client_ws in list(_clients.values()):
+        try:
+            await client_ws.send_text(msg)
+        except Exception:
+            pass
+
+
+@app.post("/api/sessions/{session_id}/pr-detected")
+async def pr_detected_from_hook(session_id: str, request: Request):
+    """Record a PR URL captured by the PostToolUse hook and broadcast.
+
+    Body: { url, pr_number, title }.  Idempotent on pr_number — re-posts
+    just refresh the title if a non-empty one is supplied.
+    """
+    _require_auth(request)
+    body = await request.json()
+    url = (body.get("url") or "").strip()
+    raw_number = body.get("pr_number")
+    try:
+        pr_number = int(raw_number)
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "pr_number required"}, status_code=400)
+    if not url:
+        return JSONResponse({"ok": False, "error": "url required"}, status_code=400)
+    title = (body.get("title") or "").strip()
+
+    now = time.time()
+    prs = _pr_lists.setdefault(session_id, {})
+    existing = prs.get(pr_number)
+    if existing:
+        if title and not existing.get("title"):
+            existing["title"] = title
+    else:
+        prs[pr_number] = {
+            "pr_number": pr_number,
+            "url": url,
+            "title": title,
+            "created_at": now,
+        }
+    await _broadcast_pr_list(session_id)
+    return JSONResponse({"ok": True})
+
+
 @app.post("/api/sessions/{session_id}/permission-request")
 async def permission_request_from_hook(session_id: str, request: Request):
     """Broadcast a permission-request card to web clients.
@@ -1939,6 +2008,16 @@ async def client_ws(ws: WebSocket):
                         "type": "task_list",
                         "session_id": session_id,
                         "tasks": _task_list_snapshot(session_id),
+                        "ts": time.time(),
+                    }))
+
+                # Send current PR list snapshot so reconnecting clients see
+                # PRs opened earlier in the session.
+                if success and _pr_lists.get(session_id):
+                    await ws.send_text(json.dumps({
+                        "type": "pr_list",
+                        "session_id": session_id,
+                        "prs": _pr_list_snapshot(session_id),
                         "ts": time.time(),
                     }))
 

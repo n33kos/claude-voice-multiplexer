@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import { sessionHue } from "../../utils/sessionHue";
 import type { TranscriptProps } from "./Transcript.types";
 import { TaskListPanel } from "../TaskListPanel/TaskListPanel";
+import { SessionPRList } from "../SessionPRList/SessionPRList";
 import styles from "./Transcript.module.scss";
 import "highlight.js/styles/github-dark.min.css";
 
@@ -230,7 +231,7 @@ const EntryRow = memo(function EntryRow({
   return renderEntry(entry, isLatest, cwd, sessionId, hue, onAnswerQuestion, onAnswerPermission, onCaptureTerminal);
 });
 
-export function Transcript({ entries, tasks, cwd, sessionId, hueOverride, onSendText, onAnswerQuestion, onAnswerPermission, onCaptureTerminal }: TranscriptProps & { onCaptureTerminal?: () => void }) {
+export function Transcript({ entries, tasks, prs, cwd, sessionId, hueOverride, onSendText, onAnswerQuestion, onAnswerPermission, onCaptureTerminal }: TranscriptProps & { onCaptureTerminal?: () => void }) {
   const endRef = useRef<HTMLDivElement>(null);
   const hue = hueOverride != null ? hueOverride : (sessionId ? sessionHue(sessionId) : null);
   const sendButtonStyle = hue !== null ? { backgroundColor: `hsla(${hue}, 55%, 40%, 0.9)` } : undefined;
@@ -268,6 +269,8 @@ export function Transcript({ entries, tasks, cwd, sessionId, hueOverride, onSend
 
   const taskPanel =
     tasks && tasks.length > 0 ? <TaskListPanel tasks={tasks} /> : null;
+  const prPanel =
+    prs && prs.length > 0 ? <SessionPRList prs={prs} /> : null;
 
   if (entries.length === 0) {
     return (
@@ -276,6 +279,7 @@ export function Transcript({ entries, tasks, cwd, sessionId, hueOverride, onSend
           Conversation will appear here
         </div>
         {taskPanel}
+        {prPanel}
         {onSendText && <MessageInputBar onSendText={onSendText} sendButtonStyle={sendButtonStyle} />}
       </div>
     );
@@ -301,6 +305,7 @@ export function Transcript({ entries, tasks, cwd, sessionId, hueOverride, onSend
           ),
         )}
         {taskPanel}
+        {prPanel}
         <div ref={endRef} />
       </div>
       {onSendText && <MessageInputBar onSendText={onSendText} sendButtonStyle={sendButtonStyle} />}

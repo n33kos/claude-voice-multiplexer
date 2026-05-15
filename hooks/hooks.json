@@ -118,6 +118,17 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vmux-post-tool-use-hook.sh"
+          }
+        ]
+      }
     ]
   }
 }

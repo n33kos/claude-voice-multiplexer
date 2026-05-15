@@ -108,6 +108,13 @@ export interface TaskEntry {
   updated_at: number;
 }
 
+export interface PREntry {
+  pr_number: number;
+  url: string;
+  title: string;
+  created_at: number;
+}
+
 export type AgentState = "idle" | "thinking" | "speaking" | "error";
 
 export interface AgentStatus {
@@ -141,6 +148,7 @@ interface RelayState {
   connectedSessionName: string | null;
   transcripts: Record<string, TranscriptEntry[]>; // keyed by session_id
   taskLists: Record<string, TaskEntry[]>; // keyed by session_id
+  prLists: Record<string, PREntry[]>; // keyed by session_id
   status: "disconnected" | "connecting" | "connected";
   agentStatus: AgentStatus;
   disableAutoListenSeq: number; // increments when server signals noise-only input
@@ -287,6 +295,7 @@ export function useRelay(authenticated: boolean = true) {
     connectedSessionName: null,
     transcripts: {},
     taskLists: {},
+    prLists: {},
     status: "disconnected",
     agentStatus: { state: "idle", activity: null },
     disableAutoListenSeq: 0,
@@ -553,6 +562,15 @@ export function useRelay(authenticated: boolean = true) {
           }));
           break;
         }
+        case "pr_list": {
+          const prSessionId = data.session_id;
+          const prs = (data.prs || []) as PREntry[];
+          setState((s) => ({
+            ...s,
+            prLists: { ...s.prLists, [prSessionId]: prs },
+          }));
+          break;
+        }
         case "turn-complete": {
           // Informational only — the relay sends an agent_status "idle"
           // when TTS actually finishes, which is what drives the mic
@@ -752,7 +770,8 @@ export function useRelay(authenticated: boolean = true) {
     setState((s) => {
       const { [sessionId]: _, ...rest } = s.transcripts;
       const { [sessionId]: _tasks, ...restTasks } = s.taskLists;
-      return { ...s, transcripts: rest, taskLists: restTasks };
+      const { [sessionId]: _prs, ...restPrs } = s.prLists;
+      return { ...s, transcripts: rest, taskLists: restTasks, prLists: restPrs };
     });
     deleteTranscripts(sessionId);
   }, []);
@@ -772,6 +791,10 @@ export function useRelay(authenticated: boolean = true) {
       })(),
       taskLists: (() => {
         const { [sessionId]: _, ...rest } = s.taskLists;
+        return rest;
+      })(),
+      prLists: (() => {
+        const { [sessionId]: _, ...rest } = s.prLists;
         return rest;
       })(),
     }));
@@ -1102,6 +1125,10 @@ export function useRelay(authenticated: boolean = true) {
     ? state.taskLists[state.connectedSessionId] || []
     : [];
 
+  const prs: PREntry[] = state.connectedSessionId
+    ? state.prLists[state.connectedSessionId] || []
+    : [];
+
   return {
     sessions: displaySessions,
     connectedSessionId: state.connectedSessionId,
@@ -1110,6 +1137,8 @@ export function useRelay(authenticated: boolean = true) {
     transcripts: state.transcripts,
     tasks,
     taskLists: state.taskLists,
+    prs,
+    prLists: state.prLists,
     status: state.status,
     agentStatus: state.agentStatus,
     disableAutoListenSeq: state.disableAutoListenSeq,
