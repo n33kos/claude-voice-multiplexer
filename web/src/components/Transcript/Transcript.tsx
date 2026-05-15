@@ -413,8 +413,8 @@ const SubagentGroup = memo(function SubagentGroup({
   const activities = entries.filter((e) => e.speaker === "activity");
   const isRunning = !stopEntry;
 
-  const label = agentType || "Subagent";
-  const headerText = startEntry?.text || `${label} running`;
+  const label = agentType ? `Subagent · ${agentType}` : "Subagent";
+  const headerText = startEntry?.text || `${agentType || "Subagent"} running`;
   const summaryText = stopEntry?.text || `${activities.length} step${activities.length === 1 ? "" : "s"}`;
 
   return (
