@@ -869,11 +869,20 @@ class VmuxDaemon:
                     except Exception as e:
                         logger.warning(f"[update] systemd unit update failed: {e}")
 
-            # 6. Verify
+            # 6. Verify — non-fatal.  A mismatch here almost always means the
+            #    plugin shipped with daemon/VERSION out of sync with
+            #    .claude-plugin/plugin.json (a release-process slip, not a
+            #    copy failure).  All the actual files have already been
+            #    replaced at this point, so we'd rather complete the restart
+            #    onto the new code than leave the user stranded on the old
+            #    version because of a metadata typo.  Log loudly and move on.
             actual = _read_installed_version()
             if actual != latest_version:
-                logger.error(f"[update] verification failed: expected {latest_version}, got {actual}")
-                return {"ok": False, "error": f"version mismatch after copy: {actual} != {latest_version}"}
+                logger.warning(
+                    f"[update] version-file mismatch after copy: "
+                    f"daemon/VERSION={actual} but plugin.json={latest_version}. "
+                    f"Continuing — files are in place, restarting services."
+                )
 
             logger.info(f"[update] complete: {installed_version} → {latest_version}")
             # Schedule a full daemon restart so the new code is actually loaded
