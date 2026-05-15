@@ -116,8 +116,11 @@ export function buildEnrollment(
   }
   const worst = Math.max(...distances)
   const mean = distances.reduce((a, b) => a + b, 0) / distances.length
-  // Tighter slack now that outliers are gone.
-  const threshold = Math.max(worst * 1.1, mean * 1.25, 16)
+  const min = Math.min(...distances)
+  // Empirically a real runtime utterance scores BELOW the intra-template
+  // mean (it gets to pick the best-matching template, while intra-pairs
+  // don't). Set threshold below the mean so noise above mean is rejected.
+  const threshold = Math.max(Math.min(mean * 0.85, min * 1.0), 14)
   console.log('[enroll] intra-template distances:', distances.map(d => d.toFixed(2)),
     'worst:', worst.toFixed(2), 'mean:', mean.toFixed(2), 'threshold:', threshold.toFixed(2))
   return { templates, threshold, numCoeffs: extractor.cfg.numCoeffs }
