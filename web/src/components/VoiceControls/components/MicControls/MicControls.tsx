@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo } from "react";
+import { useEffect, useRef, useMemo, useState, useCallback } from "react";
 import classNames from "classnames";
 import {
   useRoomContext,
@@ -6,10 +6,11 @@ import {
   useTracks,
 } from "@livekit/components-react";
 import { Track } from "livekit-client";
-import { initAudio } from "../../../../hooks/useChime";
+import { initAudio, playChime } from "../../../../hooks/useChime";
 import { sessionHue } from "../../../../utils/sessionHue";
 import { VoiceBar } from "../../../VoiceBar/VoiceBar";
 import { useTrackAnalyser } from "../../hooks/useTrackAnalyser";
+import { useWakeWord } from "../../../../wake-word/useWakeWord";
 import type { MicControlsProps } from "../../VoiceControls.types";
 import styles from "./MicControls.module.scss";
 
@@ -20,6 +21,9 @@ export function MicControls({
   autoListen,
   speakerMuted,
   showStatusPill,
+  wakeWordEnabled,
+  wakeWordChime,
+  wakeWordReloadKey,
   onAutoListenChange,
   onSpeakerMutedChange,
   onInterrupt,
@@ -29,6 +33,39 @@ export function MicControls({
   const room = useRoomContext();
   const { isMicrophoneEnabled } = useLocalParticipant();
   const hue = hueOverride != null ? hueOverride : (sessionId ? sessionHue(sessionId) : null);
+
+  // Tri-state mic flow: active (autoListen=true, wakeWordMode=false),
+  // muted (autoListen=false, wakeWordMode=false), wake (autoListen=false,
+  // wakeWordMode=true). Wake state is only available when the feature is
+  // enabled in settings AND templates exist.
+  const [wakeWordMode, setWakeWordMode] = useState(false);
+
+  // Drop out of wake mode if the feature is turned off.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (!wakeWordEnabled && wakeWordMode) setWakeWordMode(false);
+  }, [wakeWordEnabled, wakeWordMode]);
+
+  // Suspend wake-word matching whenever Claude is speaking or thinking —
+  // we don't want her own voice to trigger the matcher, and we don't want
+  // to interrupt the agent mid-turn.
+  const suspendWake = agentStatus.state === "speaking" || agentStatus.state === "thinking";
+
+  const onWakeMatch = useCallback(() => {
+    if (wakeWordChime) playChime();
+    setWakeWordMode(false);
+    onAutoListenChange(true);
+  }, [onAutoListenChange, wakeWordChime]);
+
+  const wake = useWakeWord({
+    enabled: wakeWordEnabled,
+    active: wakeWordEnabled && wakeWordMode,
+    suspend: suspendWake,
+    onMatch: onWakeMatch,
+  });
+
+  // Re-read templates whenever the parent bumps the key (e.g. after enrollment).
+  useEffect(() => { void wake.reload(); }, [wakeWordReloadKey, wake]);
 
   // Session-colored overrides for thinking/speaking states
   const sessionPillStyle = useMemo(() => {
@@ -53,7 +90,6 @@ export function MicControls({
   // Convert session hue to RGB for VoiceBar
   const sessionRgb = useMemo(() => {
     if (hue === null) return undefined;
-    // HSL to RGB conversion (s=55%, l=55% for a vivid mid-tone)
     const s = 0.55, l = 0.55;
     const c = (1 - Math.abs(2 * l - 1)) * s;
     const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
@@ -88,7 +124,6 @@ export function MicControls({
   const activeAnalyser =
     agentState === "speaking" ? remoteAnalyser : localAnalyser;
 
-  // Keep particleAnalyserRef in sync with the active analyser
   useEffect(() => {
     if (!particleAnalyserRef) return;
     particleAnalyserRef.current = activeAnalyser.current;
@@ -101,21 +136,28 @@ export function MicControls({
   const prevAgentState = useRef(agentState);
   useEffect(() => {
     const stateChanged = prevAgentState.current !== agentState;
+    const prev = prevAgentState.current;
     prevAgentState.current = agentState;
 
     if (agentState === "idle") {
-      // Always sync mic with autoListen while idle — handles both
-      // state transitions to idle AND autoListen toggling mid-idle.
-      room.localParticipant.setMicrophoneEnabled(autoListen);
+      // After a turn completes (speaking/thinking → idle): if wake-word
+      // is enabled and templates exist, drop into wake mode rather than
+      // listening directly. The user can tap the mic to override.
+      const justFinishedTurn = stateChanged && (prev === "speaking" || prev === "thinking");
+      if (justFinishedTurn && wakeWordEnabled && wake.hasTemplates) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setWakeWordMode(true);
+        onAutoListenChange(false);
+        room.localParticipant.setMicrophoneEnabled(false);
+        return;
+      }
+      // Otherwise sync mic with autoListen while idle (existing behavior).
+      room.localParticipant.setMicrophoneEnabled(autoListen && !wakeWordMode);
     } else if (stateChanged && (agentState === "thinking" || agentState === "speaking")) {
       room.localParticipant.setMicrophoneEnabled(false);
     }
-  }, [agentState, autoListen, room.localParticipant]);
+  }, [agentState, autoListen, wakeWordEnabled, wakeWordMode, wake.hasTemplates, room.localParticipant, onAutoListenChange]);
 
-  // Immediately silence any buffered TTS audio that's still flowing through
-  // the LiveKit pipeline. Cancelling on the server only stops new chunks —
-  // chunks already in flight keep playing for ~200ms otherwise. setVolume
-  // on the receive side takes effect instantly.
   const muteRemoteAudio = () => {
     const t = remoteTrackRef?.publication?.track as
       | { setVolume?: (v: number) => void }
@@ -123,9 +165,6 @@ export function MicControls({
     t?.setVolume?.(0);
   };
 
-  // Restore remote audio volume when a new TTS turn starts. Tied to the
-  // speaking transition so a fresh response unmutes itself; we never
-  // override speakerMuted (that's a separate user control).
   useEffect(() => {
     if (agentState !== "speaking") return;
     const t = remoteTrackRef?.publication?.track as
@@ -136,27 +175,42 @@ export function MicControls({
 
   const toggleMic = async () => {
     initAudio();
-    // Mic-tap during speaking OR thinking is a deliberate escape hatch:
-    // cancel TTS, force the agent out of whatever it's stuck on, and
-    // enable the mic so the user can speak again. The thinking branch is
-    // critical — if Claude never replies, there's no other way out.
+    // Escape hatch during speaking/thinking: always force listening on.
     if (agentState === "speaking" || agentState === "thinking") {
       muteRemoteAudio();
       onInterrupt();
+      setWakeWordMode(false);
       await room.localParticipant.setMicrophoneEnabled(true);
       onAutoListenChange(true);
       return;
     }
     if (agentState === "idle") {
-      const next = !isMicrophoneEnabled;
-      await room.localParticipant.setMicrophoneEnabled(next);
-      onAutoListenChange(next);
+      if (wakeWordEnabled && wake.hasTemplates) {
+        // Tri-state cycle: active → muted → wake → active.
+        if (autoListen && !wakeWordMode) {
+          // active → muted
+          await room.localParticipant.setMicrophoneEnabled(false);
+          onAutoListenChange(false);
+          setWakeWordMode(false);
+        } else if (!autoListen && !wakeWordMode) {
+          // muted → wake
+          setWakeWordMode(true);
+        } else {
+          // wake → active
+          setWakeWordMode(false);
+          await room.localParticipant.setMicrophoneEnabled(true);
+          onAutoListenChange(true);
+        }
+      } else {
+        const next = !isMicrophoneEnabled;
+        await room.localParticipant.setMicrophoneEnabled(next);
+        onAutoListenChange(next);
+      }
     } else {
       onAutoListenChange(!autoListen);
     }
   };
 
-  // Listen for vmux:command events from the overlay wrapper
   useEffect(() => {
     const handler = (e: CustomEvent) => {
       if (e.detail?.type === 'toggle-mic') toggleMic();
@@ -185,11 +239,26 @@ export function MicControls({
           label: agentStatus.activity || "Error",
         };
       default:
+        if (wakeWordMode) {
+          return { className: styles.StatusPillWake, label: 'Say "hey claude"' };
+        }
         return autoListen
           ? { className: styles.StatusPillListening, label: "Listening" }
           : { className: styles.StatusPillIdle, label: "Idle" };
     }
   })();
+
+  const micButtonClass = wakeWordMode
+    ? styles.MicButtonWake
+    : autoListen
+      ? styles.MicButtonActive
+      : styles.MicButtonInactive;
+
+  const micIconClass = wakeWordMode
+    ? styles.MicIconWake
+    : autoListen
+      ? styles.MicIconActive
+      : styles.MicIconInactive;
 
   return (
     <div data-component="VoiceControls" className={styles.Root}>
@@ -200,7 +269,7 @@ export function MicControls({
         >
           <span
             className={classNames(styles.StatusDot, {
-              [styles.StatusDotPulse]: agentState === "thinking",
+              [styles.StatusDotPulse]: agentState === "thinking" || wakeWordMode,
             })}
           />
           <span className={styles.StatusLabel}>{pillStyle.label}</span>
@@ -229,22 +298,21 @@ export function MicControls({
         </button>
         <button
           onClick={toggleMic}
-          className={classNames(
-            styles.CircleButton,
-            autoListen ? styles.MicButtonActive : styles.MicButtonInactive,
-          )}
+          className={classNames(styles.CircleButton, micButtonClass)}
+          title={
+            wakeWordMode
+              ? 'Wake-word listening — say "hey claude" to unmute'
+              : autoListen ? "Mute" : "Unmute"
+          }
         >
           <svg
-            className={classNames(
-              styles.ButtonIcon,
-              autoListen ? styles.MicIconActive : styles.MicIconInactive,
-            )}
+            className={classNames(styles.ButtonIcon, micIconClass)}
             fill="none"
             viewBox="0 0 24 24"
             strokeWidth={2}
             stroke="currentColor"
           >
-            {autoListen ? (
+            {autoListen || wakeWordMode ? (
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -257,11 +325,7 @@ export function MicControls({
                   strokeLinejoin="round"
                   d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"
                 />
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M3 3l18 18"
-                />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 3l18 18" />
               </>
             )}
           </svg>

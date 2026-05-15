@@ -87,6 +87,9 @@ export function VoiceControls({
   autoListen,
   speakerMuted,
   showStatusPill,
+  wakeWordEnabled,
+  wakeWordChime,
+  wakeWordReloadKey,
   onAutoListenChange,
   onSpeakerMutedChange,
   onConnected,
@@ -114,6 +117,9 @@ export function VoiceControls({
           autoListen={autoListen}
           speakerMuted={speakerMuted}
           showStatusPill={showStatusPill}
+          wakeWordEnabled={wakeWordEnabled}
+          wakeWordChime={wakeWordChime}
+          wakeWordReloadKey={wakeWordReloadKey}
           onAutoListenChange={onAutoListenChange}
           onSpeakerMutedChange={onSpeakerMutedChange}
           onInterrupt={onInterrupt}

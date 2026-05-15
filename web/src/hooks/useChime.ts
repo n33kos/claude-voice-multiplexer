@@ -56,6 +56,12 @@ export function playNotificationChime() {
   setTimeout(() => playTone(784, 0.15, 0.2), 160)
 }
 
+/** Brief two-note "wake-word detected" cue. */
+export function playChime() {
+  playTone(880, 0.1, 0.22)
+  setTimeout(() => playTone(1175, 0.14, 0.22), 90)
+}
+
 export function playDisconnectChime() {
   // Gentle three-note descending: "session went away"
   playTone(784, 0.1, 0.15)

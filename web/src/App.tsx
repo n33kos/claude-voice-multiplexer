@@ -100,6 +100,8 @@ export default function App() {
   const livekit = useLiveKit();
   const contextUsage = useContextUsage(relay.connectedSessionId);
   const { settings, updateSettings } = useSettings();
+  const [wakeWordReloadKey, setWakeWordReloadKey] = useState(0);
+  const bumpWakeWordReload = useCallback(() => setWakeWordReloadKey(k => k + 1), []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   // Stable callback so memoized children (e.g. Transcript's EntryRow) can
@@ -367,6 +369,9 @@ export default function App() {
                 autoListen={settings.autoListen}
                 speakerMuted={settings.speakerMuted}
                 showStatusPill={settings.showStatusPill}
+                wakeWordEnabled={settings.wakeWordEnabled}
+                wakeWordChime={settings.wakeWordChime}
+                wakeWordReloadKey={wakeWordReloadKey}
                 onAutoListenChange={(v) => updateSettings({ autoListen: v })}
                 onSpeakerMutedChange={(v) =>
                   updateSettings({ speakerMuted: v })
@@ -433,6 +438,7 @@ export default function App() {
           }
           onGenerateCode={auth.generateCode}
           onRevokeDevice={auth.revokeDevice}
+          onWakeWordEnrolled={bumpWakeWordReload}
         />
       </div>
     </>

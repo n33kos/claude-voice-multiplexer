@@ -10,6 +10,9 @@ export interface VoiceControlsProps {
   autoListen: boolean;
   speakerMuted: boolean;
   showStatusPill: boolean;
+  wakeWordEnabled: boolean;
+  wakeWordChime: boolean;
+  wakeWordReloadKey: number;
   onAutoListenChange: (value: boolean) => void;
   onSpeakerMutedChange: (value: boolean) => void;
   onConnected: () => void;
@@ -26,6 +29,9 @@ export interface MicControlsProps {
   autoListen: boolean;
   speakerMuted: boolean;
   showStatusPill: boolean;
+  wakeWordEnabled: boolean;
+  wakeWordChime: boolean;
+  wakeWordReloadKey: number;
   onAutoListenChange: (value: boolean) => void;
   onSpeakerMutedChange: (value: boolean) => void;
   onInterrupt: () => void;

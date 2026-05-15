@@ -35,6 +35,10 @@ export interface Settings {
   showContextBar: boolean
   contextBarFields: ContextBarFields
   effortLevel: EffortLevel
+  /** Wake-word "hey claude" listener feature flag. Default OFF. */
+  wakeWordEnabled: boolean
+  /** Play a chime when the wake word fires. */
+  wakeWordChime: boolean
 }
 
 const STORAGE_KEY = 'voice-multiplexer-settings'
@@ -62,6 +66,8 @@ const DEFAULTS: Settings = {
   showContextBar: true,
   contextBarFields: DEFAULT_CONTEXT_BAR_FIELDS,
   effortLevel: 'medium',
+  wakeWordEnabled: false,
+  wakeWordChime: true,
 }
 
 function loadSettings(): Settings {

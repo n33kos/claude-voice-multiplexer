@@ -4,6 +4,10 @@ import type { ThemeMode, FieldPosition, BarVisibility } from "../../hooks/useSet
 import type { SettingsProps } from "./Settings.types";
 import { useVoiceSettings } from "../../hooks/useVoiceSettings";
 import type { VoiceOption } from "../../hooks/useVoiceSettings";
+import { EnrollmentModal } from "../../wake-word/EnrollmentModal";
+import { buildEnrollment } from "../../wake-word/enroll";
+import { saveTemplates, clearTemplates, loadTemplates } from "../../wake-word/db";
+import type { WakeWordRecord } from "../../wake-word/db";
 import styles from "./Settings.module.scss";
 
 interface ServiceHealth {
@@ -105,8 +109,41 @@ export function Settings({
   connectedClients,
   onGenerateCode,
   onRevokeDevice,
+  onWakeWordEnrolled,
 }: SettingsProps) {
   const [pairCode, setPairCode] = useState<string | null>(null);
+  const [enrollOpen, setEnrollOpen] = useState(false);
+  const [wakeRecord, setWakeRecord] = useState<WakeWordRecord | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    loadTemplates().then(setWakeRecord).catch(() => setWakeRecord(null));
+  }, [open]);
+
+  const handleEnrollmentComplete = useCallback(
+    async (clips: { buf: Float32Array; sampleRate: number }[]) => {
+      const { templates, threshold, numCoeffs } = buildEnrollment(clips);
+      if (templates.length === 0) throw new Error("No usable clips");
+      await saveTemplates({
+        phrase: "hey claude",
+        templates,
+        threshold,
+        enrolledAt: Date.now(),
+        numCoeffs,
+      });
+      const rec = await loadTemplates();
+      setWakeRecord(rec);
+      onWakeWordEnrolled?.();
+    },
+    [onWakeWordEnrolled],
+  );
+
+  const handleWakeWordReset = useCallback(async () => {
+    await clearTemplates();
+    setWakeRecord(null);
+    if (settings.wakeWordEnabled) onUpdate({ wakeWordEnabled: false });
+    onWakeWordEnrolled?.();
+  }, [onUpdate, onWakeWordEnrolled, settings.wakeWordEnabled]);
   const [codeLoading, setCodeLoading] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const { health, loading: healthLoading, refresh: refreshHealth } = useServiceHealth(open);
@@ -518,6 +555,69 @@ export function Settings({
           <div className={styles.Divider} />
 
           <div className={styles.SectionHeader}>
+            <span className={styles.SectionTitle}>Wake Word</span>
+          </div>
+
+          <label className={styles.SettingRow}>
+            <div className={styles.SettingLabel}>
+              <span className={styles.SettingTitle}>Listen for "hey claude"</span>
+              <span className={styles.SettingDescription}>
+                Fully on-device. After Claude's turn, mic enters wake mode (yellow)
+                — say "hey claude" to take your next turn. Mic stays open while listening.
+              </span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.wakeWordEnabled}
+              disabled={!wakeRecord}
+              onClick={() => onUpdate({ wakeWordEnabled: !settings.wakeWordEnabled })}
+              className={classNames(styles.Toggle, { [styles.ToggleActive]: settings.wakeWordEnabled })}
+            >
+              <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.wakeWordEnabled })} />
+            </button>
+          </label>
+
+          <label className={styles.SettingRow}>
+            <div className={styles.SettingLabel}>
+              <span className={styles.SettingTitle}>Activation chime</span>
+              <span className={styles.SettingDescription}>
+                Play a brief tone when the wake word triggers
+              </span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.wakeWordChime}
+              onClick={() => onUpdate({ wakeWordChime: !settings.wakeWordChime })}
+              className={classNames(styles.Toggle, { [styles.ToggleActive]: settings.wakeWordChime })}
+            >
+              <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.wakeWordChime })} />
+            </button>
+          </label>
+
+          <div className={styles.SettingRow}>
+            <div className={styles.SettingLabel}>
+              <span className={styles.SettingTitle}>Voice training</span>
+              <span className={styles.SettingDescription}>
+                {wakeRecord
+                  ? `Trained ${new Date(wakeRecord.enrolledAt).toLocaleDateString()} · ${wakeRecord.templates.length} clips`
+                  : "Train your voice to enable wake-word detection"}
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              {wakeRecord && (
+                <button onClick={handleWakeWordReset} className={styles.RevokeButton}>
+                  Clear
+                </button>
+              )}
+              <button onClick={() => setEnrollOpen(true)} className={styles.CodeButton}>
+                {wakeRecord ? "Retrain" : "Train"}
+              </button>
+            </div>
+          </div>
+
+          <div className={styles.Divider} />
+
+          <div className={styles.SectionHeader}>
             <span className={styles.SectionTitle}>
               Services
               {health?.version && (
@@ -639,6 +739,11 @@ export function Settings({
           )}
         </div>
       </div>
+      <EnrollmentModal
+        open={enrollOpen}
+        onClose={() => setEnrollOpen(false)}
+        onComplete={handleEnrollmentComplete}
+      />
     </div>
   );
 }
