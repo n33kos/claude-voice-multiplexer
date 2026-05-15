@@ -60,6 +60,26 @@
         ]
       }
     ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vmux-pre-compact-hook.sh"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vmux-post-compact-hook.sh"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "AskUserQuestion",
