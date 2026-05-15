@@ -20,7 +20,9 @@ export interface DTWOptions {
 export function dtw(a: Float32Array[], b: Float32Array[], opts: DTWOptions = {}): number {
   const n = a.length, m = b.length
   if (n === 0 || m === 0) return Infinity
-  const band = Math.max(1, Math.floor((opts.band ?? 0.2) * Math.max(n, m)))
+  // Band must be wide enough to reach the corner: at minimum |n-m|.
+  const baseBand = Math.floor((opts.band ?? 0.3) * Math.max(n, m))
+  const band = Math.max(1, baseBand, Math.abs(n - m) + 2)
   const INF = Number.POSITIVE_INFINITY
 
   // cost matrix: only need two rows

@@ -63,26 +63,39 @@ export function buildEnrollment(
   audioClips: { buf: Float32Array; sampleRate: number }[]
 ): EnrolledTemplates {
   const extractor = new MFCCExtractor()
-  const templates: Float32Array[][] = []
+  const raw: Float32Array[][] = []
   for (const clip of audioClips) {
     const resampled = resampleTo16k(clip.buf, clip.sampleRate)
     const trimmed = trimSilence(resampled, TARGET_SR)
     const seq = cmn(extractor.sequence(trimmed))
-    if (seq.length > 0) templates.push(seq)
+    if (seq.length > 0) raw.push(seq)
   }
+  // Reject length-outliers (anything > 1.7× median or < 0.5× median).
+  // These are usually clips where the trimmer didn't catch leading or
+  // trailing silence and they poison the DTW grid.
+  const lens = raw.map(s => s.length).sort((a, b) => a - b)
+  const median = lens.length ? lens[Math.floor(lens.length / 2)] : 0
+  const templates = raw.filter(s =>
+    s.length <= median * 1.7 && s.length >= median * 0.5,
+  )
+  console.log('[enroll] kept', templates.length, 'of', raw.length,
+    'templates — frame counts:', templates.map(t => t.length),
+    '(median:', median, 'dropped:', raw.length - templates.length, ')')
   if (templates.length < 2) {
-    return { templates, threshold: 20, numCoeffs: extractor.cfg.numCoeffs }
+    return { templates, threshold: 22, numCoeffs: extractor.cfg.numCoeffs }
   }
   const distances: number[] = []
   for (let i = 0; i < templates.length; i++) {
     for (let j = i + 1; j < templates.length; j++) {
-      distances.push(dtw(templates[i], templates[j]))
+      const d = dtw(templates[i], templates[j])
+      if (Number.isFinite(d)) distances.push(d)
     }
+  }
+  if (distances.length === 0) {
+    return { templates, threshold: 22, numCoeffs: extractor.cfg.numCoeffs }
   }
   const worst = Math.max(...distances)
   const mean = distances.reduce((a, b) => a + b, 0) / distances.length
-  // Tight enough to reject road noise, loose enough to accept a real
-  // utterance that scored ~0.8× worst-intra in field tests.
   const threshold = Math.max(worst * 1.15, mean * 1.4, 18)
   console.log('[enroll] intra-template distances:', distances.map(d => d.toFixed(2)),
     'threshold:', threshold.toFixed(2))

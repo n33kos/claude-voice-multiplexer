@@ -86,8 +86,9 @@ function tryMatch() {
   let best = Infinity
   for (const t of templates) {
     const d = dtw(seq, t)
-    if (d < best) best = d
+    if (Number.isFinite(d) && d < best) best = d
   }
+  if (!Number.isFinite(best)) return
   if (LOG) console.log('[wake-worker] score=', best.toFixed(3), 'threshold=', threshold.toFixed(3), 'rms=', energy.toFixed(4))
   post('score', { distance: best, threshold })
   if (best < threshold) {
