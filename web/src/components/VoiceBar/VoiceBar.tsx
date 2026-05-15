@@ -16,7 +16,7 @@ const COLORS: Record<string, RGB> = {
   idle: { r: 115, g: 115, b: 115 },
 };
 
-export function VoiceBar({ agentStatus, isMicEnabled, analyserRef, sessionColor }: VoiceBarProps) {
+export function VoiceBar({ agentStatus, isMicEnabled, analyserRef, sessionColor, micColorOverride }: VoiceBarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const barsRef = useRef<number[]>(new Array(BAR_COUNT).fill(0));
@@ -47,7 +47,8 @@ export function VoiceBar({ agentStatus, isMicEnabled, analyserRef, sessionColor 
       if (agentState === "speaking") return sessionColor || COLORS.speaking;
       if (agentState === "error") return COLORS.error;
       if (agentState === "thinking") return sessionColor || COLORS.thinking;
-      if (isMicEnabled) return COLORS.recording;
+      if (isMicEnabled) return micColorOverride || COLORS.recording;
+      if (micColorOverride) return micColorOverride; // wake-mode idle = yellow
       return COLORS.idle;
     }
 
@@ -157,7 +158,7 @@ export function VoiceBar({ agentStatus, isMicEnabled, analyserRef, sessionColor 
 
     animRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(animRef.current);
-  }, [agentState, isMicEnabled, analyserRef, sessionColor]);
+  }, [agentState, isMicEnabled, analyserRef, sessionColor, micColorOverride]);
 
   return (
     <canvas

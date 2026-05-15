@@ -1,4 +1,5 @@
-import { useEffect, useRef, useMemo, useState, useCallback } from "react";
+import { useEffect, useRef, useMemo, useCallback } from "react";
+import type { MicMode } from "../../../../types/micMode";
 import classNames from "classnames";
 import {
   useRoomContext,
@@ -24,6 +25,10 @@ export function MicControls({
   wakeWordEnabled,
   wakeWordChime,
   wakeWordReloadKey,
+  micMode,
+  setMicMode,
+  returnToWakeAfterTurn,
+  setReturnToWakeAfterTurn,
   onAutoListenChange,
   onSpeakerMutedChange,
   onInterrupt,
@@ -34,15 +39,8 @@ export function MicControls({
   const { isMicrophoneEnabled } = useLocalParticipant();
   const hue = hueOverride != null ? hueOverride : (sessionId ? sessionHue(sessionId) : null);
 
-  // Single source of truth for mic state. Derive autoListen + LiveKit mic
-  // enabled from this. Three mutually-exclusive modes.
-  type MicMode = "muted" | "wake" | "active";
-  const [micMode, setMicMode] = useState<MicMode>(autoListen ? "active" : "muted");
-
-  // Sticky flag: only set when the wake word itself transitioned us into
-  // active. After the agent's turn ends, we use this to decide whether to
-  // return to wake (true) or stay in whatever mode the user picked (false).
-  const [returnToWakeAfterTurn, setReturnToWakeAfterTurn] = useState(false);
+  // micMode + returnToWakeAfterTurn are owned by App so useChime and
+  // VoiceBar can see them. They behave as a single source of truth here.
 
   // Drop out of wake mode if the feature is turned off.
   useEffect(() => {
@@ -53,17 +51,19 @@ export function MicControls({
   }, [wakeWordEnabled, micMode]);
 
   // Sync FROM external autoListen changes (e.g. server force-disable).
-  // We treat the external prop as the desired "active or not" signal.
+  // Only react while agent is idle — otherwise transient autoListen
+  // toggles during a turn (thinking/speaking) make the button flash.
   useEffect(() => {
+    if (agentStatus.state !== "idle") return;
     if (autoListen && micMode !== "active") {
-       
+
       setMicMode("active");
     } else if (!autoListen && micMode === "active") {
-       
+
       setMicMode("muted");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoListen]);
+  }, [autoListen, agentStatus.state]);
 
   // Sync TO autoListen prop whenever our internal mode changes.
   useEffect(() => {
@@ -302,6 +302,7 @@ export function MicControls({
         isMicEnabled={isMicActive}
         analyserRef={activeAnalyser}
         sessionColor={sessionRgb}
+        micColorOverride={displayWake ? { r: 252, g: 211, b: 77 } : undefined}
       />
       <div className={styles.ButtonRow}>
         <button

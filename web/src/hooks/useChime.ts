@@ -37,7 +37,7 @@ function playTone(frequency: number, duration: number, volume = 0.3) {
   osc.stop(ctx.currentTime + duration)
 }
 
-function playReadyChime() {
+export function playReadyChime() {
   // Ascending two-note: "ready to record"
   playTone(660, 0.15, 0.25)
   setTimeout(() => playTone(880, 0.18, 0.25), 120)
@@ -56,10 +56,9 @@ export function playNotificationChime() {
   setTimeout(() => playTone(784, 0.15, 0.2), 160)
 }
 
-/** Brief two-note "wake-word detected" cue. */
+/** Backwards-compat alias — now reuses the standard ready chime. */
 export function playChime() {
-  playTone(880, 0.1, 0.22)
-  setTimeout(() => playTone(1175, 0.14, 0.22), 90)
+  playReadyChime()
 }
 
 export function playDisconnectChime() {

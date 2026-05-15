@@ -90,6 +90,10 @@ export function VoiceControls({
   wakeWordEnabled,
   wakeWordChime,
   wakeWordReloadKey,
+  micMode,
+  setMicMode,
+  returnToWakeAfterTurn,
+  setReturnToWakeAfterTurn,
   onAutoListenChange,
   onSpeakerMutedChange,
   onConnected,
@@ -120,6 +124,10 @@ export function VoiceControls({
           wakeWordEnabled={wakeWordEnabled}
           wakeWordChime={wakeWordChime}
           wakeWordReloadKey={wakeWordReloadKey}
+          micMode={micMode}
+          setMicMode={setMicMode}
+          returnToWakeAfterTurn={returnToWakeAfterTurn}
+          setReturnToWakeAfterTurn={setReturnToWakeAfterTurn}
           onAutoListenChange={onAutoListenChange}
           onSpeakerMutedChange={onSpeakerMutedChange}
           onInterrupt={onInterrupt}

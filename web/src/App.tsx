@@ -102,6 +102,13 @@ export default function App() {
   const { settings, updateSettings } = useSettings();
   const [wakeWordReloadKey, setWakeWordReloadKey] = useState(0);
   const bumpWakeWordReload = useCallback(() => setWakeWordReloadKey(k => k + 1), []);
+  // Lifted mic mode: source of truth shared with VoiceBar visualizer and
+  // useChime so chime gating reflects the actual user-listening state,
+  // not just autoListen which can be transiently toggled mid-turn.
+  const [micMode, setMicMode] = useState<import("./types/micMode").MicMode>(
+    settings.autoListen ? "active" : "muted",
+  );
+  const [returnToWakeAfterTurn, setReturnToWakeAfterTurn] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   // Stable callback so memoized children (e.g. Transcript's EntryRow) can
@@ -184,7 +191,7 @@ export default function App() {
 
   useSessionKeyboardNav(sortedSessions, relay.connectedSessionId, unreadSessions, connectAndClearUnread);
 
-  useChime(relay.agentStatus, settings.autoListen);
+  useChime(relay.agentStatus, micMode === "active");
   useTheme(settings.theme);
 
   // Play notification chime when a new online session appears
@@ -372,6 +379,10 @@ export default function App() {
                 wakeWordEnabled={settings.wakeWordEnabled}
                 wakeWordChime={settings.wakeWordChime}
                 wakeWordReloadKey={wakeWordReloadKey}
+                micMode={micMode}
+                setMicMode={setMicMode}
+                returnToWakeAfterTurn={returnToWakeAfterTurn}
+                setReturnToWakeAfterTurn={setReturnToWakeAfterTurn}
                 onAutoListenChange={(v) => updateSettings({ autoListen: v })}
                 onSpeakerMutedChange={(v) =>
                   updateSettings({ speakerMuted: v })

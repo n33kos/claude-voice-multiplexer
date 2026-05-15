@@ -6,6 +6,8 @@ export interface VoiceBarProps {
   isMicEnabled: boolean;
   analyserRef: MutableRefObject<AnalyserNode | null>;
   sessionColor?: RGB;
+  /** Override the recording color (e.g. yellow when in wake mode). */
+  micColorOverride?: RGB;
 }
 
 export interface RGB {
