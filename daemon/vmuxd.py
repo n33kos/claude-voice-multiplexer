@@ -797,7 +797,7 @@ class VmuxDaemon:
                 with open(UPDATE_LOG, "ab") as logf:
                     stamp = datetime.datetime.now().isoformat(timespec="seconds")
                     logf.write(
-                        f"\n=== {stamp} update {installed_version} → "
+                        f"\n=== {stamp} update {installed_plugin_version} → "
                         f"{latest_version}: building web ===\n".encode()
                     )
                     logf.flush()
