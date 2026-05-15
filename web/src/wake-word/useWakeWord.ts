@@ -9,7 +9,7 @@
 //   - Surfaces worker heartbeats so the UI can show a live indicator.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { loadTemplates, saveTemplates, clearTemplates, updateUserThreshold } from './db'
+import { loadTemplates, saveTemplates, clearTemplates } from './db'
 import type { WakeWordRecord } from './db'
 import { buildEnrollment, resampleTo16k } from './enroll'
 
