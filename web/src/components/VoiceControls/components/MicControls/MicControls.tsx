@@ -65,7 +65,10 @@ export function MicControls({
   });
 
   // Re-read templates whenever the parent bumps the key (e.g. after enrollment).
-  useEffect(() => { void wake.reload(); }, [wakeWordReloadKey, wake]);
+  // IMPORTANT: depend only on the stable `reload` ref, not on `wake` itself —
+  // `wake` is a fresh object each render and would loop the effect.
+  const wakeReload = wake.reload;
+  useEffect(() => { void wakeReload(); }, [wakeWordReloadKey, wakeReload]);
 
   // Session-colored overrides for thinking/speaking states
   const sessionPillStyle = useMemo(() => {

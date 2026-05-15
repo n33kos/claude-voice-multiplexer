@@ -43,8 +43,8 @@ export interface UseWakeWordReturn {
 export function useWakeWord(opts: UseWakeWordOptions): UseWakeWordReturn {
   const { enabled, active, suspend, onMatch } = opts
   const [status, setStatus] = useState<Status>('idle')
-  const [lastDistance, setLastDistance] = useState<number | null>(null)
-  const [lastHeartbeat, setLastHeartbeat] = useState<number | null>(null)
+  const lastDistance: number | null = null
+  const lastHeartbeat: number | null = null
   const [record, setRecord] = useState<WakeWordRecord | null>(null)
 
   const workerRef = useRef<Worker | null>(null)
@@ -119,8 +119,9 @@ export function useWakeWord(opts: UseWakeWordOptions): UseWakeWordReturn {
         worker.onmessage = (e: MessageEvent) => {
           const m = e.data as { type: string; distance?: number }
           if (m.type === 'worker-started') { console.log('[wake-word] worker started'); setStatus('listening') }
-          if (m.type === 'heartbeat') setLastHeartbeat(Date.now())
-          if (m.type === 'score' && typeof m.distance === 'number') setLastDistance(m.distance)
+          // heartbeat / score events would re-render MicControls every tick;
+          // we deliberately don't propagate them to React state here. The
+          // worker logs to console.
           if (m.type === 'match') {
             console.log('[wake-word] MATCH on main thread', m)
             onMatchRef.current?.()
