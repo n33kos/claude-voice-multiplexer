@@ -75,7 +75,9 @@ def cmd_status():
     if not _ok(r):
         return
     version = r.get("version", "unknown")
-    print(f"vmuxd v{version} (pid {r.get('daemon_pid', '?')})")
+    plugin_version = r.get("plugin_version", "unknown")
+    print(f"vmuxd       v{version} (pid {r.get('daemon_pid', '?')})")
+    print(f"vmux plugin v{plugin_version}")
     print()
     print("Services:")
     for name, status in r.get("services", {}).items():

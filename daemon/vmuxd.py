@@ -580,6 +580,7 @@ class VmuxDaemon:
             "ok": True,
             "daemon_pid": os.getpid(),
             "version": _read_installed_version(),
+            "plugin_version": _read_installed_plugin_version(),
             "services": services,
             "sessions": sessions,
         }
