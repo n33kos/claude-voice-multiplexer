@@ -503,7 +503,7 @@ function renderEntry(
               remarkPlugins={[remarkGfm]}
               urlTransform={(url) => {
                 const trimmed = (url || "").trim().toLowerCase();
-                if (/^(https?:|mailto:|tel:|vscode:|#|\/|\.\/|\.\.\/)/.test(trimmed)) {
+                if (/^(https?:|data:image\/|mailto:|tel:|vscode:|#|\/|\.\/|\.\.\/)/.test(trimmed)) {
                   return url;
                 }
                 return "";
