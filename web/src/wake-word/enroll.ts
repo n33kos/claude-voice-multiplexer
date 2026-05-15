@@ -81,10 +81,9 @@ export function buildEnrollment(
   }
   const worst = Math.max(...distances)
   const mean = distances.reduce((a, b) => a + b, 0) / distances.length
-  // Slack factor needs to allow for runtime-vs-enrollment variability
-  // (different position in the rolling window, different background noise).
-  // Empirically 2.0× worst-intra works better than 1.3× as a starting point.
-  const threshold = Math.max(worst * 2.0, mean * 2.5, 8)
+  // Tight enough to reject road noise, loose enough to accept a real
+  // utterance that scored ~0.8× worst-intra in field tests.
+  const threshold = Math.max(worst * 1.15, mean * 1.4, 18)
   console.log('[enroll] intra-template distances:', distances.map(d => d.toFixed(2)),
     'threshold:', threshold.toFixed(2))
   return { templates, threshold, numCoeffs: extractor.cfg.numCoeffs }
