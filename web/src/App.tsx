@@ -20,6 +20,7 @@ import { Header } from "./components/Header/Header";
 import { PairScreen } from "./components/PairScreen/PairScreen";
 import { TerminalOverlay } from "./components/TerminalOverlay/TerminalOverlay";
 import { ContextBar } from "./components/ContextBar/ContextBar";
+import { TaskListPanel } from "./components/TaskListPanel/TaskListPanel";
 import { useContextUsage } from "./hooks/useContextUsage";
 import styles from "./App.module.scss";
 
@@ -385,6 +386,10 @@ export default function App() {
               />
             </Suspense>
           )}
+
+        {relay.connectedSessionId && relay.tasks.length > 0 && (
+          <TaskListPanel tasks={relay.tasks} />
+        )}
 
         {settings.showContextBar && (
           <ContextBar

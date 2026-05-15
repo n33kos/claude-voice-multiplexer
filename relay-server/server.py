@@ -213,6 +213,12 @@ MAX_TRANSCRIPT_ENTRY_SIZE = 50_000  # Truncate individual entries larger than 50
 _transcript_buffers: dict[str, list[dict]] = {}  # session_id → [entry, ...]
 _transcript_seq: dict[str, int] = {}  # session_id → next sequence number
 
+# Per-session task lists (Claude's TaskCreate/TaskUpdate tool state mirrored
+# via the TaskCreated / TaskUpdate hooks).  Keyed by session_id then task_id.
+# Each entry: {task_id, subject, description, status, teammate, created_at,
+# updated_at}.  Status is one of "pending" / "in_progress" / "completed".
+_task_lists: dict[str, dict[str, dict]] = {}
+
 
 # --- Auth helpers ---
 
@@ -603,6 +609,13 @@ async def _memory_cleanup_loop():
             for sid in stale_transcript_ids:
                 _transcript_buffers.pop(sid, None)
                 _transcript_seq.pop(sid, None)
+
+            stale_task_ids = [
+                sid for sid in _task_lists
+                if sid not in active_session_ids
+            ]
+            for sid in stale_task_ids:
+                _task_lists.pop(sid, None)
 
             if stale_transcript_ids:
                 print(f"[mem-cleanup] Removed {len(stale_transcript_ids)} stale transcript buffer(s)")
@@ -1350,6 +1363,122 @@ async def notify_from_hook(session_id: str, request: Request):
     return JSONResponse({"ok": True})
 
 
+def _task_list_snapshot(session_id: str) -> list[dict]:
+    """Return tasks for a session as an ordered list (creation order)."""
+    tasks = _task_lists.get(session_id) or {}
+    return sorted(tasks.values(), key=lambda t: t.get("created_at", 0))
+
+
+async def _broadcast_task_list(session_id: str) -> None:
+    """Broadcast the current task list for a session to all WS clients."""
+    msg = json.dumps({
+        "type": "task_list",
+        "session_id": session_id,
+        "tasks": _task_list_snapshot(session_id),
+        "ts": time.time(),
+    })
+    for client_ws in list(_clients.values()):
+        try:
+            await client_ws.send_text(msg)
+        except Exception:
+            pass
+
+
+@app.post("/api/sessions/{session_id}/task-created")
+async def task_created_from_hook(session_id: str, request: Request):
+    """Record a new task from the TaskCreated hook and broadcast the list.
+
+    Body: { task_id, subject, description, teammate, status }.
+    Idempotent on task_id — if the task already exists, this just refreshes
+    its subject/description and broadcasts.
+    """
+    _require_auth(request)
+    body = await request.json()
+    task_id = (body.get("task_id") or "").strip()
+    if not task_id:
+        return JSONResponse({"ok": False, "error": "task_id required"}, status_code=400)
+    subject = (body.get("subject") or "").strip()
+    description = (body.get("description") or "").strip()
+    teammate = (body.get("teammate") or "").strip() or None
+    status = (body.get("status") or "pending").strip() or "pending"
+    if status not in ("pending", "in_progress", "completed"):
+        status = "pending"
+
+    now = time.time()
+    tasks = _task_lists.setdefault(session_id, {})
+    existing = tasks.get(task_id)
+    if existing:
+        existing.update({
+            "subject": subject or existing.get("subject", ""),
+            "description": description or existing.get("description", ""),
+            "teammate": teammate or existing.get("teammate"),
+            "updated_at": now,
+        })
+    else:
+        tasks[task_id] = {
+            "task_id": task_id,
+            "subject": subject,
+            "description": description,
+            "teammate": teammate,
+            "status": status,
+            "created_at": now,
+            "updated_at": now,
+        }
+    await _broadcast_task_list(session_id)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/sessions/{session_id}/task-update")
+async def task_update_from_hook(session_id: str, request: Request):
+    """Update a task's status from the TaskUpdate hook and broadcast.
+
+    Body: { task_id, status, subject, teammate }.  Status of "deleted"
+    removes the task from the list.
+    """
+    _require_auth(request)
+    body = await request.json()
+    task_id = (body.get("task_id") or "").strip()
+    if not task_id:
+        return JSONResponse({"ok": False, "error": "task_id required"}, status_code=400)
+    status = (body.get("status") or "completed").strip() or "completed"
+    subject = (body.get("subject") or "").strip()
+    teammate = (body.get("teammate") or "").strip() or None
+
+    tasks = _task_lists.setdefault(session_id, {})
+
+    if status == "deleted":
+        tasks.pop(task_id, None)
+        await _broadcast_task_list(session_id)
+        return JSONResponse({"ok": True})
+
+    if status not in ("pending", "in_progress", "completed"):
+        status = "completed"
+
+    now = time.time()
+    existing = tasks.get(task_id)
+    if existing:
+        existing["status"] = status
+        existing["updated_at"] = now
+        if subject:
+            existing["subject"] = subject
+        if teammate:
+            existing["teammate"] = teammate
+    else:
+        # Task was never seen via TaskCreated (e.g. hook missed, or this is
+        # a stale id).  Synthesize a row so the UI still reflects the update.
+        tasks[task_id] = {
+            "task_id": task_id,
+            "subject": subject,
+            "description": "",
+            "teammate": teammate,
+            "status": status,
+            "created_at": now,
+            "updated_at": now,
+        }
+    await _broadcast_task_list(session_id)
+    return JSONResponse({"ok": True})
+
+
 @app.post("/api/sessions/{session_id}/permission-request")
 async def permission_request_from_hook(session_id: str, request: Request):
     """Broadcast a permission-request card to web clients.
@@ -1801,6 +1930,16 @@ async def client_ws(ws: WebSocket):
                         "state": status.get("state", "idle"),
                         "activity": status.get("activity"),
                         "timestamp": time.time(),
+                    }))
+
+                # Send current task list snapshot so reconnecting clients
+                # see what Claude is currently working on.
+                if success and _task_lists.get(session_id):
+                    await ws.send_text(json.dumps({
+                        "type": "task_list",
+                        "session_id": session_id,
+                        "tasks": _task_list_snapshot(session_id),
+                        "ts": time.time(),
                     }))
 
                 # Send buffered transcripts so reconnecting clients can catch up
