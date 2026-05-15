@@ -734,7 +734,13 @@ class VmuxDaemon:
         logger.info(f"[update] latest in cache: {latest_version} (dir={latest_dir.name})")
 
         if not _is_newer(latest_version, installed_plugin_version):
-            return {"ok": True, "updated": False, "current": installed_plugin_version, "latest": latest_version}
+            return {
+                "ok": True,
+                "updated": False,
+                "current": installed_plugin_version,
+                "current_daemon": running_daemon_version,
+                "latest": latest_version,
+            }
 
         # Capture the cache's daemon version so we can decide later whether
         # the daemon binary actually changed (and therefore needs a full

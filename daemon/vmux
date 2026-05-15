@@ -265,9 +265,17 @@ def cmd_update():
     if not _ok(r):
         return
     if r.get("updated"):
-        print(f"Updated to version {r.get('version')}. Daemon will restart via launchd.")
+        plugin_v = r.get("version", "?")
+        daemon_v = r.get("daemon_version", "?")
+        restarted = r.get("daemon_restarted")
+        print(f"Updated plugin → v{plugin_v}, daemon → v{daemon_v}.")
+        print(f"  ({'restarting daemon' if restarted else 'services bounced'})")
     else:
-        print(f"Up to date ({r.get('current', '?')}). Latest in cache: {r.get('latest', '?')}")
+        plugin_v = r.get("current", "?")
+        daemon_v = r.get("current_daemon", "?")
+        latest = r.get("latest", "?")
+        print(f"Up to date — plugin v{plugin_v}, daemon v{daemon_v}.")
+        print(f"  Latest plugin in cache: v{latest}")
 
 
 def cmd_shutdown():
