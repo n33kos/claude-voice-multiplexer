@@ -294,7 +294,7 @@ def _get_ws_device(ws: WebSocket) -> Optional[dict]:
     return None
 
 
-async def _notify_client_status(session_id: str, state: str, activity: Optional[str] = None, *, disable_auto_listen: bool = False):
+async def _notify_client_status(session_id: str, state: str, activity: Optional[str] = None, *, disable_auto_listen: bool = False, agent_id: str = "", agent_type: str = ""):
     """Send agent status update to all web clients connected to a session."""
     session = await registry.get(session_id)
     if session and session.connected_clients:
@@ -306,6 +306,10 @@ async def _notify_client_status(session_id: str, state: str, activity: Optional[
         }
         if disable_auto_listen:
             payload["disable_auto_listen"] = True
+        if agent_id:
+            payload["agent_id"] = agent_id
+        if agent_type:
+            payload["agent_type"] = agent_type
         msg = json.dumps(payload)
         for client_id in list(session.connected_clients):
             client_ws = _clients.get(client_id)
@@ -354,6 +358,8 @@ async def _notify_client_transcript(session_id: str, speaker: str, text: str, **
             _transcript_buffers[session_id] = buf[-MAX_TRANSCRIPT_BUFFER:]
 
     msg = json.dumps(entry)
+    if extra.get("agent_id") or extra.get("kind") or speaker == "activity":
+        print(f"[DEBUG-bcast] speaker={speaker} agent_id={extra.get('agent_id')!r} kind={extra.get('kind')!r} text={text[:80]!r}", flush=True)
     for client_ws in list(_clients.values()):
         try:
             await client_ws.send_text(msg)
@@ -1328,14 +1334,21 @@ async def activity_from_hook(session_id: str, request: Request):
     (and anywhere else with the daemon secret).  Used by the PreToolUse
     hook to surface what Claude is about to do — "Running Bash", "Reading
     file", etc. — as activity badges in the web UI.  Silent (no TTS).
+
+    When agent_id is supplied (tool firing from inside a subagent), the
+    activity is also written to the transcript as a speaker="activity"
+    entry so the web UI can group it under the subagent bubble. Parent
+    tool calls remain status-only (no transcript noise).
     """
     _require_auth(request)
     body = await request.json()
     activity = (body.get("activity") or "").strip()
     if not activity:
         return JSONResponse({"ok": False, "error": "activity required"}, status_code=400)
+    agent_id = (body.get("agent_id") or "").strip()
+    agent_type = (body.get("agent_type") or "").strip()
     if _agent:
-        _spawn_background(_agent.handle_status_update(session_id, activity))
+        _spawn_background(_agent.handle_status_update(session_id, activity, agent_id=agent_id, agent_type=agent_type))
     return JSONResponse({"ok": True})
 
 
@@ -1360,6 +1373,9 @@ async def notify_from_hook(session_id: str, request: Request):
         return JSONResponse({"ok": False, "error": "message required"}, status_code=400)
     source = (body.get("source") or "").strip()
     speak = bool(body.get("speak"))
+    agent_id = (body.get("agent_id") or "").strip()
+    agent_type = (body.get("agent_type") or "").strip()
+    kind = (body.get("kind") or "").strip()
 
     session = await registry.get(session_id)
     if not session:
@@ -1367,7 +1383,15 @@ async def notify_from_hook(session_id: str, request: Request):
 
     full_message = f"[{source}] {message}" if source else message
 
-    await _notify_client_transcript(session_id, "system", full_message)
+    extras = {}
+    if agent_id:
+        extras["agent_id"] = agent_id
+    if agent_type:
+        extras["agent_type"] = agent_type
+    if kind:
+        extras["kind"] = kind
+
+    await _notify_client_transcript(session_id, "system", full_message, **extras)
 
     if speak and _agent:
         _spawn_background(_agent.handle_claude_response(session_id, message))

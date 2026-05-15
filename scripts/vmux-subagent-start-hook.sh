@@ -21,18 +21,31 @@ fi
 DAEMON_SECRET=$(tr -d '[:space:]' < "$SECRET_FILE")
 
 input=$(cat)
-claude_session_id=$(echo "$input" | jq -r '.session_id // empty' 2>/dev/null)
-cwd=$(echo "$input" | jq -r '.cwd // empty' 2>/dev/null)
 agent_type=$(echo "$input" | jq -r '.agent_type // .subagent_type // empty' 2>/dev/null)
-if [ -z "$cwd" ]; then
-    exit 0
-fi
+
+# Skip spawn broadcast entirely. Reasons:
+#   1) An interleaving status entry (e.g. "Waiting for Claude...") frequently
+#      lands between this spawn and the subagent's first activity, breaking
+#      consecutive-agent_id grouping in the web UI.
+#   2) The user finds the spawn announcement redundant — the first activity
+#      arriving with agent_id already implies "subagent running."
+# The activity entries + SubagentStop entry alone are enough to form a clean
+# group. Keep this hook registered for future use but as a no-op for now.
+exit 0
 
 # Default label when agent_type missing.
 if [ -z "$agent_type" ] || [ "$agent_type" = "null" ]; then
     label="subagent"
 else
     label="$agent_type subagent"
+fi
+
+# Pick a short summary: prefer description, fall back to first ~80 chars of prompt.
+summary=""
+if [ -n "$description" ] && [ "$description" != "null" ]; then
+    summary="$description"
+elif [ -n "$prompt_text" ] && [ "$prompt_text" != "null" ]; then
+    summary=$(printf '%s' "$prompt_text" | head -c 100)
 fi
 
 # Map cwd → relay session_id (prefer workspace.project_dir from statusline).
@@ -44,9 +57,14 @@ if [ -f "$statusline_file" ]; then
 fi
 relay_session_id=$(printf '%s' "$session_cwd" | shasum -a 256 | awk '{print substr($1, 1, 12)}')
 
-message="Spawning ${label}."
+if [ -n "$summary" ]; then
+    message="Spawning ${label}: ${summary}"
+else
+    message="Spawning ${label}."
+fi
 payload=$(jq -n --arg message "$message" --arg source "$agent_type" \
-    '{message: $message, source: $source, speak: true}')
+    --arg agent_id "$agent_id" --arg agent_type "$agent_type" --arg kind "subagent_start" \
+    '{message: $message, source: $source, speak: true, agent_id: $agent_id, agent_type: $agent_type, kind: $kind}')
 
 curl -sS -X POST \
     -H "X-Daemon-Secret: $DAEMON_SECRET" \

@@ -625,7 +625,7 @@ function renderEntry(
           backgroundColor: `hsla(${hue}, 55%, 35%, 0.85)`,
         } : undefined}
       >
-        {entry.speaker === "claude" || entry.speaker === "user" ? (
+        {entry.speaker === "claude" ? (
           <div className={styles.Markdown}>
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}

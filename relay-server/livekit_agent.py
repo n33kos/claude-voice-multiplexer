@@ -703,7 +703,7 @@ class SessionRoom:
             if ok:
                 print(f"[room:{self.room_name}] Injected text to session '{session.name}'")
                 self._waiting_for_response = True
-                await self._notify_status("thinking", "Waiting for Claude...")
+                await self._notify_status("thinking")
             else:
                 print(f"[room:{self.room_name}] inject-text failed; session may not be registered")
         except Exception as e:
@@ -837,7 +837,7 @@ class SessionRoom:
                 await self._notify_status("thinking", self._current_activity)
             else:
                 self._pending_listening = None
-                await self._notify_status("thinking", "Waiting for Claude...")
+                await self._notify_status("thinking")
 
     async def handle_claude_listening(self):
         """Called when Claude's turn ends (Stop hook) — ready for next voice input."""
@@ -856,11 +856,11 @@ class SessionRoom:
         self._waiting_for_response = True
         await self._notify_status("thinking", "Processing text message...")
 
-    async def handle_status_update(self, activity: str):
+    async def handle_status_update(self, activity: str, *, agent_id: str = "", agent_type: str = ""):
         """Called when Claude sends a status_update with current activity."""
         self._last_status_update_at = time.time()
         self._current_activity = activity
-        await self._notify_status("thinking", activity=activity)
+        await self._notify_status("thinking", activity=activity, agent_id=agent_id, agent_type=agent_type)
 
     def get_current_status(self) -> dict:
         return {"state": self._current_state, "activity": self._current_activity}
@@ -894,14 +894,14 @@ class SessionRoom:
 
         return total_samples
 
-    async def _notify_status(self, state: str, activity: Optional[str] = None, *, disable_auto_listen: bool = False):
+    async def _notify_status(self, state: str, activity: Optional[str] = None, *, disable_auto_listen: bool = False, agent_id: str = "", agent_type: str = ""):
         """Notify connected client of agent status change."""
         self._current_state = state
         self._current_activity = activity
         if state == "idle":
             self._idle_entered_at = time.time()
         if self.notify_status_fn:
-            await self.notify_status_fn(self.session_id, state, activity, disable_auto_listen=disable_auto_listen)
+            await self.notify_status_fn(self.session_id, state, activity, disable_auto_listen=disable_auto_listen, agent_id=agent_id, agent_type=agent_type)
 
     def _schedule_error_recovery(self):
         """Schedule auto-recovery from error state to idle."""
@@ -974,10 +974,10 @@ class RelayAgent:
             await room.handle_text_message()
             print(f"[room:{room.room_name}] Text message from {caller}: {text[:50]}...")
 
-    async def handle_status_update(self, session_id: str, activity: str):
+    async def handle_status_update(self, session_id: str, activity: str, *, agent_id: str = "", agent_type: str = ""):
         room = self._rooms.get(session_id)
         if room:
-            await room.handle_status_update(activity)
+            await room.handle_status_update(activity, agent_id=agent_id, agent_type=agent_type)
 
     def get_current_status(self, session_id: str) -> dict:
         room = self._rooms.get(session_id)

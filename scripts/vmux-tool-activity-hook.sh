@@ -26,12 +26,21 @@ input=$(cat)
 tool_name=$(echo "$input" | jq -r '.tool_name // .tool // empty' 2>/dev/null)
 claude_session_id=$(echo "$input" | jq -r '.session_id // empty' 2>/dev/null)
 cwd=$(echo "$input" | jq -r '.cwd // empty' 2>/dev/null)
+agent_id=$(echo "$input" | jq -r '.agent_id // empty' 2>/dev/null)
+agent_type=$(echo "$input" | jq -r '.agent_type // empty' 2>/dev/null)
 if [ -z "$cwd" ] || [ -z "$tool_name" ]; then
     exit 0
 fi
 
 # AskUserQuestion has its own dedicated announcement hook.
 if [ "$tool_name" = "AskUserQuestion" ]; then
+    exit 0
+fi
+
+# Skip Agent / Task tool calls — the spawned subagent now produces a
+# full SubagentGroup with activities + completion summary, so an extra
+# "Agent" / "Running agent" parent-level activity is redundant noise.
+if [ "$tool_name" = "Agent" ] || [ "$tool_name" = "Task" ]; then
     exit 0
 fi
 
@@ -91,7 +100,8 @@ if [ -f "$statusline_file" ]; then
 fi
 relay_session_id=$(printf '%s' "$session_cwd" | shasum -a 256 | awk '{print substr($1, 1, 12)}')
 
-payload=$(jq -n --arg activity "$activity" '{activity: $activity}')
+payload=$(jq -n --arg activity "$activity" --arg agent_id "$agent_id" --arg agent_type "$agent_type" \
+    '{activity: $activity, agent_id: $agent_id, agent_type: $agent_type}')
 curl -sS -X POST \
     -H "X-Daemon-Secret: $DAEMON_SECRET" \
     -H "Content-Type: application/json" \

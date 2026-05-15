@@ -94,6 +94,9 @@ export interface TranscriptEntry {
   answered?: { optionIndex: number; label: string };
   permission?: PermissionRequest;
   permissionAnswered?: PermissionChoice;
+  agent_id?: string;
+  agent_type?: string;
+  kind?: string;
 }
 
 export type TaskStatus = "pending" | "in_progress" | "completed";
@@ -490,6 +493,9 @@ export function useRelay(authenticated: boolean = true) {
               ...(data.mime_type ? { mimeType: data.mime_type } : {}),
               ...(data.question ? { question: data.question as AskQuestion } : {}),
               ...(data.permission ? { permission: data.permission as PermissionRequest } : {}),
+              ...(data.agent_id ? { agent_id: data.agent_id } : {}),
+              ...(data.agent_type ? { agent_type: data.agent_type } : {}),
+              ...(data.kind ? { kind: data.kind } : {}),
             };
             return {
               ...s,
@@ -606,6 +612,8 @@ export function useRelay(authenticated: boolean = true) {
                 text: newActivity,
                 session_id: sessionId,
                 timestamp: Date.now(),
+                ...(data.agent_id ? { agent_id: data.agent_id as string } : {}),
+                ...(data.agent_type ? { agent_type: data.agent_type as string } : {}),
               };
               updated.transcripts = {
                 ...s.transcripts,
