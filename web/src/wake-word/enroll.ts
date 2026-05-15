@@ -70,20 +70,40 @@ export function buildEnrollment(
     const seq = cmn(extractor.sequence(trimmed))
     if (seq.length > 0) raw.push(seq)
   }
-  // Reject length-outliers (anything > 1.7× median or < 0.5× median).
-  // These are usually clips where the trimmer didn't catch leading or
-  // trailing silence and they poison the DTW grid.
+  // Step 1: drop length-outliers (>1.4× or <0.6× median). These are
+  // almost always trimmer misses; they poison DTW.
   const lens = raw.map(s => s.length).sort((a, b) => a - b)
-  const median = lens.length ? lens[Math.floor(lens.length / 2)] : 0
-  const templates = raw.filter(s =>
-    s.length <= median * 1.7 && s.length >= median * 0.5,
+  const medLen = lens.length ? lens[Math.floor(lens.length / 2)] : 0
+  let templates = raw.filter(s =>
+    s.length <= medLen * 1.4 && s.length >= medLen * 0.6,
   )
-  console.log('[enroll] kept', templates.length, 'of', raw.length,
-    'templates — frame counts:', templates.map(t => t.length),
-    '(median:', median, 'dropped:', raw.length - templates.length, ')')
+  console.log('[enroll] length filter — kept', templates.length, 'of', raw.length,
+    'frame counts:', templates.map(t => t.length), 'median:', medLen)
+
+  // Step 2: distance-outlier rejection. Compute each template's mean
+  // distance to the others; drop ones that are >1.5× the median mean.
+  if (templates.length >= 3) {
+    const meanDistTo = templates.map((tpl, i) => {
+      let sum = 0, n = 0
+      for (let j = 0; j < templates.length; j++) {
+        if (i === j) continue
+        const d = dtw(tpl, templates[j])
+        if (Number.isFinite(d)) { sum += d; n += 1 }
+      }
+      return n ? sum / n : Infinity
+    })
+    const sortedMeans = [...meanDistTo].sort((a, b) => a - b)
+    const medMean = sortedMeans[Math.floor(sortedMeans.length / 2)]
+    const before = templates.length
+    templates = templates.filter((_, i) => meanDistTo[i] <= medMean * 1.5)
+    console.log('[enroll] distance filter — dropped', before - templates.length,
+      '(mean dists:', meanDistTo.map(d => d.toFixed(2)), 'medMean:', medMean.toFixed(2), ')')
+  }
+
   if (templates.length < 2) {
     return { templates, threshold: 22, numCoeffs: extractor.cfg.numCoeffs }
   }
+
   const distances: number[] = []
   for (let i = 0; i < templates.length; i++) {
     for (let j = i + 1; j < templates.length; j++) {
@@ -96,8 +116,9 @@ export function buildEnrollment(
   }
   const worst = Math.max(...distances)
   const mean = distances.reduce((a, b) => a + b, 0) / distances.length
-  const threshold = Math.max(worst * 1.15, mean * 1.4, 18)
+  // Tighter slack now that outliers are gone.
+  const threshold = Math.max(worst * 1.1, mean * 1.25, 16)
   console.log('[enroll] intra-template distances:', distances.map(d => d.toFixed(2)),
-    'threshold:', threshold.toFixed(2))
+    'worst:', worst.toFixed(2), 'mean:', mean.toFixed(2), 'threshold:', threshold.toFixed(2))
   return { templates, threshold, numCoeffs: extractor.cfg.numCoeffs }
 }
