@@ -144,13 +144,15 @@
 
 .Completed {
   color: rgba(255, 255, 255, 0.45);
+}
+
+.Completed .Subject {
   text-decoration: line-through;
   text-decoration-color: rgba(255, 255, 255, 0.25);
 }
 
 .Completed .Icon {
   color: rgb(110, 200, 130);
-  text-decoration: none;
 }
 
 @keyframes spin {

@@ -55,6 +55,25 @@ export function TaskListPanel({ tasks }: Props) {
     }
   }, [tasks, dismissed]);
 
+  // Auto-collapse when every task is completed so a finished list stays out
+  // of the way.  Tracks the all-complete state across renders so a manual
+  // re-expand by the user (after auto-collapse fired) is preserved until a
+  // new task arrives and flips the state back to "not all complete".
+  const allCompleteRef = useRef(false);
+  useEffect(() => {
+    if (tasks.length === 0) {
+      allCompleteRef.current = false;
+      return;
+    }
+    const allComplete = tasks.every((t) => t.status === "completed");
+    if (allComplete && !allCompleteRef.current) {
+      setCollapsed(true);
+    } else if (!allComplete && allCompleteRef.current) {
+      setCollapsed(false);
+    }
+    allCompleteRef.current = allComplete;
+  }, [tasks]);
+
   const sorted = useMemo(
     () =>
       [...tasks].sort((a, b) => {
