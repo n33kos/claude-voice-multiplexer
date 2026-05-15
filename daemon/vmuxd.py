@@ -43,6 +43,12 @@ DAEMON_DIR = DATA_DIR / "daemon"
 DAEMON_SECRET_FILE = DATA_DIR / "daemon.secret"
 DAEMON_STATE_FILE = DATA_DIR / "daemon.state"
 VERSION_FILE = DAEMON_DIR / "VERSION"
+# Tracks the plugin version we installed assets from (UI, hooks, scripts).
+# Decoupled from daemon/VERSION on purpose — the plugin and the daemon
+# binary version independently, and the updater compares this file (not
+# daemon/VERSION) against the cache's plugin.json to decide whether
+# there's a new plugin to install.
+PLUGIN_VERSION_FILE = DATA_DIR / "PLUGIN_VERSION"
 
 # Plugin cache path (n33kos marketplace)
 PLUGIN_CACHE_DIR = Path.home() / ".claude" / "plugins" / "cache" / "n33kos" / "voice-multiplexer"
@@ -657,10 +663,52 @@ class VmuxDaemon:
         logger.warning("[update] graceful shutdown timed out — forcing exit")
         os._exit(0)
 
+    async def _restart_services_only(self):
+        """Bounce relay/kokoro/whisper/livekit without restarting the daemon.
+
+        Used when a plugin update lands but the daemon binary version
+        hasn't changed — the running daemon can stay up; only the child
+        services need to be torn down and respawned so they pick up the
+        new relay-server source and the new web/dist assets.
+        """
+        await asyncio.sleep(1.0)
+        if not self._service_manager:
+            return
+        logger.info("[update] bouncing child services (daemon stays up)")
+        try:
+            await self._service_manager.stop_all(timeout=8.0)
+        except Exception as e:
+            logger.warning(f"[update] stop_all during service bounce failed: {e}")
+        try:
+            await self._service_manager.start_all()
+            logger.info("[update] child services restarted")
+        except Exception as e:
+            logger.error(f"[update] start_all during service bounce failed: {e}")
+
     async def _cmd_update_if_newer(self) -> dict:
-        """Check plugin cache for newer version and apply if found."""
-        installed_version = _read_installed_version()
-        logger.info(f"[update] check: installed={installed_version}, cache={PLUGIN_CACHE_DIR}")
+        """Check plugin cache for a newer plugin and apply it.
+
+        Plugin version (.claude-plugin/plugin.json) and daemon version
+        (daemon/VERSION) are independent.  This routine:
+
+          1. Compares the cache's plugin.json version against the
+             installed plugin version (PLUGIN_VERSION_FILE) — not against
+             daemon/VERSION.  That decoupling lets a plugin update ship
+             without forcing a daemon version bump.
+          2. Reinstalls plugin assets (daemon source, relay source, web
+             dist) when newer.
+          3. Notes the daemon-binary version before and after copy.  If
+             the daemon binary actually changed, schedules a full daemon
+             restart so launchd respawns from disk.  Otherwise just
+             bounces the child services so they pick up new relay/UI
+             assets without taking the daemon down.
+        """
+        installed_plugin_version = _read_installed_plugin_version()
+        running_daemon_version = _read_installed_version()
+        logger.info(
+            f"[update] check: plugin={installed_plugin_version}, "
+            f"daemon={running_daemon_version}, cache={PLUGIN_CACHE_DIR}"
+        )
 
         if not PLUGIN_CACHE_DIR.exists():
             logger.info(f"[update] plugin cache dir not found")
@@ -684,10 +732,25 @@ class VmuxDaemon:
         latest_version, latest_dir = cache_versions[0]
         logger.info(f"[update] latest in cache: {latest_version} (dir={latest_dir.name})")
 
-        if not _is_newer(latest_version, installed_version):
-            return {"ok": True, "updated": False, "current": installed_version, "latest": latest_version}
+        if not _is_newer(latest_version, installed_plugin_version):
+            return {"ok": True, "updated": False, "current": installed_plugin_version, "latest": latest_version}
 
-        logger.info(f"[update] upgrading {installed_version} → {latest_version}")
+        # Capture the cache's daemon version so we can decide later whether
+        # the daemon binary actually changed (and therefore needs a full
+        # restart) vs only the plugin assets changed (services bounce is
+        # enough).
+        cache_daemon_version = ""
+        cache_daemon_version_file = latest_dir / "daemon" / "VERSION"
+        if cache_daemon_version_file.exists():
+            try:
+                cache_daemon_version = cache_daemon_version_file.read_text().strip()
+            except Exception:
+                pass
+
+        logger.info(
+            f"[update] upgrading plugin {installed_plugin_version} → {latest_version} "
+            f"(daemon: {running_daemon_version} → {cache_daemon_version or '?'})"
+        )
 
         src_daemon_dir = latest_dir / "daemon"
         if not src_daemon_dir.exists():
@@ -869,29 +932,38 @@ class VmuxDaemon:
                     except Exception as e:
                         logger.warning(f"[update] systemd unit update failed: {e}")
 
-            # 6. Verify — non-fatal.  A mismatch here almost always means the
-            #    plugin shipped with daemon/VERSION out of sync with
-            #    .claude-plugin/plugin.json (a release-process slip, not a
-            #    copy failure).  All the actual files have already been
-            #    replaced at this point, so we'd rather complete the restart
-            #    onto the new code than leave the user stranded on the old
-            #    version because of a metadata typo.  Log loudly and move on.
-            actual = _read_installed_version()
-            if actual != latest_version:
-                logger.warning(
-                    f"[update] version-file mismatch after copy: "
-                    f"daemon/VERSION={actual} but plugin.json={latest_version}. "
-                    f"Continuing — files are in place, restarting services."
-                )
+            # 6. Persist the new installed plugin version.  This is now the
+            #    source of truth for "what plugin did we install assets
+            #    from?" — independent of daemon/VERSION, which only moves
+            #    when the daemon binary itself changes.
+            _write_installed_plugin_version(latest_version)
 
-            logger.info(f"[update] complete: {installed_version} → {latest_version}")
-            # Schedule a full daemon restart so the new code is actually loaded
-            # AND all child services (relay/kokoro/whisper/livekit) are killed
-            # and respawned by the freshly-launched vmuxd from on-disk files.
-            # Detaches as a task so this function can return its success result
-            # before shutdown begins.
-            asyncio.create_task(self._restart_after_update())
-            return {"ok": True, "updated": True, "version": latest_version}
+            # 7. Pick a restart strategy.  If the daemon binary changed,
+            #    schedule a full daemon restart so launchd respawns from
+            #    on-disk files (the only way to load new daemon code).
+            #    Otherwise just bounce the child services so they pick up
+            #    the new relay source / web dist without taking the daemon
+            #    down — far less disruptive.  Either way the function
+            #    returns its result first so the IPC reply flushes before
+            #    anything restarts.
+            new_daemon_version = _read_installed_version()
+            daemon_changed = new_daemon_version != running_daemon_version
+            logger.info(
+                f"[update] complete: plugin {installed_plugin_version} → {latest_version}; "
+                f"daemon {running_daemon_version} → {new_daemon_version} "
+                f"({'restarting daemon' if daemon_changed else 'bouncing services only'})"
+            )
+            if daemon_changed:
+                asyncio.create_task(self._restart_after_update())
+            else:
+                asyncio.create_task(self._restart_services_only())
+            return {
+                "ok": True,
+                "updated": True,
+                "version": latest_version,
+                "daemon_version": new_daemon_version,
+                "daemon_restarted": daemon_changed,
+            }
         except Exception as e:
             logger.error(f"[update] failed: {e}")
             return {"ok": False, "error": str(e)}
@@ -1158,10 +1230,33 @@ def _detect_cache_version(cache_entry: Path) -> str:
 
 
 def _read_installed_version() -> str:
+    """Version of the installed daemon binary (daemon/VERSION)."""
     try:
         return VERSION_FILE.read_text().strip()
     except Exception:
         return "0.0.0"
+
+
+def _read_installed_plugin_version() -> str:
+    """Version of the installed plugin assets (UI, hooks, scripts).
+
+    Falls back to the installed daemon version once if PLUGIN_VERSION is
+    missing — that handles the one-time migration from the old scheme
+    where the two versions were assumed equal.  Subsequent updates write
+    PLUGIN_VERSION explicitly so they stay decoupled.
+    """
+    try:
+        return PLUGIN_VERSION_FILE.read_text().strip()
+    except Exception:
+        return _read_installed_version()
+
+
+def _write_installed_plugin_version(v: str) -> None:
+    try:
+        PLUGIN_VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PLUGIN_VERSION_FILE.write_text(v + "\n")
+    except Exception as e:
+        logger.warning(f"[update] failed to write PLUGIN_VERSION: {e}")
 
 
 def _parse_version(v: str) -> tuple:
