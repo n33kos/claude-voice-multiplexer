@@ -231,6 +231,112 @@ const EntryRow = memo(function EntryRow({
   return renderEntry(entry, isLatest, cwd, sessionId, hue, onAnswerQuestion, onAnswerPermission, onCaptureTerminal);
 });
 
+/**
+ * Group consecutive transcript entries that share an agent_id into a single
+ * subagent bubble. Entries with no agent_id pass through as singletons.
+ */
+type EntryGroup = {
+  agentId: string | null;
+  agentType: string | null;
+  entries: import("../../hooks/useRelay").TranscriptEntry[];
+  indices: number[];
+};
+
+function groupEntries(
+  entries: import("../../hooks/useRelay").TranscriptEntry[],
+  hidden: Set<number>,
+): EntryGroup[] {
+  const groups: EntryGroup[] = [];
+  let current: EntryGroup | null = null;
+  for (let i = 0; i < entries.length; i++) {
+    if (hidden.has(i)) continue;
+    const e = entries[i];
+    const id = e.agent_id || null;
+    if (id && current && current.agentId === id) {
+      current.entries.push(e);
+      current.indices.push(i);
+    } else {
+      current = {
+        agentId: id,
+        agentType: e.agent_type || null,
+        entries: [e],
+        indices: [i],
+      };
+      groups.push(current);
+    }
+  }
+  return groups;
+}
+
+type SubagentGroupProps = {
+  agentId: string;
+  agentType: string | null;
+  entries: import("../../hooks/useRelay").TranscriptEntry[];
+  indices: number[];
+  latestIndex: number;
+  cwd?: string;
+  sessionId: string | null | undefined;
+  hue: number | null;
+  onAnswerQuestion?: (sessionId: string, optionIndex: number, label: string, entryTimestamp: number, isFinal: boolean) => void;
+  onAnswerPermission?: (sessionId: string, choice: "allow" | "allow_always" | "deny") => void;
+  onCaptureTerminal?: () => void;
+};
+
+const SubagentGroup = memo(function SubagentGroup({
+  agentType,
+  entries,
+}: SubagentGroupProps) {
+  const startEntry = entries.find((e) => e.kind === "subagent_start");
+  const stopEntry = entries.find((e) => e.kind === "subagent_stop");
+  const activities = entries.filter((e) => e.speaker === "activity");
+  const isRunning = !stopEntry;
+  // Default expanded while running, collapsed after stop.
+  const [expanded, setExpanded] = useState<boolean>(isRunning);
+  useEffect(() => {
+    if (stopEntry) setExpanded(false);
+  }, [stopEntry]);
+
+  const headerText = startEntry?.text || `${agentType || "Subagent"} running`;
+  const summaryText = stopEntry?.text || `${activities.length} step${activities.length === 1 ? "" : "s"}`;
+
+  return (
+    <div className={styles.SubagentGroup}>
+      <button
+        type="button"
+        className={styles.SubagentGroupHeader}
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <svg
+          className={classNames(styles.SubagentChevron, {
+            [styles.SubagentChevronOpen]: expanded,
+          })}
+          viewBox="0 0 12 12"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path d="M4 2 L8 6 L4 10" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span className={styles.SubagentLabel}>{agentType || "Subagent"}</span>
+        <span className={styles.SubagentSummary}>{expanded ? headerText : summaryText}</span>
+        <span className={styles.SubagentCount}>{activities.length}</span>
+      </button>
+      {expanded && (
+        <div className={styles.SubagentBody}>
+          {activities.map((a, i) => (
+            <div key={i} className={styles.SubagentActivity}>
+              {a.text}
+            </div>
+          ))}
+        </div>
+      )}
+      {stopEntry && expanded && (
+        <div className={styles.SubagentFooter}>{stopEntry.text}</div>
+      )}
+    </div>
+  );
+});
+
 export function Transcript({ entries, tasks, prs, cwd, sessionId, hueOverride, onSendText, onAnswerQuestion, onAnswerPermission, onCaptureTerminal }: TranscriptProps & { onCaptureTerminal?: () => void }) {
   const endRef = useRef<HTMLDivElement>(null);
   const hue = hueOverride != null ? hueOverride : (sessionId ? sessionHue(sessionId) : null);
@@ -289,21 +395,43 @@ export function Transcript({ entries, tasks, prs, cwd, sessionId, hueOverride, o
     <div data-component="Transcript" className={styles.Root}>
       <div className={styles.GradientFade} />
       <div className={styles.ScrollContainer}>
-        {entries.map((entry, i) =>
-          hiddenEntries.has(i) ? null : (
-            <EntryRow
-              key={i}
-              entry={entry}
-              isLatest={i === entries.length - 1}
-              cwd={cwd}
-              sessionId={sessionId}
-              hue={hue}
-              onAnswerQuestion={onAnswerQuestion}
-              onAnswerPermission={onAnswerPermission}
-              onCaptureTerminal={onCaptureTerminal}
-            />
-          ),
-        )}
+        {groupEntries(entries, hiddenEntries).map((g, gi) => {
+          if (g.agentId) {
+            return (
+              <SubagentGroup
+                key={`sub-${gi}-${g.agentId}`}
+                agentId={g.agentId}
+                agentType={g.agentType}
+                entries={g.entries}
+                indices={g.indices}
+                latestIndex={entries.length - 1}
+                cwd={cwd}
+                sessionId={sessionId}
+                hue={hue}
+                onAnswerQuestion={onAnswerQuestion}
+                onAnswerPermission={onAnswerPermission}
+                onCaptureTerminal={onCaptureTerminal}
+              />
+            );
+          }
+          // Ungrouped — render each entry as before.
+          return g.entries.map((entry, k) => {
+            const i = g.indices[k];
+            return (
+              <EntryRow
+                key={i}
+                entry={entry}
+                isLatest={i === entries.length - 1}
+                cwd={cwd}
+                sessionId={sessionId}
+                hue={hue}
+                onAnswerQuestion={onAnswerQuestion}
+                onAnswerPermission={onAnswerPermission}
+                onCaptureTerminal={onCaptureTerminal}
+              />
+            );
+          });
+        })}
         {taskPanel}
         {prPanel}
         <div ref={endRef} />
@@ -497,7 +625,7 @@ function renderEntry(
           backgroundColor: `hsla(${hue}, 55%, 35%, 0.85)`,
         } : undefined}
       >
-        {entry.speaker === "claude" ? (
+        {entry.speaker === "claude" || entry.speaker === "user" ? (
           <div className={styles.Markdown}>
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
