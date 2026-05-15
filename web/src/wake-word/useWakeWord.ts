@@ -89,7 +89,11 @@ export function useWakeWord(opts: UseWakeWordOptions): UseWakeWordReturn {
   useEffect(() => {
     let cancelled = false
     async function start() {
-      if (!enabled || !active || !record || record.templates.length === 0) return
+      if (!enabled || !active || !record || record.templates.length === 0) {
+        console.log('[wake-word] start skipped — enabled:', enabled, 'active:', active, 'hasRecord:', !!record)
+        return
+      }
+      console.log('[wake-word] starting — templates:', record.templates.length, 'threshold:', record.threshold.toFixed(2))
       setStatus('starting')
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -114,10 +118,13 @@ export function useWakeWord(opts: UseWakeWordOptions): UseWakeWordReturn {
         workerRef.current = worker
         worker.onmessage = (e: MessageEvent) => {
           const m = e.data as { type: string; distance?: number }
-          if (m.type === 'worker-started') setStatus('listening')
+          if (m.type === 'worker-started') { console.log('[wake-word] worker started'); setStatus('listening') }
           if (m.type === 'heartbeat') setLastHeartbeat(Date.now())
           if (m.type === 'score' && typeof m.distance === 'number') setLastDistance(m.distance)
-          if (m.type === 'match') onMatchRef.current?.()
+          if (m.type === 'match') {
+            console.log('[wake-word] MATCH on main thread', m)
+            onMatchRef.current?.()
+          }
         }
         worker.postMessage({
           type: 'init',

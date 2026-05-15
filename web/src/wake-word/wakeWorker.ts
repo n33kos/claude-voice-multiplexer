@@ -11,13 +11,15 @@
 
 import { MFCCExtractor, cmn, DEFAULT_MFCC } from './mfcc'
 import { dtw } from './dtw'
+import { trimSilence } from './enroll'
 
 const SR = 16000
 const WINDOW_SEC = 1.5
 const WINDOW_SAMPLES = Math.floor(SR * WINDOW_SEC)
 const SLIDE_INTERVAL_MS = 200 // re-evaluate match this often
-const VAD_RMS_FLOOR = 0.012   // crude energy gate; only run DTW on voiced windows
+const VAD_RMS_FLOOR = 0.004   // crude energy gate; only run DTW on voiced windows
 const HEARTBEAT_MS = 2000
+const LOG = true
 
 type Init = {
   type: 'init'
@@ -61,28 +63,39 @@ function rms(x: Float32Array): number {
   return Math.sqrt(s / Math.max(1, x.length))
 }
 
+let frameCount = 0
 function tryMatch() {
   if (suspended) return
   if (templates.length === 0) return
-  if (buf.length < WINDOW_SAMPLES * 0.7) return
+  if (buf.length < WINDOW_SAMPLES * 0.5) return
   const now = performance.now()
   if (now - lastEval < SLIDE_INTERVAL_MS) return
-  if (now - lastMatch < 1500) return // debounce after a fire
+  if (now - lastMatch < 1500) return
   lastEval = now
-  if (rms(buf) < VAD_RMS_FLOOR) return
+  const energy = rms(buf)
+  if (energy < VAD_RMS_FLOOR) {
+    if (LOG && frameCount % 25 === 0) console.log('[wake-worker] silent rms=', energy.toFixed(4))
+    frameCount++
+    return
+  }
 
-  const seq = cmn(extractor.sequence(buf))
+  const trimmed = trimSilence(buf, SR)
+  if (trimmed.length < SR * 0.3) return // too short to be a phrase
+  const seq = cmn(extractor.sequence(trimmed))
   if (seq.length === 0) return
   let best = Infinity
   for (const t of templates) {
     const d = dtw(seq, t)
     if (d < best) best = d
   }
+  if (LOG) console.log('[wake-worker] score=', best.toFixed(3), 'threshold=', threshold.toFixed(3), 'rms=', energy.toFixed(4))
   post('score', { distance: best, threshold })
   if (best < threshold) {
     lastMatch = now
+    if (LOG) console.log('[wake-worker] MATCH 🎯', { distance: best, threshold })
     post('match', { distance: best, threshold })
   }
+  frameCount++
 }
 
 self.onmessage = (e: MessageEvent<In>) => {
@@ -90,6 +103,9 @@ self.onmessage = (e: MessageEvent<In>) => {
   if (msg.type === 'init') {
     templates = msg.templates
     threshold = msg.threshold
+    if (LOG) console.log('[wake-worker] init — templates:', templates.length,
+      'threshold:', threshold.toFixed(3),
+      'tpl frames:', templates.map(t => t.length))
     if (heartbeat) clearInterval(heartbeat)
     heartbeat = setInterval(() => post('heartbeat'), HEARTBEAT_MS)
     post('worker-started')

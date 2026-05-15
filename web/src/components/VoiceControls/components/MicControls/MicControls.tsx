@@ -186,20 +186,24 @@ export function MicControls({
     }
     if (agentState === "idle") {
       if (wakeWordEnabled && wake.hasTemplates) {
-        // Tri-state cycle: active → muted → wake → active.
-        if (autoListen && !wakeWordMode) {
-          // active → muted
-          await room.localParticipant.setMicrophoneEnabled(false);
-          onAutoListenChange(false);
-          setWakeWordMode(false);
-        } else if (!autoListen && !wakeWordMode) {
-          // muted → wake
+        // Cycle: Muted (gray) → Wake (yellow) → Active (red) → Muted.
+        // Whatever the user picks sticks until they click again.
+        if (!autoListen && !wakeWordMode) {
+          // Muted → Wake
+          console.log('[mic] muted → wake');
           setWakeWordMode(true);
-        } else {
-          // wake → active
+        } else if (wakeWordMode) {
+          // Wake → Active
+          console.log('[mic] wake → active');
           setWakeWordMode(false);
           await room.localParticipant.setMicrophoneEnabled(true);
           onAutoListenChange(true);
+        } else {
+          // Active → Muted
+          console.log('[mic] active → muted');
+          await room.localParticipant.setMicrophoneEnabled(false);
+          onAutoListenChange(false);
+          setWakeWordMode(false);
         }
       } else {
         const next = !isMicrophoneEnabled;

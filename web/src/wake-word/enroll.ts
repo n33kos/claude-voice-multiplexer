@@ -71,16 +71,21 @@ export function buildEnrollment(
     if (seq.length > 0) templates.push(seq)
   }
   if (templates.length < 2) {
-    // not enough good clips for self-tuning — fall back to a soft default
-    return { templates, threshold: 14, numCoeffs: extractor.cfg.numCoeffs }
+    return { templates, threshold: 20, numCoeffs: extractor.cfg.numCoeffs }
   }
-  let worst = 0
+  const distances: number[] = []
   for (let i = 0; i < templates.length; i++) {
     for (let j = i + 1; j < templates.length; j++) {
-      const d = dtw(templates[i], templates[j])
-      if (d > worst) worst = d
+      distances.push(dtw(templates[i], templates[j]))
     }
   }
-  const threshold = worst * 1.3
+  const worst = Math.max(...distances)
+  const mean = distances.reduce((a, b) => a + b, 0) / distances.length
+  // Slack factor needs to allow for runtime-vs-enrollment variability
+  // (different position in the rolling window, different background noise).
+  // Empirically 2.0× worst-intra works better than 1.3× as a starting point.
+  const threshold = Math.max(worst * 2.0, mean * 2.5, 8)
+  console.log('[enroll] intra-template distances:', distances.map(d => d.toFixed(2)),
+    'threshold:', threshold.toFixed(2))
   return { templates, threshold, numCoeffs: extractor.cfg.numCoeffs }
 }
