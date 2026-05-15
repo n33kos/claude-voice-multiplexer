@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { TaskEntry, TaskStatus } from "../../hooks/useRelay";
 import styles from "./TaskListPanel.module.scss";
 
@@ -38,6 +38,22 @@ function statusIcon(status: TaskStatus): string {
 
 export function TaskListPanel({ tasks }: Props) {
   const [collapsed, setCollapsed] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+
+  // Un-dismiss whenever a brand-new task_id shows up.  Tracks the set of
+  // task_ids seen at dismiss time; any new id resets the flag so the panel
+  // re-appears for fresh work.
+  const dismissedIdsRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!dismissed) return;
+    const seen = dismissedIdsRef.current;
+    if (!seen) return;
+    const hasNew = tasks.some((t) => !seen.has(t.task_id));
+    if (hasNew) {
+      setDismissed(false);
+      dismissedIdsRef.current = null;
+    }
+  }, [tasks, dismissed]);
 
   const sorted = useMemo(
     () =>
@@ -55,6 +71,7 @@ export function TaskListPanel({ tasks }: Props) {
   );
 
   if (tasks.length === 0) return null;
+  if (dismissed) return null;
 
   const inProgressTask = tasks.find((t) => t.status === "in_progress");
   const headerLabel = inProgressTask
@@ -79,8 +96,34 @@ export function TaskListPanel({ tasks }: Props) {
           <span>Tasks</span>
           <span className={styles.Count}>· {headerLabel}</span>
         </span>
-        <span className={styles.Count}>
-          {tasks.filter((t) => t.status === "completed").length}/{tasks.length}
+        <span className={styles.HeaderRight}>
+          <span className={styles.Count}>
+            {tasks.filter((t) => t.status === "completed").length}/{tasks.length}
+          </span>
+          {!collapsed && (
+            <span
+              role="button"
+              tabIndex={0}
+              className={styles.DismissButton}
+              aria-label="Dismiss task list"
+              title="Dismiss"
+              onClick={(e) => {
+                e.stopPropagation();
+                dismissedIdsRef.current = new Set(tasks.map((t) => t.task_id));
+                setDismissed(true);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  dismissedIdsRef.current = new Set(tasks.map((t) => t.task_id));
+                  setDismissed(true);
+                }
+              }}
+            >
+              ×
+            </span>
+          )}
         </span>
       </button>
       {!collapsed && (

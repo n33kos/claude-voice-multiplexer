@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { sessionHue } from "../../utils/sessionHue";
 import type { TranscriptProps } from "./Transcript.types";
+import { TaskListPanel } from "../TaskListPanel/TaskListPanel";
 import styles from "./Transcript.module.scss";
 import "highlight.js/styles/github-dark.min.css";
 
@@ -229,7 +230,7 @@ const EntryRow = memo(function EntryRow({
   return renderEntry(entry, isLatest, cwd, sessionId, hue, onAnswerQuestion, onAnswerPermission, onCaptureTerminal);
 });
 
-export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, onAnswerQuestion, onAnswerPermission, onCaptureTerminal }: TranscriptProps & { onCaptureTerminal?: () => void }) {
+export function Transcript({ entries, tasks, cwd, sessionId, hueOverride, onSendText, onAnswerQuestion, onAnswerPermission, onCaptureTerminal }: TranscriptProps & { onCaptureTerminal?: () => void }) {
   const endRef = useRef<HTMLDivElement>(null);
   const hue = hueOverride != null ? hueOverride : (sessionId ? sessionHue(sessionId) : null);
   const sendButtonStyle = hue !== null ? { backgroundColor: `hsla(${hue}, 55%, 40%, 0.9)` } : undefined;
@@ -265,12 +266,16 @@ export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, o
     return hidden;
   }, [entries]);
 
+  const taskPanel =
+    tasks && tasks.length > 0 ? <TaskListPanel tasks={tasks} /> : null;
+
   if (entries.length === 0) {
     return (
       <div data-component="Transcript" className={styles.Root}>
         <div className={styles.EmptyState}>
           Conversation will appear here
         </div>
+        {taskPanel}
         {onSendText && <MessageInputBar onSendText={onSendText} sendButtonStyle={sendButtonStyle} />}
       </div>
     );
@@ -295,6 +300,7 @@ export function Transcript({ entries, cwd, sessionId, hueOverride, onSendText, o
             />
           ),
         )}
+        {taskPanel}
         <div ref={endRef} />
       </div>
       {onSendText && <MessageInputBar onSendText={onSendText} sendButtonStyle={sendButtonStyle} />}

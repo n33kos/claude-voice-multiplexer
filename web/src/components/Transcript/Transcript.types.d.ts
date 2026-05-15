@@ -1,7 +1,8 @@
-import type { TranscriptEntry, PermissionChoice } from "../../hooks/useRelay";
+import type { TranscriptEntry, PermissionChoice, TaskEntry } from "../../hooks/useRelay";
 
 export interface TranscriptProps {
   entries: TranscriptEntry[];
+  tasks?: TaskEntry[];
   cwd?: string;
   sessionId?: string | null;
   hueOverride?: number;
