@@ -33,22 +33,20 @@ class FencedCodeBlocks(unittest.TestCase):
 
 
 class InlineCode(unittest.TestCase):
-    def test_inline_replaced_with_placeholder(self):
+    def test_inline_spoken_verbatim(self):
         out = sanitize_for_tts("As I mentioned in `useEffect.cleanup()`, it…")
-        # Should not leave broken prose like "in , it"
-        self.assertNotIn("in ,", out)
-        self.assertIn("code", out)
+        self.assertNotIn("`", out)
+        self.assertIn("useEffect.cleanup()", out)
 
     def test_inline_identifier_kept_as_word(self):
-        # Bare identifiers read fine — keep them
         out = sanitize_for_tts("The `useState` hook returns a tuple.")
         self.assertIn("useState", out)
         self.assertNotIn("`", out)
 
-    def test_inline_short_symbol_replaced(self):
+    def test_inline_short_symbol_kept(self):
         out = sanitize_for_tts("Use `&&` to chain.")
         self.assertNotIn("`", out)
-        self.assertIn("code", out)
+        self.assertIn("&&", out)
 
 
 class MarkdownLinks(unittest.TestCase):

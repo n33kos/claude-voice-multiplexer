@@ -34,14 +34,10 @@ LINK_PLACEHOLDER = "link"
 
 
 def _replace_inline_code(match: re.Match) -> str:
-    inner = match.group(1).strip()
-    # Very short tokens (1-2 chars) tend to be punctuation/symbols — drop them.
-    if len(inner) <= 2:
-        return INLINE_CODE_PLACEHOLDER
-    # Single alphanumeric word (a variable name, flag, etc.) reads fine as "X".
-    if re.fullmatch(r"[A-Za-z0-9_\-]+", inner):
-        return inner
-    return INLINE_CODE_PLACEHOLDER
+    # Speak inline code verbatim — single-backtick spans are short by nature
+    # and usually carry meaning the listener needs (identifiers, filenames,
+    # flags).  Only fenced blocks get summarized to a placeholder.
+    return match.group(1).strip()
 
 
 def _replace_link(match: re.Match) -> str:
