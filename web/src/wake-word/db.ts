@@ -14,10 +14,25 @@ export interface WakeWordRecord {
   phrase: string
   // Each template: array of MFCC frames stored as Float32Array bytes.
   templates: Float32Array[][]
-  // Auto-tuned DTW distance threshold (max-similar value to accept).
+  // Auto-tuned DTW distance threshold (used as default).
   threshold: number
+  // User-overridden threshold (slider). If set, takes precedence at runtime.
+  userThreshold?: number | null
   enrolledAt: number
   numCoeffs: number
+}
+
+export async function updateUserThreshold(value: number | null): Promise<void> {
+  const rec = await loadTemplates()
+  if (!rec) return
+  await saveTemplates({
+    phrase: rec.phrase,
+    templates: rec.templates,
+    threshold: rec.threshold,
+    userThreshold: value,
+    enrolledAt: rec.enrolledAt,
+    numCoeffs: rec.numCoeffs,
+  })
 }
 
 function open(): Promise<IDBDatabase> {

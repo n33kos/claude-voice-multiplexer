@@ -31,7 +31,8 @@ type Audio = {
   pcm: Float32Array // mono, 16 kHz
 }
 type Suspend = { type: 'suspend' | 'resume' }
-type In = Init | Audio | Suspend
+type SetThreshold = { type: 'set-threshold'; threshold: number }
+type In = Init | Audio | Suspend | SetThreshold
 
 const extractor = new MFCCExtractor(DEFAULT_MFCC)
 let templates: Float32Array[][] = []
@@ -114,6 +115,11 @@ self.onmessage = (e: MessageEvent<In>) => {
   }
   if (msg.type === 'suspend') { suspended = true; return }
   if (msg.type === 'resume')  { suspended = false; return }
+  if (msg.type === 'set-threshold') {
+    threshold = msg.threshold
+    if (LOG) console.log('[wake-worker] threshold updated to', threshold.toFixed(3))
+    return
+  }
   if (msg.type === 'audio') {
     append(msg.pcm)
     tryMatch()

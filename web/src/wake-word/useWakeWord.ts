@@ -9,7 +9,7 @@
 //   - Surfaces worker heartbeats so the UI can show a live indicator.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { loadTemplates, saveTemplates, clearTemplates } from './db'
+import { loadTemplates, saveTemplates, clearTemplates, updateUserThreshold } from './db'
 import type { WakeWordRecord } from './db'
 import { buildEnrollment, resampleTo16k } from './enroll'
 
@@ -127,10 +127,12 @@ export function useWakeWord(opts: UseWakeWordOptions): UseWakeWordReturn {
             onMatchRef.current?.()
           }
         }
+        const effectiveThreshold =
+          typeof record.userThreshold === 'number' ? record.userThreshold : record.threshold
         worker.postMessage({
           type: 'init',
           templates: record.templates,
-          threshold: record.threshold,
+          threshold: effectiveThreshold,
         })
 
         proc.onaudioprocess = (ev) => {

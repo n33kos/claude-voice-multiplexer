@@ -6,7 +6,7 @@ import { useVoiceSettings } from "../../hooks/useVoiceSettings";
 import type { VoiceOption } from "../../hooks/useVoiceSettings";
 import { EnrollmentModal } from "../../wake-word/EnrollmentModal";
 import { buildEnrollment } from "../../wake-word/enroll";
-import { saveTemplates, clearTemplates, loadTemplates } from "../../wake-word/db";
+import { saveTemplates, clearTemplates, loadTemplates, updateUserThreshold } from "../../wake-word/db";
 import type { WakeWordRecord } from "../../wake-word/db";
 import styles from "./Settings.module.scss";
 
@@ -593,6 +593,36 @@ export function Settings({
               <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.wakeWordChime })} />
             </button>
           </label>
+
+          {wakeRecord && (
+            <div className={styles.VoiceSettingRow}>
+              <div className={styles.SettingLabel}>
+                <span className={styles.SettingTitle}>Sensitivity</span>
+                <span className={styles.SettingDescription}>
+                  Distance threshold (lower = stricter). Auto-tuned: {wakeRecord.threshold.toFixed(1)} · Current: {(wakeRecord.userThreshold ?? wakeRecord.threshold).toFixed(1)}. Watch the [wake-worker] score logs in DevTools and pick a value just above what your real "hey claude" scores.
+                </span>
+              </div>
+              <div className={styles.SliderContainer}>
+                <span className={styles.SliderLabel}>10</span>
+                <input
+                  type="range"
+                  min={10}
+                  max={50}
+                  step={0.5}
+                  value={wakeRecord.userThreshold ?? wakeRecord.threshold}
+                  onChange={async (e) => {
+                    const v = parseFloat(e.target.value);
+                    await updateUserThreshold(v);
+                    const rec = await loadTemplates();
+                    setWakeRecord(rec);
+                    onWakeWordEnrolled?.();
+                  }}
+                  className={styles.Slider}
+                />
+                <span className={styles.SliderLabel}>50</span>
+              </div>
+            </div>
+          )}
 
           <div className={styles.SettingRow}>
             <div className={styles.SettingLabel}>
