@@ -607,7 +607,7 @@ export function Transcript({ entries, tasks, prs, cwd, sessionId, hueOverride, o
   const taskPanel =
     tasks && tasks.length > 0 ? <TaskListPanel tasks={tasks} /> : null;
   const prPanel =
-    prs && prs.length > 0 ? <SessionPRList prs={prs} /> : null;
+    prs && prs.length > 0 ? <SessionPRList prs={prs} sessionId={sessionId} /> : null;
 
   if (entries.length === 0) {
     return (
