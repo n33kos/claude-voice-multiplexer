@@ -18,6 +18,7 @@ export interface VoiceControlsProps {
   setMicMode: (m: MicMode) => void;
   returnToWakeAfterTurn: boolean;
   setReturnToWakeAfterTurn: (v: boolean) => void;
+  disableAutoListenSeq: number;
   onAutoListenChange: (value: boolean) => void;
   onSpeakerMutedChange: (value: boolean) => void;
   onConnected: () => void;
@@ -41,6 +42,7 @@ export interface MicControlsProps {
   setMicMode: (m: MicMode) => void;
   returnToWakeAfterTurn: boolean;
   setReturnToWakeAfterTurn: (v: boolean) => void;
+  disableAutoListenSeq: number;
   onAutoListenChange: (value: boolean) => void;
   onSpeakerMutedChange: (value: boolean) => void;
   onInterrupt: () => void;

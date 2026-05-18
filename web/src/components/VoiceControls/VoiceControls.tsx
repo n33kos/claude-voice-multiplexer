@@ -94,6 +94,7 @@ export function VoiceControls({
   setMicMode,
   returnToWakeAfterTurn,
   setReturnToWakeAfterTurn,
+  disableAutoListenSeq,
   onAutoListenChange,
   onSpeakerMutedChange,
   onConnected,
@@ -128,6 +129,7 @@ export function VoiceControls({
           setMicMode={setMicMode}
           returnToWakeAfterTurn={returnToWakeAfterTurn}
           setReturnToWakeAfterTurn={setReturnToWakeAfterTurn}
+          disableAutoListenSeq={disableAutoListenSeq}
           onAutoListenChange={onAutoListenChange}
           onSpeakerMutedChange={onSpeakerMutedChange}
           onInterrupt={onInterrupt}

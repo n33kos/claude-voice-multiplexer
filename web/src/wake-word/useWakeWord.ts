@@ -54,6 +54,8 @@ export function useWakeWord(opts: UseWakeWordOptions): UseWakeWordReturn {
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const onMatchRef = useRef(onMatch)
   useEffect(() => { onMatchRef.current = onMatch }, [onMatch])
+  const suspendRef = useRef(suspend)
+  useEffect(() => { suspendRef.current = suspend }, [suspend])
 
   const reload = useCallback(async () => {
     const rec = await loadTemplates()
@@ -136,7 +138,7 @@ export function useWakeWord(opts: UseWakeWordOptions): UseWakeWordReturn {
         })
 
         proc.onaudioprocess = (ev) => {
-          if (suspend) return
+          if (suspendRef.current) return
           const ch = ev.inputBuffer.getChannelData(0)
           const pcm = resampleTo16k(ch, ctx.sampleRate)
           // copy because the underlying buffer is reused
@@ -157,7 +159,7 @@ export function useWakeWord(opts: UseWakeWordOptions): UseWakeWordReturn {
       cancelled = true
       teardown()
     }
-  }, [enabled, active, record, suspend, teardown])
+  }, [enabled, active, record, teardown])
 
   const enroll = useCallback(async (clips: { buf: Float32Array; sampleRate: number }[]) => {
     const { templates, threshold, numCoeffs } = buildEnrollment(clips)

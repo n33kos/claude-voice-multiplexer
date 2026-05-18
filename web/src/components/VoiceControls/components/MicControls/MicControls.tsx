@@ -29,6 +29,7 @@ export function MicControls({
   setMicMode,
   returnToWakeAfterTurn,
   setReturnToWakeAfterTurn,
+  disableAutoListenSeq,
   onAutoListenChange,
   onSpeakerMutedChange,
   onInterrupt,
@@ -50,26 +51,30 @@ export function MicControls({
     }
   }, [wakeWordEnabled, micMode]);
 
-  // Sync FROM external autoListen changes (e.g. server force-disable).
-  // Only react while agent is idle — otherwise transient autoListen
-  // toggles during a turn (thinking/speaking) make the button flash.
+  // Honor explicit Settings "Auto-listen" toggles. Detect when autoListen
+  // actually changes (not just a parent re-render) so we don't race with
+  // our own outbound sync.
+  const prevAutoListen = useRef(autoListen);
   useEffect(() => {
+    if (prevAutoListen.current === autoListen) return;
+    prevAutoListen.current = autoListen;
     if (agentStatus.state !== "idle") return;
-    if (autoListen && micMode !== "active") {
-
-      setMicMode("active");
-    } else if (!autoListen && micMode === "active") {
-
-      setMicMode("muted");
-    }
+    if (autoListen && micMode !== "active") setMicMode("active");
+    else if (!autoListen && micMode === "active") setMicMode("muted");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoListen, agentStatus.state]);
 
-  // Sync TO autoListen prop whenever our internal mode changes.
+  // Persist mic state TO the autoListen setting so the next session boots
+  // into the user's last chosen state.
   useEffect(() => {
     const next = micMode === "active";
     if (next !== autoListen) onAutoListenChange(next);
   }, [micMode, autoListen, onAutoListenChange]);
+
+  // Server-side silence detection: drop out of "active" listening. If the
+  // user entered the turn via the wake word, fall back to "wake" so they
+  // can re-trigger by saying "hey claude" again instead of "muted".
+  const prevSilenceSeq = useRef(disableAutoListenSeq);
 
   // Suspend wake-word matching whenever Claude is speaking or thinking.
   const suspendWake = agentStatus.state === "speaking" || agentStatus.state === "thinking";
@@ -92,6 +97,20 @@ export function MicControls({
   // `wake` is a fresh object each render and would loop the effect.
   const wakeReload = wake.reload;
   useEffect(() => { void wakeReload(); }, [wakeWordReloadKey, wakeReload]);
+
+  // Apply the silence-detected signal once per increment. Drop back to wake
+  // if available + the turn was wake-initiated, else mute.
+  useEffect(() => {
+    if (disableAutoListenSeq === prevSilenceSeq.current) return;
+    prevSilenceSeq.current = disableAutoListenSeq;
+    if (micMode !== "active") return;
+    const fallbackToWake =
+      returnToWakeAfterTurn && wakeWordEnabled && wake.hasTemplates;
+    setReturnToWakeAfterTurn(false);
+    setMicMode(fallbackToWake ? "wake" : "muted");
+    void room.localParticipant.setMicrophoneEnabled(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [disableAutoListenSeq]);
 
   // Session-colored overrides for thinking/speaking states
   const sessionPillStyle = useMemo(() => {

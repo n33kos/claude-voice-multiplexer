@@ -212,14 +212,9 @@ export default function App() {
     prevOnlineIds.current = currentIds;
   }, [relay.sessions]);
 
-  // Disable auto-listen when server signals noise-only transcription
-  const prevSeq = useRef(0);
-  useEffect(() => {
-    if (relay.disableAutoListenSeq > prevSeq.current && settings.autoListen) {
-      updateSettings({ autoListen: false });
-    }
-    prevSeq.current = relay.disableAutoListenSeq;
-  }, [relay.disableAutoListenSeq, settings.autoListen, updateSettings]);
+  // Server "silence detected" signal — handled inside MicControls so it
+  // can route back to "wake" instead of "muted" when the user entered the
+  // turn via the wake word.
 
   // Auto-collapse session list when connected, expand when disconnected
   useEffect(() => {
@@ -383,6 +378,7 @@ export default function App() {
                 setMicMode={setMicMode}
                 returnToWakeAfterTurn={returnToWakeAfterTurn}
                 setReturnToWakeAfterTurn={setReturnToWakeAfterTurn}
+                disableAutoListenSeq={relay.disableAutoListenSeq}
                 onAutoListenChange={(v) => updateSettings({ autoListen: v })}
                 onSpeakerMutedChange={(v) =>
                   updateSettings({ speakerMuted: v })
