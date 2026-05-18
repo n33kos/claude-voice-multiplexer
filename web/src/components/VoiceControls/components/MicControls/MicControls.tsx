@@ -69,10 +69,17 @@ export function MicControls({
     if (next !== autoListen) onAutoListenChange(next);
   }, [micMode, autoListen, onAutoListenChange]);
 
-  // Server-side silence detection: drop out of "active" listening. If the
-  // user entered the turn via the wake word, fall back to "wake" so they
-  // can re-trigger by saying "hey claude" again instead of "muted".
+  // Track the last non-active mode so silence/timeout restores whichever
+  // posture the user came from (wake vs muted).
+  const lastInactiveMode = useRef<MicMode>(micMode === "active" ? "muted" : micMode);
+  useEffect(() => {
+    if (micMode !== "active") lastInactiveMode.current = micMode;
+  }, [micMode]);
+
+  // Server-side silence detection sequence + the local fallback timer
+  // both restore lastInactiveMode.
   const prevSilenceSeq = useRef(disableAutoListenSeq);
+  const INACTIVITY_MS = 5000;
 
   // Suspend wake-word matching whenever Claude is speaking or thinking.
   const suspendWake = agentStatus.state === "speaking" || agentStatus.state === "thinking";
@@ -95,19 +102,31 @@ export function MicControls({
   const wakeReload = wake.reload;
   useEffect(() => { void wakeReload(); }, [wakeWordReloadKey, wakeReload]);
 
-  // Apply the silence-detected signal once per increment. If wake word is
-  // armed (enabled + enrolled), drop back to "wake" — wake is essentially
-  // armed-mute, so silence in open-mic returns to the wake-listening
-  // posture. Otherwise fall all the way to muted.
+  // Apply the silence-detected signal once per increment. Restore whichever
+  // posture the user was in before unmuting (wake or muted).
   useEffect(() => {
     if (disableAutoListenSeq === prevSilenceSeq.current) return;
     prevSilenceSeq.current = disableAutoListenSeq;
     if (micMode !== "active") return;
-    const wakeArmed = wakeWordEnabled && wake.hasTemplates;
-    setMicMode(wakeArmed ? "wake" : "muted");
+    setMicMode(lastInactiveMode.current);
     void room.localParticipant.setMicrophoneEnabled(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disableAutoListenSeq]);
+
+  // Client-side fallback: if the agent has been idle and the mic has been
+  // open for INACTIVITY_MS with no VAD-triggered turn, drop back. Covers
+  // the hardware-mute / dead-quiet case where the server never fires the
+  // silence signal because VAD never sees any speech.
+  useEffect(() => {
+    if (micMode !== "active") return;
+    if (agentStatus.state !== "idle") return;
+    const t = window.setTimeout(() => {
+      setMicMode(lastInactiveMode.current);
+      void room.localParticipant.setMicrophoneEnabled(false);
+    }, INACTIVITY_MS);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [micMode, agentStatus.state]);
 
   // Session-colored overrides for thinking/speaking states
   const sessionPillStyle = useMemo(() => {
