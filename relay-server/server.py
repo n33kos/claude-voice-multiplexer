@@ -1146,7 +1146,7 @@ async def send_message_to_session(session_id: str, request: Request):
 
 @app.post("/api/sessions/{session_id}/interrupt")
 async def interrupt_session(session_id: str, request: Request):
-    """Send hard interrupt to a session via daemon (Ctrl-C + re-enter standby)."""
+    """Send hard interrupt to a session via daemon (Ctrl-C + MCP reconnect)."""
     _require_auth(request)
     result = await _daemon_ipc({"cmd": "hard-interrupt", "session_id": session_id})
     if result.get("ok"):

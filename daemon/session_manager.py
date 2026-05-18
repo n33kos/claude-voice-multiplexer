@@ -86,7 +86,7 @@ class SpawnedSession:
     session_name: str = ""
     relay_session_id: Optional[str] = None
     pid: Optional[int] = None
-    status: str = "spawning"  # spawning, standby, active, zombie, dead, spawn_failed
+    status: str = "spawning"  # spawning, standby (registered/idle), active, zombie, dead, spawn_failed
     spawned_at: float = field(default_factory=time.time)
     last_relay_heartbeat: float = field(default_factory=time.time)
 
@@ -188,11 +188,10 @@ class SessionManager:
             logger.info(f"[sessions] created tmux session {tmux_session} in {cwd} (login shell: {user_shell})")
 
             # Launch Claude — try --continue first, fall back to fresh session.
-            # Do NOT pass the standby skill as a startup prompt — the MCP plugin
-            # needs time to establish the SSE connection first.  Instead, start
-            # Claude, wait for it to initialize, reconnect the MCP plugin, then
-            # send the standby command as a separate step (same pattern as
-            # hard_interrupt and reconnect_session).
+            # Registration with the relay happens automatically via the
+            # SessionStart hook once Claude finishes initializing; we just
+            # need to wait for the prompt to appear before assuming the
+            # session is ready.
             claude_cmd = (
                 f"claude --continue --permission-mode auto || "
                 f"claude --permission-mode auto"
@@ -945,10 +944,9 @@ class SessionManager:
                     session.relay_session_id = computed_id
                 logger.info(f"[sessions] resolved pending relay_session_id: {session.tmux_session} -> {computed_id}")
 
-            # Track relay heartbeat for status display only.  We no longer
-            # take disruptive action on "zombie" sessions — the old hard_interrupt
-            # recovery was a workaround for MCP-standby SSE drops that don't
-            # apply now that voice routes through send-keys + hooks.
+            # Track relay heartbeat for status display only.  Zombie sessions
+            # are no longer auto-recovered — voice now routes through
+            # send-keys + hooks, so MCP transport drops don't break input.
             if session.relay_session_id and session.relay_session_id in relay_sessions:
                 session.last_relay_heartbeat = time.time()
                 if session.status not in ("active",):

@@ -168,8 +168,8 @@ async def relay_notify(ctx: Context, message: str, source: str = "") -> str:
     full_message = f"{prefix} {message}"
 
     # Broadcast to web transcript so the notification is visible in real time.
-    # The parent session will discover completion on its next turn — we no
-    # longer wake it via a queue because the standby loop has been removed.
+    # The parent session sees completion via its own tool results; this tool
+    # only surfaces the notice to the remote user.
     if _app["notify_transcript"]:
         await _app["notify_transcript"](session_id, "system", full_message)
 
@@ -280,7 +280,7 @@ async def relay_code_block(ctx: Context, code: str, filename: str = "", language
 
 @mcp.tool()
 async def relay_disconnect(ctx: Context) -> str:
-    """Disconnect from the voice relay and exit standby."""
+    """Disconnect this session from the voice relay."""
     session_id, err = await _resolve_session(ctx)
     if err:
         return err

@@ -47,13 +47,12 @@ For remote access: expose relay server via tunnel (Cloudflare/ngrok/Tailscale)
 
 ### Session Registration (MCP Plugin)
 
-Each Claude Code session has the MCP plugin installed. When the user invokes the standby skill (or the daemon spawns one), the plugin:
+Each Claude Code session registers with the relay via the bundled MCP plugin and the `SessionStart` hook:
 
-1. Connects to the relay server via WebSocket and registers (session name, working directory, metadata)
-2. Sends periodic heartbeats to maintain presence in the session registry
-3. Listens for incoming voice messages (transcribed text from the relay)
-4. When a voice message arrives: delivers the text to Claude, Claude processes it, and sends the conversational response back to the relay
-5. The relay synthesizes the response with Kokoro and streams audio back to the client
+1. The hook POSTs to `/api/sessions/<id>/register` with the cwd and dir name; the relay tracks the session and shows it in the web UI
+2. Voice input is delivered to the session by injecting transcribed text into the tmux pane (send-keys), not via a blocking MCP call
+3. Claude's response text is pushed back to the relay (via `relay_respond` or the Stop hook) and synthesized with Kokoro
+4. Kokoro audio streams back to the client over LiveKit
 
 ### Session Spawning Flow
 
@@ -97,7 +96,7 @@ The daemon monitors spawned sessions every 30 seconds:
 
 | Status     | Meaning                                                          |
 | ---------- | ---------------------------------------------------------------- |
-| `standby`  | Claude is in standby mode, ready for voice input                 |
+| `standby`  | Registered and idle, ready for voice input                       |
 | `active`   | Claude is processing a request                                   |
 | `zombie`   | tmux session alive but relay heartbeat stale >90s                |
 | `dead`     | tmux session has exited                                          |
@@ -128,7 +127,7 @@ vmux sessions                   # list active sessions
 vmux restart <session-id>       # kill + respawn a session
 vmux restart kokoro             # restart an infrastructure service
 vmux interrupt <session-id>     # send Ctrl-C to a session
-vmux hard-interrupt <session-id># Ctrl-C + MCP reconnect + re-enter standby
+vmux hard-interrupt <session-id># Ctrl-C + MCP reconnect
 vmux send <id-or-path> <text>   # send a text message to a session's voice queue
 vmux send-keys <id> <keys>      # send literal keystrokes to a session's tmux pane
 vmux send-key <id> <key>        # send a special key (Enter, C-c, Tab, etc.)
@@ -143,12 +142,11 @@ FastMCP tools embedded in the relay server and served over SSE at `/mcp/sse`.
 
 | Tool                 | Description                                                                     |
 | -------------------- | ------------------------------------------------------------------------------- |
-| `relay_standby`      | Register and enter standby mode. Blocks until a voice message arrives.          |
 | `relay_respond`      | Send Claude's response text back to the relay for TTS synthesis.                |
 | `relay_activity`     | Update the web client with Claude's current activity.                           |
-| `relay_disconnect`   | Unregister from the relay and exit standby mode.                                |
+| `relay_disconnect`   | Unregister this session from the relay.                                         |
 | `relay_status`       | Show current relay connection status.                                           |
-| `relay_notify`       | Wake parent session with a notification (for background agents).                |
+| `relay_notify`       | Post a background-agent completion notice to the web transcript.                |
 | `relay_code_block`   | Push a code snippet or diff to the transcript.                                  |
 | `relay_file`         | Relay a file directly to the web app (no token cost).                           |
 | `relay_image`        | Relay an image directly to the web app.                                         |
@@ -183,7 +181,6 @@ A Python server (FastAPI + Uvicorn) that bridges the web client, Claude sessions
 | Skill            | Description                                                           |
 | ---------------- | --------------------------------------------------------------------- |
 | `install`        | Run the full installer (builds deps, sets up launchd daemon)          |
-| `standby`        | Enter standby mode (checks relay is up, no auto-start needed)         |
 | `start-services` | Start the daemon via launchctl if not running                         |
 | `stop-services`  | Stop all services via `vmux shutdown`                                 |
 | `service-status` | Check status via `vmux status`                                        |
@@ -350,10 +347,8 @@ The install script sets everything up, starts the daemon, and prints a one-time 
 
 The daemon runs automatically in the background after `install.sh`. You don't need to start or stop services manually.
 
-**To enter voice standby in any Claude session:**
-```
-/voice-multiplexer:standby
-```
+**To use voice in any Claude session:**
+Voice registration is automatic — the `SessionStart` hook registers the session with the relay on startup, and the daemon spawns sessions with the plugin pre-loaded. Just open `http://localhost:3100` and the session appears in the list.
 
 **To spawn a new Claude session from the web app:**
 1. Open `http://localhost:3100`
@@ -433,13 +428,7 @@ Each service restarts on failure with exponential backoff:
 
 ### Relay Restart Recovery
 
-When the relay server restarts (crash or auto-update), existing standby sessions need to reconnect their MCP transport. The daemon detects this by polling `/api/sessions` — sessions that were in standby but no longer appear trigger the hard-interrupt flow:
-
-1. Send Ctrl-C to the tmux pane
-2. Wait 1s, run `/mcp reconnect plugin:voice-multiplexer:voice-multiplexer`
-3. Wait 2s, run `/voice-multiplexer:standby`
-
-Sessions doing active work show a "relay restarted" warning in the web app.
+When the relay server restarts (crash or auto-update), existing sessions reconnect on their next user prompt — the `UserPromptSubmit` hook re-registers the session with the relay if needed. No daemon-side recovery dance is required; voice input continues working because it routes through tmux send-keys rather than a long-lived MCP transport.
 
 ### Auto-Update Flow
 
@@ -470,7 +459,6 @@ claude-voice-multiplexer/
 │   └── VERSION                          # Installed daemon version
 ├── skills/
 │   ├── install/SKILL.md
-│   ├── standby/SKILL.md
 │   ├── start-services/SKILL.md
 │   ├── stop-services/SKILL.md
 │   ├── service-status/SKILL.md
@@ -517,9 +505,9 @@ vmux send ~/projects/my-app "Run the test suite and report back"
 echo "Deploy to staging" | vmux send abc123 -
 ```
 
-Messages are delivered to the target session's voice queue — the same path as web UI text input and voice transcriptions. The receiving Claude session picks them up on its next `relay_standby` call.
+Messages are delivered by injecting the text directly into the target session's tmux pane — the same path as web UI text input and voice transcriptions.
 
-**Flow:** `vmux send` → daemon IPC → `POST /api/sessions/{id}/message` → relay → `session.voice_queue` → `relay_standby` returns message to Claude.
+**Flow:** `vmux send` → daemon IPC → `POST /api/sessions/{id}/message` → relay → daemon `inject_text` → tmux send-keys + Enter.
 
 ## Migration from v1
 
