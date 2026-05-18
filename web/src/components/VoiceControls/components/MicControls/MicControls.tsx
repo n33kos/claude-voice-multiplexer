@@ -267,13 +267,17 @@ export function MicControls({
     }
   })();
 
-  // Wake is essentially "armed mute" — visually treat it like muted; the
-  // status pill alone communicates that it's listening for "hey claude".
+  // Wake is "armed mute" — voice bar stays neutral, but the button
+  // itself is tinted yellow to communicate the armed posture.
   const micButtonClass =
-    micMode === "active" ? styles.MicButtonActive : styles.MicButtonInactive;
+    micMode === "wake" ? styles.MicButtonWake
+    : micMode === "active" ? styles.MicButtonActive
+    : styles.MicButtonInactive;
 
   const micIconClass =
-    micMode === "active" ? styles.MicIconActive : styles.MicIconInactive;
+    micMode === "wake" ? styles.MicIconWake
+    : micMode === "active" ? styles.MicIconActive
+    : styles.MicIconInactive;
 
   return (
     <div data-component="VoiceControls" className={styles.Root}>
