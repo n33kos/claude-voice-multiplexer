@@ -113,21 +113,6 @@ export function MicControls({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disableAutoListenSeq]);
 
-  // Client-side fallback: if the agent has been idle and the mic has been
-  // open for INACTIVITY_MS with no VAD-triggered turn, drop back. Covers
-  // the hardware-mute / dead-quiet case where the server never fires the
-  // silence signal because VAD never sees any speech.
-  useEffect(() => {
-    if (micMode !== "active") return;
-    if (agentStatus.state !== "idle") return;
-    const t = window.setTimeout(() => {
-      setMicMode(lastInactiveMode.current);
-      void room.localParticipant.setMicrophoneEnabled(false);
-    }, INACTIVITY_MS);
-    return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [micMode, agentStatus.state]);
-
   // Session-colored overrides for thinking/speaking states
   const sessionPillStyle = useMemo(() => {
     if (hue === null) return undefined;
@@ -180,6 +165,42 @@ export function MicControls({
 
   const localAnalyser = useTrackAnalyser(localMediaTrack);
   const remoteAnalyser = useTrackAnalyser(remoteMediaTrack);
+
+  // Client-side inactivity fallback. Polls the local mic analyser and
+  // only fires after INACTIVITY_MS of CONTINUOUS silence (RMS below
+  // threshold). Speaking or any detectable audio resets the counter.
+  // Covers the hardware-mute / dead-quiet case where the server-side
+  // silence signal never fires because VAD never sees any speech.
+  useEffect(() => {
+    if (micMode !== "active") return;
+    if (agentStatus.state !== "idle") return;
+    const SILENCE_RMS_THRESHOLD = 0.01;
+    const tickMs = 200;
+    let silentMs = 0;
+    const id = window.setInterval(() => {
+      const a = localAnalyser.current;
+      let rms = 0;
+      if (a) {
+        const buf = new Float32Array(a.fftSize);
+        a.getFloatTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+        rms = Math.sqrt(sum / buf.length);
+      }
+      if (rms > SILENCE_RMS_THRESHOLD) {
+        silentMs = 0;
+        return;
+      }
+      silentMs += tickMs;
+      if (silentMs >= INACTIVITY_MS) {
+        window.clearInterval(id);
+        setMicMode(lastInactiveMode.current);
+        void room.localParticipant.setMicrophoneEnabled(false);
+      }
+    }, tickMs);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [micMode, agentStatus.state, localAnalyser]);
 
   const isMicActive = !!isMicrophoneEnabled && agentState === "idle";
   const activeAnalyser =
