@@ -92,8 +92,6 @@ export function VoiceControls({
   wakeWordReloadKey,
   micMode,
   setMicMode,
-  returnToWakeAfterTurn,
-  setReturnToWakeAfterTurn,
   disableAutoListenSeq,
   onAutoListenChange,
   onSpeakerMutedChange,
@@ -127,8 +125,6 @@ export function VoiceControls({
           wakeWordReloadKey={wakeWordReloadKey}
           micMode={micMode}
           setMicMode={setMicMode}
-          returnToWakeAfterTurn={returnToWakeAfterTurn}
-          setReturnToWakeAfterTurn={setReturnToWakeAfterTurn}
           disableAutoListenSeq={disableAutoListenSeq}
           onAutoListenChange={onAutoListenChange}
           onSpeakerMutedChange={onSpeakerMutedChange}

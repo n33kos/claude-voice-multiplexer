@@ -27,8 +27,6 @@ export function MicControls({
   wakeWordReloadKey,
   micMode,
   setMicMode,
-  returnToWakeAfterTurn,
-  setReturnToWakeAfterTurn,
   disableAutoListenSeq,
   onAutoListenChange,
   onSpeakerMutedChange,
@@ -40,8 +38,8 @@ export function MicControls({
   const { isMicrophoneEnabled } = useLocalParticipant();
   const hue = hueOverride != null ? hueOverride : (sessionId ? sessionHue(sessionId) : null);
 
-  // micMode + returnToWakeAfterTurn are owned by App so useChime and
-  // VoiceBar can see them. They behave as a single source of truth here.
+  // micMode is owned by App so useChime and VoiceBar share the same
+  // source of truth.
 
   // Drop out of wake mode if the feature is turned off.
   useEffect(() => {
@@ -81,7 +79,6 @@ export function MicControls({
 
   const onWakeMatch = useCallback(() => {
     if (wakeWordChime) playChime();
-    setReturnToWakeAfterTurn(true);
     setMicMode("active");
   }, [wakeWordChime]);
 
@@ -98,16 +95,16 @@ export function MicControls({
   const wakeReload = wake.reload;
   useEffect(() => { void wakeReload(); }, [wakeWordReloadKey, wakeReload]);
 
-  // Apply the silence-detected signal once per increment. Drop back to wake
-  // if available + the turn was wake-initiated, else mute.
+  // Apply the silence-detected signal once per increment. If wake word is
+  // armed (enabled + enrolled), drop back to "wake" — wake is essentially
+  // armed-mute, so silence in open-mic returns to the wake-listening
+  // posture. Otherwise fall all the way to muted.
   useEffect(() => {
     if (disableAutoListenSeq === prevSilenceSeq.current) return;
     prevSilenceSeq.current = disableAutoListenSeq;
     if (micMode !== "active") return;
-    const fallbackToWake =
-      returnToWakeAfterTurn && wakeWordEnabled && wake.hasTemplates;
-    setReturnToWakeAfterTurn(false);
-    setMicMode(fallbackToWake ? "wake" : "muted");
+    const wakeArmed = wakeWordEnabled && wake.hasTemplates;
+    setMicMode(wakeArmed ? "wake" : "muted");
     void room.localParticipant.setMicrophoneEnabled(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disableAutoListenSeq]);
@@ -181,29 +178,16 @@ export function MicControls({
   const prevAgentState = useRef(agentState);
   useEffect(() => {
     const stateChanged = prevAgentState.current !== agentState;
-    const prev = prevAgentState.current;
     prevAgentState.current = agentState;
 
     if (agentState === "idle") {
-      const justFinishedTurn = stateChanged && (prev === "speaking" || prev === "thinking");
-      if (
-        justFinishedTurn &&
-        returnToWakeAfterTurn &&
-        wakeWordEnabled &&
-        wake.hasTemplates
-      ) {
-        setReturnToWakeAfterTurn(false);
-         
-        setMicMode("wake");
-        room.localParticipant.setMicrophoneEnabled(false);
-        return;
-      }
-      // Sync the LiveKit mic with whatever mode the user is currently in.
+      // Stay in whatever mode the user is in — active across multiple
+      // turns; the only thing that knocks us out is silence detection.
       room.localParticipant.setMicrophoneEnabled(micMode === "active");
     } else if (stateChanged && (agentState === "thinking" || agentState === "speaking")) {
       room.localParticipant.setMicrophoneEnabled(false);
     }
-  }, [agentState, micMode, wakeWordEnabled, wake.hasTemplates, returnToWakeAfterTurn, room.localParticipant]);
+  }, [agentState, micMode, room.localParticipant]);
 
   const muteRemoteAudio = () => {
     const t = remoteTrackRef?.publication?.track as
@@ -226,15 +210,12 @@ export function MicControls({
     if (agentState === "speaking" || agentState === "thinking") {
       muteRemoteAudio();
       onInterrupt();
-      setReturnToWakeAfterTurn(false);
       setMicMode("active");
       await room.localParticipant.setMicrophoneEnabled(true);
       return;
     }
     if (agentState !== "idle") return;
 
-    // Any manual toggle clears the auto-return flag — user's choice wins.
-    setReturnToWakeAfterTurn(false);
     const wakeAvailable = wakeWordEnabled && wake.hasTemplates;
 
     // Cycle: muted → wake → active → muted (wake step skipped if unavailable).
@@ -286,19 +267,13 @@ export function MicControls({
     }
   })();
 
-  // Visual mode: when the wake word brought us into active, keep the
-  // button yellow so the user sees the persistent mode, not the
-  // transient red recording state.
-  const displayWake = micMode === "wake" || returnToWakeAfterTurn;
+  // Wake is essentially "armed mute" — visually treat it like muted; the
+  // status pill alone communicates that it's listening for "hey claude".
   const micButtonClass =
-    displayWake ? styles.MicButtonWake
-    : micMode === "active" ? styles.MicButtonActive
-    : styles.MicButtonInactive;
+    micMode === "active" ? styles.MicButtonActive : styles.MicButtonInactive;
 
   const micIconClass =
-    displayWake ? styles.MicIconWake
-    : micMode === "active" ? styles.MicIconActive
-    : styles.MicIconInactive;
+    micMode === "active" ? styles.MicIconActive : styles.MicIconInactive;
 
   return (
     <div data-component="VoiceControls" className={styles.Root}>
@@ -309,7 +284,7 @@ export function MicControls({
         >
           <span
             className={classNames(styles.StatusDot, {
-              [styles.StatusDotPulse]: agentState === "thinking" || displayWake,
+              [styles.StatusDotPulse]: agentState === "thinking" || micMode === "wake",
             })}
           />
           <span className={styles.StatusLabel}>{pillStyle.label}</span>
@@ -321,7 +296,6 @@ export function MicControls({
         isMicEnabled={isMicActive}
         analyserRef={activeAnalyser}
         sessionColor={sessionRgb}
-        micColorOverride={displayWake ? { r: 252, g: 211, b: 77 } : undefined}
       />
       <div className={styles.ButtonRow}>
         <button

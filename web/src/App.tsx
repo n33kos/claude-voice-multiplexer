@@ -108,7 +108,6 @@ export default function App() {
   const [micMode, setMicMode] = useState<import("./types/micMode").MicMode>(
     settings.autoListen ? "active" : "muted",
   );
-  const [returnToWakeAfterTurn, setReturnToWakeAfterTurn] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   // Stable callback so memoized children (e.g. Transcript's EntryRow) can
@@ -376,8 +375,6 @@ export default function App() {
                 wakeWordReloadKey={wakeWordReloadKey}
                 micMode={micMode}
                 setMicMode={setMicMode}
-                returnToWakeAfterTurn={returnToWakeAfterTurn}
-                setReturnToWakeAfterTurn={setReturnToWakeAfterTurn}
                 disableAutoListenSeq={relay.disableAutoListenSeq}
                 onAutoListenChange={(v) => updateSettings({ autoListen: v })}
                 onSpeakerMutedChange={(v) =>
