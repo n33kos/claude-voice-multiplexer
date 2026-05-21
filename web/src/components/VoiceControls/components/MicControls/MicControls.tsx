@@ -113,6 +113,23 @@ export function MicControls({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disableAutoListenSeq]);
 
+  // Switching sessions while in "active" carries the open mic into the
+  // new session and bypasses the wake-word flow. Reset to the armed-rest
+  // posture (wake if available, else muted) on any real session change.
+  const prevSessionId = useRef(sessionId ?? null);
+  useEffect(() => {
+    const next = sessionId ?? null;
+    const prev = prevSessionId.current;
+    prevSessionId.current = next;
+    if (next === prev) return;
+    if (next === null) return;
+    if (micMode !== "active") return;
+    const wakeArmed = wakeWordEnabled && wake.hasTemplates;
+    setMicMode(wakeArmed ? "wake" : "muted");
+    void room.localParticipant.setMicrophoneEnabled(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
   // Session-colored overrides for thinking/speaking states
   const sessionPillStyle = useMemo(() => {
     if (hue === null) return undefined;
@@ -307,15 +324,20 @@ export function MicControls({
     }
   })();
 
-  // Wake is "armed mute" — voice bar stays neutral, but the button
-  // itself is tinted yellow to communicate the armed posture.
+  // While Claude is thinking or speaking the mic is force-disabled, so
+  // visually treat the button as muted regardless of the underlying
+  // micMode — keeps the red/yellow indicator honest about whether we
+  // are actually recording.
+  const micEffectivelyOff = agentState !== "idle";
   const micButtonClass =
-    micMode === "wake" ? styles.MicButtonWake
+    micEffectivelyOff ? styles.MicButtonInactive
+    : micMode === "wake" ? styles.MicButtonWake
     : micMode === "active" ? styles.MicButtonActive
     : styles.MicButtonInactive;
 
   const micIconClass =
-    micMode === "wake" ? styles.MicIconWake
+    micEffectivelyOff ? styles.MicIconInactive
+    : micMode === "wake" ? styles.MicIconWake
     : micMode === "active" ? styles.MicIconActive
     : styles.MicIconInactive;
 
