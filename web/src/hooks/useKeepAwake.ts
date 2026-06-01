@@ -1,15 +1,20 @@
 import { useEffect, useRef } from 'react'
 
-interface WakeLockSentinel {
+interface MinimalSentinel {
   released: boolean
   release: () => Promise<void>
   addEventListener: (type: string, listener: () => void) => void
 }
 
-interface NavigatorWithWakeLock extends Navigator {
-  wakeLock?: {
-    request: (type: 'screen') => Promise<WakeLockSentinel>
-  }
+interface MinimalWakeLock {
+  request: (type: 'screen') => Promise<MinimalSentinel>
+}
+
+function getWakeLock(): MinimalWakeLock | null {
+  // Cast through unknown — TS DOM lib types this as non-optional but
+  // older browsers (and some WebViews) don't implement it.
+  const wl = (navigator as unknown as { wakeLock?: MinimalWakeLock }).wakeLock
+  return wl ?? null
 }
 
 function isMobileUA(): boolean {
@@ -26,20 +31,20 @@ function isMobileUA(): boolean {
  * Desktop never gets the silent audio path (would block system sleep).
  */
 export function useKeepAwake(active: boolean) {
-  const sentinelRef = useRef<WakeLockSentinel | null>(null)
+  const sentinelRef = useRef<MinimalSentinel | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
   // --- Wake Lock ---
   useEffect(() => {
     if (!active) return
-    const nav = navigator as NavigatorWithWakeLock
-    if (!nav.wakeLock) return
+    const wakeLock = getWakeLock()
+    if (!wakeLock) return
 
     let cancelled = false
 
     const acquire = async () => {
       try {
-        const sentinel = await nav.wakeLock!.request('screen')
+        const sentinel = await wakeLock.request('screen')
         if (cancelled) {
           void sentinel.release()
           return
