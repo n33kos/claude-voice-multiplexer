@@ -21,6 +21,7 @@ import { PairScreen } from "./components/PairScreen/PairScreen";
 import { TerminalOverlay } from "./components/TerminalOverlay/TerminalOverlay";
 import { ContextBar } from "./components/ContextBar/ContextBar";
 import { useContextUsage } from "./hooks/useContextUsage";
+import { useKeepAwake } from "./hooks/useKeepAwake";
 import styles from "./App.module.scss";
 
 // Lazy-load VoiceControls (pulls in heavy livekit-client bundle)
@@ -192,6 +193,7 @@ export default function App() {
 
   useChime(relay.agentStatus, micMode === "active");
   useTheme(settings.theme);
+  useKeepAwake(settings.keepAwake && micMode !== "muted");
 
   // Play notification chime when a new online session appears
   const prevOnlineIds = useRef<Set<string>>(new Set());

@@ -39,6 +39,14 @@ export interface Settings {
   wakeWordEnabled: boolean
   /** Play a chime when the wake word fires. */
   wakeWordChime: boolean
+  /**
+   * Keep the device awake while listening / armed. When ON we hold a
+   * Screen Wake Lock and (on mobile, while visibility is hidden) play
+   * a silent audio track so the OS doesn't suspend the tab and cut
+   * Claude's voice off mid-conversation. Defaults to true on mobile UA,
+   * false on desktop. User selection overrides permanently.
+   */
+  keepAwake: boolean
 }
 
 const STORAGE_KEY = 'voice-multiplexer-settings'
@@ -55,6 +63,11 @@ export const DEFAULT_CONTEXT_BAR_FIELDS: ContextBarFields = {
   contextBar: 'visible',
 }
 
+function isMobileUA(): boolean {
+  if (typeof navigator === 'undefined') return false
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+}
+
 const DEFAULTS: Settings = {
   autoListen: true,
   speakerMuted: false,
@@ -68,6 +81,7 @@ const DEFAULTS: Settings = {
   effortLevel: 'medium',
   wakeWordEnabled: false,
   wakeWordChime: true,
+  keepAwake: isMobileUA(),
 }
 
 function loadSettings(): Settings {

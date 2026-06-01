@@ -240,6 +240,25 @@ export function Settings({
 
           <label className={styles.SettingRow}>
             <div className={styles.SettingLabel}>
+              <span className={styles.SettingTitle}>Keep awake</span>
+              <span className={styles.SettingDescription}>
+                Keep the screen on while listening. On mobile, also plays a
+                silent audio track when the screen locks so Claude's voice
+                still reaches you. Defaults on for mobile, off for desktop.
+              </span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.keepAwake}
+              onClick={() => onUpdate({ keepAwake: !settings.keepAwake })}
+              className={classNames(styles.Toggle, { [styles.ToggleActive]: settings.keepAwake })}
+            >
+              <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.keepAwake })} />
+            </button>
+          </label>
+
+          <label className={styles.SettingRow}>
+            <div className={styles.SettingLabel}>
               <span className={styles.SettingTitle}>Mute speaker</span>
               <span className={styles.SettingDescription}>
                 Mute Claude's voice playback on this tab
