@@ -17,6 +17,7 @@ import secrets
 import signal
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -88,6 +89,26 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("vmuxd")
+
+
+def _format_ipc_exc(e: BaseException) -> str:
+    """Format an exception for IPC error responses.
+
+    str(OSError) drops the filename when the exception was raised
+    without one — making `[Errno 2] No such file or directory` a
+    debugging dead-end. This helper attaches the type and any
+    filename(s) so the error string is actually actionable.
+    """
+    parts = [type(e).__name__]
+    msg = str(e)
+    if msg:
+        parts.append(msg)
+    if isinstance(e, OSError):
+        if getattr(e, "filename", None):
+            parts.append(f"filename={e.filename!r}")
+        if getattr(e, "filename2", None):
+            parts.append(f"filename2={e.filename2!r}")
+    return ": ".join(parts)
 
 
 def _load_env():
@@ -565,8 +586,13 @@ class VmuxDaemon:
             else:
                 return {"ok": False, "error": f"Unknown command: {cmd}"}
         except Exception as e:
-            logger.error(f"IPC handler error for cmd={cmd}: {e}")
-            return {"ok": False, "error": str(e)}
+            # Bare str(e) on FileNotFoundError drops the filename, which has
+            # cost real debugging time. Include type + filename + traceback
+            # so the next failure leaves a self-explanatory trail.
+            detail = _format_ipc_exc(e)
+            logger.error(f"IPC handler error for cmd={cmd}: {detail}")
+            logger.error(f"IPC handler traceback for cmd={cmd}:\n{traceback.format_exc()}")
+            return {"ok": False, "error": detail}
 
     async def _cmd_status(self) -> dict:
         services = self._service_manager.get_status()
@@ -601,7 +627,9 @@ class VmuxDaemon:
             data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
             return {"ok": False, "error": data.get("error", f"Relay returned {resp.status_code}")}
         except Exception as e:
-            return {"ok": False, "error": str(e)}
+            logger.error(f"send-message {session_id} failed: {_format_ipc_exc(e)}")
+            logger.error(f"send-message traceback:\n{traceback.format_exc()}")
+            return {"ok": False, "error": _format_ipc_exc(e)}
 
     async def _cmd_auth_code(self) -> dict:
         """Generate a pairing code via the relay server."""

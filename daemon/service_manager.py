@@ -5,11 +5,32 @@ import logging
 import os
 import signal
 import time
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("vmuxd.services")
+
+
+def _format_exc(e: BaseException) -> str:
+    """Format an exception with enough context to diagnose without a traceback.
+
+    Surfaces the missing-path on FileNotFoundError (bare str(e) drops it
+    when the OSError has no filename attribute), and includes the
+    exception type for everything else so a one-line log entry is
+    actually actionable.
+    """
+    parts = [type(e).__name__]
+    msg = str(e)
+    if msg:
+        parts.append(msg)
+    if isinstance(e, OSError):
+        if getattr(e, "filename", None):
+            parts.append(f"filename={e.filename!r}")
+        if getattr(e, "filename2", None):
+            parts.append(f"filename2={e.filename2!r}")
+    return ": ".join(parts)
 
 # Shared HTTP client for health checks — lazy-initialized on first use.
 # Avoids creating a new httpx.AsyncClient (and its TCP connection pool)
@@ -171,7 +192,15 @@ class ManagedService:
                 self._monitor_task = asyncio.create_task(self._monitor())
             return True
         except Exception as e:
-            logger.error(f"[{self.config.name}] failed to start: {e}")
+            # Log structured detail + a stack so the next time this fires
+            # we know which path was missing (config.cwd, an executable
+            # not on PATH, a log file parent, etc.) without a bisect.
+            logger.error(f"[{self.config.name}] failed to start: {_format_exc(e)}")
+            logger.error(
+                f"[{self.config.name}] launch context: cmd={self.config.cmd!r} "
+                f"cwd={self.config.cwd!r} log_dir={self.config.log_dir!r}"
+            )
+            logger.error(f"[{self.config.name}] traceback:\n{traceback.format_exc()}")
             self.status = "failed"
             return False
 

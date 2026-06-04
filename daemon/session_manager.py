@@ -895,6 +895,21 @@ class SessionManager:
                 self._sessions[daemon_id] = session
             logger.info(f"[sessions] re-registered orphan: {tmux_session} (relay_session_id={relay_session_id})")
 
+            # Best-effort: push this session up to the relay too. The relay's
+            # in-memory registry doesn't survive its own restarts and its
+            # background daemon-resync runs on a delay, leaving a window
+            # where send-message fails with "session not found" for an
+            # otherwise healthy tmux session. Failure here is non-fatal —
+            # the resync loop will catch it.
+            if relay_session_id and cwd:
+                try:
+                    await self._push_session_to_relay(relay_session_id, cwd)
+                except Exception as e:
+                    logger.warning(
+                        f"[sessions] orphan re-register: relay push failed for "
+                        f"{relay_session_id}: {type(e).__name__}: {e}"
+                    )
+
     async def _health_monitor(self):
         while True:
             try:
@@ -1101,6 +1116,29 @@ class SessionManager:
             except Exception:
                 pass
         return None
+
+    async def _push_session_to_relay(self, session_id: str, cwd: str):
+        """Push a session record into the relay's registry.
+
+        Used during orphan reconciliation so the relay learns about
+        existing tmux sessions immediately instead of waiting for its
+        own background resync loop. The /register endpoint is
+        idempotent — repeated calls with the same (session_id, cwd) are
+        a fast no-op on the relay side.
+        """
+        client = await _get_session_client()
+        resp = await client.post(
+            f"{self._relay_url}/api/sessions/{session_id}/register",
+            json={"cwd": cwd, "name": cwd},
+            headers={"X-Daemon-Secret": self._daemon_secret},
+        )
+        if resp.status_code == 200:
+            logger.info(f"[sessions] orphan re-register: pushed {session_id} to relay")
+        else:
+            logger.warning(
+                f"[sessions] orphan re-register: relay returned {resp.status_code} "
+                f"for {session_id}"
+            )
 
     async def _set_relay_session_name(self, session_id: str, name: str):
         """Update a session's display name on the relay server."""
