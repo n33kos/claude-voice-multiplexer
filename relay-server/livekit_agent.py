@@ -249,7 +249,7 @@ IDLE_DEBOUNCE_S = 0.25
 class SessionRoom:
     """Per-session LiveKit room with its own audio pipeline and state machine."""
 
-    def __init__(self, session_id: str, room_name: str, registry, notify_status_fn, notify_transcript_fn, notify_client_event_fn=None):
+    def __init__(self, session_id: str, room_name: str, registry, notify_status_fn, notify_transcript_fn, notify_client_event_fn=None, metadata_store=None):
         self.session_id = session_id
         self.room_name = room_name
         self.registry = registry
@@ -259,6 +259,10 @@ class SessionRoom:
         # this session. Used by voice commands like "switch to ..." to
         # ask the client to do something in-app.
         self.notify_client_event_fn = notify_client_event_fn
+        # User-facing renames live in metadata_store (display_name).
+        # Registry.name is the folder-derived default. Voice fuzzy match
+        # prefers display_name when present.
+        self.metadata_store = metadata_store
 
         self.room: rtc.Optional[Room] = None
         self.audio_source: rtc.Optional[AudioSource] = None
@@ -776,9 +780,38 @@ class SessionRoom:
             return
 
         sessions = await self.registry.list_sessions() if self.registry else []
-        candidates = [(s, s.get("name") or "") for s in sessions if s.get("name")]
+
+        # Build a sid -> custom display_name map from metadata_store so user
+        # renames (e.g. "KitchenSink" → "Compass") win over folder-derived
+        # registry names.
+        display_overrides: dict[str, str] = {}
+        if self.metadata_store is not None:
+            try:
+                meta = await self.metadata_store.get_all()
+                for row in meta or []:
+                    dn = (row.get("display_name") or "").strip()
+                    sid = row.get("session_id")
+                    if dn and sid:
+                        display_overrides[sid] = dn
+            except Exception as e:
+                print(f"[room:{self.room_name}] switch_to: metadata fetch failed: {e}")
+
+        # Each candidate is (session_dict, primary_name, fallback_name).
+        # Primary = user rename if any, else registry name. Fallback =
+        # registry name when an override exists, so "babylist" still
+        # matches a session renamed to something exotic.
+        candidates = []
+        for s in sessions:
+            sid = s.get("session_id") or ""
+            reg_name = s.get("name") or ""
+            override = display_overrides.get(sid, "")
+            primary = override or reg_name
+            if not primary:
+                continue
+            fallback = reg_name if override else ""
+            candidates.append((s, primary, fallback))
         if not candidates:
-            await self.handle_claude_response(f"No sessions available to switch to.")
+            await self.handle_claude_response("No sessions available to switch to.")
             return
 
         # Score each session's display name by fuzzy ratio. Token-style
@@ -788,10 +821,24 @@ class SessionRoom:
             return " ".join(s.lower().split())
 
         target_n = norm(target)
+
+        def _score(target_n: str, name: str) -> float:
+            if not name:
+                return 0.0
+            name_n = norm(name)
+            r = difflib.SequenceMatcher(None, target_n, name_n).ratio()
+            # Substring boost — Whisper often appends filler words ("switch
+            # to compass please") so the captured target is longer than the
+            # actual name. Bidirectional containment treats those as near-
+            # perfect matches.
+            if name_n in target_n or target_n in name_n:
+                r = max(r, 0.9)
+            return r
+
         scored = []
-        for sess, name in candidates:
-            ratio = difflib.SequenceMatcher(None, target_n, norm(name)).ratio()
-            scored.append((ratio, sess, name))
+        for sess, primary, fallback in candidates:
+            ratio = max(_score(target_n, primary), _score(target_n, fallback))
+            scored.append((ratio, sess, primary))
         scored.sort(key=lambda t: t[0], reverse=True)
 
         best_ratio, best_sess, best_name = scored[0]
@@ -1023,12 +1070,13 @@ class SessionRoom:
 class RelayAgent:
     """Manages per-session LiveKit rooms."""
 
-    def __init__(self, registry, broadcast_fn, notify_status_fn=None, notify_transcript_fn=None, notify_client_event_fn=None):
+    def __init__(self, registry, broadcast_fn, notify_status_fn=None, notify_transcript_fn=None, notify_client_event_fn=None, metadata_store=None):
         self.registry = registry
         self.broadcast_fn = broadcast_fn
         self.notify_status_fn = notify_status_fn
         self.notify_transcript_fn = notify_transcript_fn
         self.notify_client_event_fn = notify_client_event_fn
+        self.metadata_store = metadata_store
         self._rooms: dict[str, SessionRoom] = {}  # session_id → SessionRoom
 
     async def add_session(self, session_id: str, room_name: str):
@@ -1043,6 +1091,7 @@ class RelayAgent:
             notify_status_fn=self.notify_status_fn,
             notify_transcript_fn=self.notify_transcript_fn,
             notify_client_event_fn=self.notify_client_event_fn,
+            metadata_store=self.metadata_store,
         )
         self._rooms[session_id] = room
         await room.start()

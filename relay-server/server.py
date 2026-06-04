@@ -522,7 +522,7 @@ async def lifespan(app: FastAPI):
     import audio as _audio_mod
     _audio_mod.set_http_client(_http_client)
 
-    _agent = RelayAgent(registry, _broadcast_sessions, _notify_client_status, _notify_client_transcript, _notify_client_event)
+    _agent = RelayAgent(registry, _broadcast_sessions, _notify_client_status, _notify_client_transcript, _notify_client_event, metadata_store=metadata_store)
     print("[server] Agent manager initialized (rooms created per session)")
 
     # Initialize MCP tools with relay server dependencies
