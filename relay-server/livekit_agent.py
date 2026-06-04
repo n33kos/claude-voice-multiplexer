@@ -184,24 +184,58 @@ def strip_noise(text: str) -> str:
     cleaned = _re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned
 
-# Voice commands: spoken phrases that trigger actions instead of being sent to Claude.
-# Matched case-insensitively against the full cleaned transcription.
-_VOICE_COMMAND_PATTERNS = {
-    "disable_auto_listen": _re.compile(
-        r"^\s*(?:"
-        r"(?:disable|stop|turn off|kill)\s+(?:auto[- ]?listen(?:ing)?|recording|microphone|the mic(?:rophone)?)"
-        r"|stop\s+listening"
-        r")\s*\.?\s*$",
-        _re.IGNORECASE,
+# Voice commands: spoken phrases that trigger actions instead of being
+# sent to Claude. Each entry has a regex, a match mode, and is dispatched
+# by name in _dispatch_voice_command() on SessionRoom. Adding a new
+# command means: (1) add an entry here, (2) handle the name in the
+# dispatcher. Keep `exact` mode for short trigger phrases to minimize
+# Whisper hallucination false-positives.
+class _VoiceCommand:
+    __slots__ = ("name", "pattern", "mode")
+
+    def __init__(self, name: str, pattern: "_re.Pattern[str]", mode: str):
+        # mode: "exact" → pattern.match against the whole utterance
+        #       "contains" → pattern.search anywhere in the utterance
+        self.name = name
+        self.pattern = pattern
+        self.mode = mode
+
+
+_VOICE_COMMANDS: list[_VoiceCommand] = [
+    _VoiceCommand(
+        "disable_auto_listen",
+        _re.compile(
+            r"^\s*(?:"
+            r"(?:disable|stop|turn off|kill)\s+(?:auto[- ]?listen(?:ing)?|recording|microphone|the mic(?:rophone)?)"
+            r"|stop\s+listening"
+            r")\s*\.?\s*$",
+            _re.IGNORECASE,
+        ),
+        "exact",
     ),
-}
+    _VoiceCommand(
+        "switch_to",
+        # Captures everything after "switch to" up to terminal punctuation.
+        # `contains` mode lets natural pre-amble work ("ok, switch to baby list").
+        _re.compile(
+            r"\bswitch(?:ing)?\s+to\s+(?P<target>[^.!?]+?)(?:[.!?]|$)",
+            _re.IGNORECASE,
+        ),
+        "contains",
+    ),
+]
 
 
-def match_voice_command(text: str) -> Optional[str]:
-    """Check if text matches a voice command. Returns the command name or None."""
-    for name, pattern in _VOICE_COMMAND_PATTERNS.items():
-        if pattern.match(text):
-            return name
+def match_voice_command(text: str) -> Optional[tuple[str, dict]]:
+    """Check if text matches a voice command.
+
+    Returns (command_name, capture_dict) or None. The capture dict
+    contains any named groups from the matching regex (e.g. {"target": "..."}).
+    """
+    for cmd in _VOICE_COMMANDS:
+        m = cmd.pattern.match(text) if cmd.mode == "exact" else cmd.pattern.search(text)
+        if m:
+            return cmd.name, m.groupdict()
     return None
 
 
@@ -215,12 +249,16 @@ IDLE_DEBOUNCE_S = 0.25
 class SessionRoom:
     """Per-session LiveKit room with its own audio pipeline and state machine."""
 
-    def __init__(self, session_id: str, room_name: str, registry, notify_status_fn, notify_transcript_fn):
+    def __init__(self, session_id: str, room_name: str, registry, notify_status_fn, notify_transcript_fn, notify_client_event_fn=None):
         self.session_id = session_id
         self.room_name = room_name
         self.registry = registry
         self.notify_status_fn = notify_status_fn
         self.notify_transcript_fn = notify_transcript_fn
+        # Push arbitrary {type: ..., ...} JSON to web clients connected to
+        # this session. Used by voice commands like "switch to ..." to
+        # ask the client to do something in-app.
+        self.notify_client_event_fn = notify_client_event_fn
 
         self.room: rtc.Optional[Room] = None
         self.audio_source: rtc.Optional[AudioSource] = None
@@ -667,11 +705,14 @@ class SessionRoom:
             return
 
         # Check for voice commands before forwarding to Claude
-        command = match_voice_command(text)
-        if command:
-            print(f"[room:{self.room_name}] Voice command matched: {command} (from: {text!r})")
+        matched = match_voice_command(text)
+        if matched:
+            command, captures = matched
+            print(f"[room:{self.room_name}] Voice command matched: {command} (from: {text!r}) captures={captures}")
             if command == "disable_auto_listen":
                 await self._notify_status("idle", disable_auto_listen=True)
+            elif command == "switch_to":
+                await self._handle_switch_to(captures.get("target", ""))
             return
 
         # Apply inbound text-replacement rules (e.g. "by the way …" → "/btw …")
@@ -720,6 +761,64 @@ class SessionRoom:
             except asyncio.QueueEmpty:
                 pass
             self._response_queue.put_nowait(text)
+
+    async def _handle_switch_to(self, raw_target: str):
+        """Resolve a 'switch to <name>' voice command.
+
+        Fuzzy-matches the captured text against the display names of all
+        registered sessions and either pushes a switch request to the
+        client + speaks confirmation, or speaks a "no match" miss.
+        """
+        import difflib
+
+        target = (raw_target or "").strip().strip(",").strip()
+        if not target:
+            return
+
+        sessions = await self.registry.list_sessions() if self.registry else []
+        candidates = [(s, s.get("name") or "") for s in sessions if s.get("name")]
+        if not candidates:
+            await self.handle_claude_response(f"No sessions available to switch to.")
+            return
+
+        # Score each session's display name by fuzzy ratio. Token-style
+        # normalization (lowercase, collapse whitespace) keeps "BabyList Web"
+        # and "babylist web" comparable.
+        def norm(s: str) -> str:
+            return " ".join(s.lower().split())
+
+        target_n = norm(target)
+        scored = []
+        for sess, name in candidates:
+            ratio = difflib.SequenceMatcher(None, target_n, norm(name)).ratio()
+            scored.append((ratio, sess, name))
+        scored.sort(key=lambda t: t[0], reverse=True)
+
+        best_ratio, best_sess, best_name = scored[0]
+        runner_ratio = scored[1][0] if len(scored) > 1 else 0.0
+
+        # Acceptance: best must clear 0.5 AND lead the runner-up by 0.1.
+        # When there's only one session, the lead check is moot.
+        clear_lead = (best_ratio - runner_ratio) >= 0.1 or len(scored) == 1
+        if best_ratio < 0.5 or not clear_lead:
+            print(f"[room:{self.room_name}] switch_to: no clear match for {target!r} (best={best_name!r} r={best_ratio:.2f}, runner={runner_ratio:.2f})")
+            await self.handle_claude_response(f"No match for {target}.")
+            return
+
+        target_sid = best_sess.get("session_id")
+        print(f"[room:{self.room_name}] switch_to: {target!r} → {best_name!r} (r={best_ratio:.2f}) sid={target_sid}")
+
+        if self.notify_client_event_fn and target_sid:
+            try:
+                await self.notify_client_event_fn(self.session_id, {
+                    "type": "request_session_switch",
+                    "target_session_id": target_sid,
+                    "target_name": best_name,
+                })
+            except Exception as e:
+                print(f"[room:{self.room_name}] switch_to: notify_client_event_fn failed: {e}")
+
+        await self.handle_claude_response(f"Switched to {best_name}.")
 
     async def _response_worker(self):
         """Process TTS responses one at a time to prevent state conflicts."""
@@ -924,11 +1023,12 @@ class SessionRoom:
 class RelayAgent:
     """Manages per-session LiveKit rooms."""
 
-    def __init__(self, registry, broadcast_fn, notify_status_fn=None, notify_transcript_fn=None):
+    def __init__(self, registry, broadcast_fn, notify_status_fn=None, notify_transcript_fn=None, notify_client_event_fn=None):
         self.registry = registry
         self.broadcast_fn = broadcast_fn
         self.notify_status_fn = notify_status_fn
         self.notify_transcript_fn = notify_transcript_fn
+        self.notify_client_event_fn = notify_client_event_fn
         self._rooms: dict[str, SessionRoom] = {}  # session_id → SessionRoom
 
     async def add_session(self, session_id: str, room_name: str):
@@ -942,6 +1042,7 @@ class RelayAgent:
             registry=self.registry,
             notify_status_fn=self.notify_status_fn,
             notify_transcript_fn=self.notify_transcript_fn,
+            notify_client_event_fn=self.notify_client_event_fn,
         )
         self._rooms[session_id] = room
         await room.start()

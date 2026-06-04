@@ -721,6 +721,16 @@ export function useRelay(authenticated: boolean = true) {
             agentStatus: { state: "idle", activity: null },
           }));
           break;
+        case "request_session_switch": {
+          // Voice command "switch to <name>" matched a session server-side.
+          const targetSid = data.target_session_id;
+          if (typeof targetSid === "string" && targetSid) {
+            wsRef.current?.send(
+              JSON.stringify({ type: "connect_session", session_id: targetSid }),
+            );
+          }
+          break;
+        }
         case "error":
           console.error("[relay]", data.message);
           break;

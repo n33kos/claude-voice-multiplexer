@@ -324,6 +324,25 @@ async def _notify_client_status(session_id: str, state: str, activity: Optional[
                     pass
 
 
+async def _notify_client_event(session_id: str, payload: dict):
+    """Broadcast a generic JSON event to all web clients connected to a session.
+
+    Used for ad-hoc messages from voice commands (e.g. session-switch
+    requests) that don't fit the agent_status / transcript shapes.
+    """
+    session = await registry.get(session_id)
+    if not session or not session.connected_clients:
+        return
+    msg = json.dumps(payload)
+    for client_id in list(session.connected_clients):
+        client_ws = _clients.get(client_id)
+        if client_ws:
+            try:
+                await client_ws.send_text(msg)
+            except Exception:
+                pass
+
+
 async def _notify_client_transcript(session_id: str, speaker: str, text: str, **extra):
     """Send a transcript entry to all connected web clients.
 
@@ -503,7 +522,7 @@ async def lifespan(app: FastAPI):
     import audio as _audio_mod
     _audio_mod.set_http_client(_http_client)
 
-    _agent = RelayAgent(registry, _broadcast_sessions, _notify_client_status, _notify_client_transcript)
+    _agent = RelayAgent(registry, _broadcast_sessions, _notify_client_status, _notify_client_transcript, _notify_client_event)
     print("[server] Agent manager initialized (rooms created per session)")
 
     # Initialize MCP tools with relay server dependencies
