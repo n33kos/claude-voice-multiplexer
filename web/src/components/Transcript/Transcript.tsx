@@ -806,9 +806,39 @@ function renderEntry(
                 </button>
               );
             })}
+            {/* The terminal picker numbers a "type something" row at X+1 and
+                "chat about this" at X+2 after the real options. We expose only
+                "chat about this": clicking it sends keypress X+2 (optionIndex
+                X+1 → relay adds 1), which selects that row without submitting,
+                so the user's next voice/text reply lands in the open prompt. */}
+            <button
+              type="button"
+              disabled={!!answered || !onAnswerQuestion || !sessionId}
+              onClick={() => {
+                if (onAnswerQuestion && sessionId) {
+                  onAnswerQuestion(sessionId, q.options.length + 1, "Chat about this", entry.timestamp, false);
+                }
+              }}
+              className={classNames(styles.OptionButton, styles.MetaOptionButton, {
+                [styles.OptionButtonSelected]: answered?.optionIndex === q.options.length + 1,
+                [styles.OptionButtonFaded]: !!answered && answered?.optionIndex !== q.options.length + 1,
+              })}
+            >
+              <span className={styles.OptionNumber} aria-hidden>💬</span>
+              <span className={styles.OptionContent}>
+                <span className={styles.OptionLabel}>Chat about this</span>
+                <span className={styles.OptionDescription}>
+                  Skip the options and tell Claude what you want instead.
+                </span>
+              </span>
+            </button>
           </div>
           {answered && (
-            <p className={styles.QuestionAnsweredNote}>Answered: {answered.label}</p>
+            <p className={styles.QuestionAnsweredNote}>
+              {answered.optionIndex === q.options.length + 1
+                ? "Chatting about this — say your message."
+                : `Answered: ${answered.label}`}
+            </p>
           )}
         </div>
       </div>
