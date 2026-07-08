@@ -37,6 +37,44 @@ CAFFEINATE_REAP_INTERVAL = 60  # seconds between caffeinate reaper runs
 
 CLAUDE_CONFIG_PATH = Path.home() / ".claude.json"
 
+# Root for auto-created "scratch" working directories.  When a session is
+# spawned with a name but no location, a throwaway folder is created here so
+# the session still has a real cwd to hang the usual cwd-hash machinery on.
+SCRATCH_ROOT = Path.home() / ".claude" / "voice-multiplexer" / "scratch"
+
+
+def _slugify_name(name: str) -> str:
+    """Turn a human session name into a filesystem-safe folder slug."""
+    out = []
+    prev_dash = False
+    for c in name.strip():
+        if c.isalnum():
+            out.append(c.lower())
+            prev_dash = False
+        elif c in "-_ " and not prev_dash:
+            out.append("-")
+            prev_dash = True
+    slug = "".join(out).strip("-")
+    return slug[:40] or "scratch"
+
+
+def _resolve_scratch_cwd(name: str) -> str:
+    """Create and return a fresh scratch directory named after the session.
+
+    If the slug folder already exists (e.g. a prior scratch session with the
+    same name), a numeric suffix is appended so each session gets a distinct
+    directory — and therefore a distinct cwd-hash session ID.
+    """
+    slug = _slugify_name(name)
+    SCRATCH_ROOT.mkdir(parents=True, exist_ok=True)
+    candidate = SCRATCH_ROOT / slug
+    n = 2
+    while candidate.exists():
+        candidate = SCRATCH_ROOT / f"{slug}-{n}"
+        n += 1
+    candidate.mkdir(parents=False, exist_ok=False)
+    return str(candidate)
+
 
 def _make_session_id(cwd: str) -> str:
     """Generate a deterministic session ID from a working directory path.
@@ -132,7 +170,20 @@ class SessionManager:
         hash of the CWD, so two sessions with the same CWD would share the
         same relay ID and cause tracking/kill bugs).
         """
-        cwd = os.path.expanduser(cwd)
+        cwd = (cwd or "").strip()
+        if not cwd:
+            # No location given: create a throwaway scratch folder named after
+            # the session.  A name is required in this case since it becomes the
+            # folder name too.
+            if not session_name.strip():
+                return {"ok": False, "error": "A name is required when no location is given"}
+            try:
+                cwd = _resolve_scratch_cwd(session_name)
+                logger.info(f"[sessions] created scratch dir {cwd} for '{session_name}'")
+            except Exception as e:
+                return {"ok": False, "error": f"Failed to create scratch dir: {e}"}
+        else:
+            cwd = os.path.expanduser(cwd)
         if not os.path.isdir(cwd):
             return {"ok": False, "error": f"Directory not found: {cwd}"}
 

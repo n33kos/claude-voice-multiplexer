@@ -15,6 +15,7 @@ export interface SessionListProps {
   onRecolorSession: (sessionId: string, hue: number | null) => void;
   onSpawnSession: (
     cwd: string,
+    name?: string,
   ) => Promise<{ ok: boolean; error?: string; session_id?: string }>;
   onKillSession: (sessionId: string) => Promise<boolean>;
   onRestartSession: (sessionId: string) => Promise<boolean>;

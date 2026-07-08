@@ -1089,10 +1089,10 @@ async def spawn_session(request: Request):
     _require_auth(request)
     body = await request.json()
     cwd = body.get("cwd", "").strip()
-    if not cwd:
-        return JSONResponse({"error": "cwd is required"}, status_code=400)
-    payload = {"cmd": "spawn", "cwd": cwd}
     session_name = body.get("session_name", "").strip()
+    if not cwd and not session_name:
+        return JSONResponse({"error": "cwd or session_name is required"}, status_code=400)
+    payload = {"cmd": "spawn", "cwd": cwd}
     if session_name:
         payload["session_name"] = session_name
     result = await _daemon_ipc(payload)

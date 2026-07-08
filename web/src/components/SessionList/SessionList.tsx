@@ -29,20 +29,28 @@ function NewSessionDialog({
   onSpawn,
   onClose,
 }: {
-  onSpawn: (cwd: string) => Promise<{ ok: boolean; error?: string }>;
+  onSpawn: (
+    cwd: string,
+    name?: string,
+  ) => Promise<{ ok: boolean; error?: string }>;
   onClose: () => void;
 }) {
+  const [name, setName] = useState("");
   const [cwd, setCwd] = useState("");
   const [error, setError] = useState("");
   const [spawning, setSpawning] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // A name is required only when no location is given — the name becomes the
+  // scratch folder name in that case.  With a location, name stays optional.
+  const canSubmit = cwd.trim() ? true : Boolean(name.trim());
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!cwd.trim()) return;
+    if (!canSubmit) return;
     setSpawning(true);
     setError("");
-    const result = await onSpawn(cwd.trim());
+    const result = await onSpawn(cwd.trim(), name.trim());
     setSpawning(false);
     if (result.ok) {
       onClose();
@@ -64,10 +72,17 @@ function NewSessionDialog({
           <input
             ref={inputRef}
             className={styles.NewSessionInput}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Name (e.g. quick-scratch)"
+            autoFocus
+            disabled={spawning}
+          />
+          <input
+            className={styles.NewSessionInput}
             value={cwd}
             onChange={(e) => setCwd(e.target.value)}
-            placeholder="Working directory (e.g. ~/projects/myapp)"
-            autoFocus
+            placeholder="Location (optional — blank creates a scratch folder)"
             disabled={spawning}
           />
           {error && <div className={styles.NewSessionError}>{error}</div>}
@@ -83,7 +98,7 @@ function NewSessionDialog({
             <button
               type="submit"
               className={styles.NewSessionSubmit}
-              disabled={!cwd.trim() || spawning}
+              disabled={!canSubmit || spawning}
             >
               {spawning ? "Spawning…" : "Spawn"}
             </button>

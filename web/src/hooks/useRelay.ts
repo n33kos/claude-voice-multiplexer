@@ -892,12 +892,13 @@ export function useRelay(authenticated: boolean = true) {
   const spawnSession = useCallback(
     async (
       cwd: string,
+      name?: string,
     ): Promise<{ ok: boolean; error?: string; session_id?: string }> => {
       try {
         const resp = await authFetch("/api/sessions/spawn", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cwd }),
+          body: JSON.stringify({ cwd, session_name: name ?? "" }),
         });
         const data = await resp.json();
         if (!resp.ok) {

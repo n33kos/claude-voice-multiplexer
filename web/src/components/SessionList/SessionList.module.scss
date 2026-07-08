@@ -291,6 +291,10 @@
   &:focus {
     border-color: var(--color-toggle-active);
   }
+
+  & + & {
+    margin-top: 0.5rem;
+  }
 }
 
 .NewSessionError {
