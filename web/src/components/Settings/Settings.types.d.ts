@@ -14,4 +14,12 @@ export interface SettingsProps {
   onRevokeDevice?: (deviceId: string) => Promise<boolean>;
   /** Called after enrollment succeeds so listeners can reload templates. */
   onWakeWordEnrolled?: () => void;
+  /** Kill + respawn every connected session at once. */
+  onRespawnAllSessions?: () => Promise<{
+    ok: boolean;
+    total?: number;
+    succeeded?: number;
+    failed?: number;
+    error?: string;
+  }>;
 }

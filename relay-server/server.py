@@ -1894,6 +1894,16 @@ async def restart_session_endpoint(session_id: str, request: Request):
     return JSONResponse({"error": result.get("error", "Restart failed")}, status_code=500)
 
 
+@app.post("/api/sessions/restart-all")
+async def restart_all_sessions_endpoint(request: Request):
+    """Kill + respawn every managed session via daemon."""
+    _require_auth(request)
+    result = await _daemon_ipc({"cmd": "restart-all-sessions"})
+    if result.get("ok"):
+        return JSONResponse(result)
+    return JSONResponse({"error": result.get("error", "Restart-all failed")}, status_code=500)
+
+
 @app.patch("/api/sessions/{session_id}/name")
 async def rename_session(session_id: str, request: Request):
     """Update a session's display name."""

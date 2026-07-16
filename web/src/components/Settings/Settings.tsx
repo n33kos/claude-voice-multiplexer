@@ -111,10 +111,37 @@ export function Settings({
   onGenerateCode,
   onRevokeDevice,
   onWakeWordEnrolled,
+  onRespawnAllSessions,
 }: SettingsProps) {
   const [pairCode, setPairCode] = useState<string | null>(null);
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [wakeRecord, setWakeRecord] = useState<WakeWordRecord | null>(null);
+  const [respawnAllBusy, setRespawnAllBusy] = useState(false);
+  const [respawnAllResult, setRespawnAllResult] = useState<string | null>(null);
+
+  const handleRespawnAll = useCallback(async () => {
+    if (!onRespawnAllSessions) return;
+    if (
+      !window.confirm(
+        "Respawn every connected session? Each one is stopped and restarted in its own directory.",
+      )
+    )
+      return;
+    setRespawnAllBusy(true);
+    setRespawnAllResult(null);
+    const result = await onRespawnAllSessions();
+    setRespawnAllBusy(false);
+    if (!result.ok) {
+      setRespawnAllResult(result.error || "Respawn failed");
+    } else if (!result.total) {
+      setRespawnAllResult("No sessions to respawn");
+    } else {
+      setRespawnAllResult(
+        `Respawned ${result.succeeded}/${result.total}` +
+          (result.failed ? ` (${result.failed} failed)` : ""),
+      );
+    }
+  }, [onRespawnAllSessions]);
 
   useEffect(() => {
     if (!open) return;
@@ -665,6 +692,25 @@ export function Settings({
               </button>
             </div>
           </div>
+
+          <div className={styles.Divider} />
+
+          <div className={styles.SectionHeader}>
+            <span className={styles.SectionTitle}>Sessions</span>
+            {onRespawnAllSessions && (
+              <button
+                onClick={handleRespawnAll}
+                disabled={respawnAllBusy}
+                className={styles.CodeButton}
+                title="Stop and restart every connected session"
+              >
+                {respawnAllBusy ? "Respawning..." : "Respawn All"}
+              </button>
+            )}
+          </div>
+          {respawnAllResult && (
+            <div className={styles.ServiceStatus}>{respawnAllResult}</div>
+          )}
 
           <div className={styles.Divider} />
 

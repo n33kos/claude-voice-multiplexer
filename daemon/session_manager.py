@@ -537,6 +537,42 @@ class SessionManager:
             self._sessions.pop(daemon_id, None)
         return await self.spawn(cwd)
 
+    async def restart_all_sessions(self) -> dict:
+        """Kill and respawn every managed session, concurrently.
+
+        Used to reset every connected session at once (e.g. after a top-level
+        config change) instead of respawning each from its own menu.
+        """
+        async with self._lock:
+            daemon_ids = list(self._sessions.keys())
+
+        if not daemon_ids:
+            return {"ok": True, "total": 0, "succeeded": 0, "failed": 0, "results": []}
+
+        outcomes = await asyncio.gather(
+            *(self.restart_session(did) for did in daemon_ids),
+            return_exceptions=True,
+        )
+
+        results = []
+        succeeded = 0
+        for sid, outcome in zip(daemon_ids, outcomes):
+            if isinstance(outcome, Exception):
+                results.append({"session_id": sid, "ok": False, "error": str(outcome)})
+            else:
+                ok = bool(outcome.get("ok"))
+                if ok:
+                    succeeded += 1
+                results.append({"session_id": sid, "ok": ok, "error": outcome.get("error")})
+
+        return {
+            "ok": True,
+            "total": len(session_ids),
+            "succeeded": succeeded,
+            "failed": len(session_ids) - succeeded,
+            "results": results,
+        }
+
     async def reconnect_session(self, session_id: str = "", cwd: str = "") -> dict:
         """Clear stale MCP state by reconnecting the plugin in the tmux pane.
 

@@ -445,6 +445,7 @@ export default function App() {
           onGenerateCode={auth.generateCode}
           onRevokeDevice={auth.revokeDevice}
           onWakeWordEnrolled={bumpWakeWordReload}
+          onRespawnAllSessions={relay.restartAllSessions}
         />
       </div>
     </>

@@ -37,26 +37,21 @@ function NewSessionDialog({
 }) {
   const [name, setName] = useState("");
   const [cwd, setCwd] = useState("");
-  const [error, setError] = useState("");
-  const [spawning, setSpawning] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // A name is required only when no location is given — the name becomes the
   // scratch folder name in that case.  With a location, name stays optional.
   const canSubmit = cwd.trim() ? true : Boolean(name.trim());
 
-  async function handleSubmit(e: React.FormEvent) {
+  function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!canSubmit) return;
-    setSpawning(true);
-    setError("");
-    const result = await onSpawn(cwd.trim(), name.trim());
-    setSpawning(false);
-    if (result.ok) {
-      onClose();
-    } else {
-      setError(result.error || "Failed to spawn session");
-    }
+    // Spawning can take up to ~15s while the daemon waits for Claude's UI to
+    // come up. Rather than hold the dialog open on that round-trip, fire the
+    // request and close immediately — the new session appears in the list once
+    // it registers with the relay.
+    void onSpawn(cwd.trim(), name.trim());
+    onClose();
   }
 
   return (
@@ -76,31 +71,27 @@ function NewSessionDialog({
             onChange={(e) => setName(e.target.value)}
             placeholder="Name (e.g. quick-scratch)"
             autoFocus
-            disabled={spawning}
           />
           <input
             className={styles.NewSessionInput}
             value={cwd}
             onChange={(e) => setCwd(e.target.value)}
             placeholder="Location (optional — blank creates a scratch folder)"
-            disabled={spawning}
           />
-          {error && <div className={styles.NewSessionError}>{error}</div>}
           <div className={styles.NewSessionActions}>
             <button
               type="button"
               className={styles.NewSessionCancel}
               onClick={onClose}
-              disabled={spawning}
             >
               Cancel
             </button>
             <button
               type="submit"
               className={styles.NewSessionSubmit}
-              disabled={!canSubmit || spawning}
+              disabled={!canSubmit}
             >
-              {spawning ? "Spawning…" : "Spawn"}
+              Spawn
             </button>
           </div>
         </form>

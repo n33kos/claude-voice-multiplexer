@@ -940,6 +940,27 @@ export function useRelay(authenticated: boolean = true) {
     [],
   );
 
+  const restartAllSessions = useCallback(async (): Promise<{
+    ok: boolean;
+    total?: number;
+    succeeded?: number;
+    failed?: number;
+    error?: string;
+  }> => {
+    try {
+      const resp = await authFetch(`/api/sessions/restart-all`, {
+        method: "POST",
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        return { ok: false, error: data.error || "Restart-all failed" };
+      }
+      return { ok: true, ...data };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }, []);
+
   const hardInterruptSession = useCallback(
     async (sessionId: string): Promise<boolean> => {
       try {
@@ -1212,6 +1233,7 @@ export function useRelay(authenticated: boolean = true) {
     spawnSession,
     killSession,
     restartSession,
+    restartAllSessions,
     hardInterruptSession,
     cancelTts,
     clearContextSession,
