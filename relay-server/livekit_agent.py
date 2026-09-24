@@ -951,11 +951,17 @@ class SessionRoom:
             # output buffer (~200-500ms on mobile). 2s is conservative.
             WEBRTC_PIPELINE_LATENCY_S = 1.0
             audio_duration = total_samples / LIVEKIT_SAMPLE_RATE
-            playback_end = first_frame_at + audio_duration + WEBRTC_PIPELINE_LATENCY_S
+            # Pad the wait only when nothing else is queued.  Between back-to-back
+            # chunks we wait just the audio duration so playback does not overlap,
+            # but skip the 1s settle pad that otherwise inserts a gap on every
+            # chunk boundary.  The last chunk keeps the pad so the end-of-turn
+            # idle timing (mic re-enable) stays accurate.
+            pad = WEBRTC_PIPELINE_LATENCY_S if self._response_queue.empty() else 0.0
+            playback_end = first_frame_at + audio_duration + pad
             remaining = playback_end - time.time()
             if remaining > 0:
                 print(f"[room:{self.room_name}] Waiting {remaining:.1f}s for playback to finish "
-                      f"(audio={audio_duration:.1f}s, latency={WEBRTC_PIPELINE_LATENCY_S}s)")
+                      f"(audio={audio_duration:.1f}s, pad={pad}s)")
                 await asyncio.sleep(remaining)
 
         finally:

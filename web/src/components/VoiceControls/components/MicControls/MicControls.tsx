@@ -81,8 +81,9 @@ export function MicControls({
   const prevSilenceSeq = useRef(disableAutoListenSeq);
   const INACTIVITY_MS = 5000;
 
-  // Suspend wake-word matching whenever Claude is speaking or thinking.
-  const suspendWake = agentStatus.state === "speaking" || agentStatus.state === "thinking";
+  // Suspend wake-word matching only while Claude is speaking (its TTS would
+  // otherwise feed the mic).  During thinking the mic stays usable.
+  const suspendWake = agentStatus.state === "speaking";
 
   const onWakeMatch = useCallback(() => {
     if (wakeWordChime) playChime();
@@ -190,7 +191,7 @@ export function MicControls({
   // silence signal never fires because VAD never sees any speech.
   useEffect(() => {
     if (micMode !== "active") return;
-    if (agentStatus.state !== "idle") return;
+    if (agentStatus.state !== "idle" && agentStatus.state !== "thinking") return;
     const SILENCE_RMS_THRESHOLD = 0.01;
     const tickMs = 200;
     let silentMs = 0;
@@ -219,7 +220,8 @@ export function MicControls({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [micMode, agentStatus.state, localAnalyser]);
 
-  const isMicActive = !!isMicrophoneEnabled && agentState === "idle";
+  const isMicActive =
+    !!isMicrophoneEnabled && (agentState === "idle" || agentState === "thinking");
   const activeAnalyser =
     agentState === "speaking" ? remoteAnalyser : localAnalyser;
 
@@ -237,11 +239,14 @@ export function MicControls({
     const stateChanged = prevAgentState.current !== agentState;
     prevAgentState.current = agentState;
 
-    if (agentState === "idle") {
-      // Stay in whatever mode the user is in — active across multiple
-      // turns; the only thing that knocks us out is silence detection.
+    if (agentState === "idle" || agentState === "thinking") {
+      // Keep the mic in whatever posture the user chose — across turns and
+      // through tool calls (thinking).  Only speaking closes it, to stop the
+      // mic capturing Claude's own TTS.  This lets the user talk during tool
+      // calls; the utterance queues for Claude's next turn instead of being
+      // cut off.  Silence detection is the only other thing that closes it.
       room.localParticipant.setMicrophoneEnabled(micMode === "active");
-    } else if (stateChanged && (agentState === "thinking" || agentState === "speaking")) {
+    } else if (stateChanged && agentState === "speaking") {
       room.localParticipant.setMicrophoneEnabled(false);
     }
   }, [agentState, micMode, room.localParticipant]);
@@ -324,11 +329,10 @@ export function MicControls({
     }
   })();
 
-  // While Claude is thinking or speaking the mic is force-disabled, so
-  // visually treat the button as muted regardless of the underlying
-  // micMode — keeps the red/yellow indicator honest about whether we
-  // are actually recording.
-  const micEffectivelyOff = agentState !== "idle";
+  // Only while Claude is speaking is the mic force-disabled, so visually
+  // treat the button as muted then regardless of the underlying micMode.
+  // During thinking the mic keeps recording, so it reflects the real micMode.
+  const micEffectivelyOff = agentState === "speaking";
   const micButtonClass =
     micEffectivelyOff ? styles.MicButtonInactive
     : micMode === "wake" ? styles.MicButtonWake

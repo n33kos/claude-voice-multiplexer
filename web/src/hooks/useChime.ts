@@ -43,12 +43,6 @@ export function playReadyChime() {
   setTimeout(() => playTone(880, 0.18, 0.25), 120)
 }
 
-function playStoppedChime() {
-  // Descending two-note: "recording captured, processing"
-  playTone(880, 0.12, 0.25)
-  setTimeout(() => playTone(660, 0.15, 0.25), 100)
-}
-
 export function playNotificationChime() {
   // Bright three-note ascending: "something new happened"
   playTone(523, 0.1, 0.2)
@@ -84,9 +78,7 @@ export function useChime(agentStatus: AgentStatus, autoListen: boolean) {
       playReadyChime()
     }
 
-    // Idle → thinking: recording stopped, utterance captured
-    if (prev === 'idle' && agentStatus.state === 'thinking') {
-      playStoppedChime()
-    }
+    // No chime on idle → thinking: the mic keeps recording through tool calls
+    // now, so there is no "recording stopped" moment to signal here.
   }, [agentStatus.state, autoListen])
 }
