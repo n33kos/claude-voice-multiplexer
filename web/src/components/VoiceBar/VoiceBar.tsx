@@ -13,18 +13,17 @@ const COLORS: Record<string, RGB> = {
   thinking: { r: 168, g: 85, b: 247 },
   speaking: { r: 168, g: 85, b: 247 },
   error: { r: 234, g: 88, b: 12 },
+  wake: { r: 234, g: 179, b: 8 },
   idle: { r: 115, g: 115, b: 115 },
 };
 
-export function VoiceBar({ agentStatus, isMicEnabled, analyserRef, sessionColor, micColorOverride }: VoiceBarProps) {
+export function VoiceBar({ phase, analyserRef, sessionColor, micColorOverride }: VoiceBarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const barsRef = useRef<number[]>(new Array(BAR_COUNT).fill(0));
   const colorRef = useRef(COLORS.idle);
   const timeRef = useRef(0);
   const freqDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
-
-  const agentState = agentStatus.state;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -44,11 +43,12 @@ export function VoiceBar({ agentStatus, isMicEnabled, analyserRef, sessionColor,
     const barRadius = barWidth / 2;
 
     function getTargetColor() {
-      if (agentState === "speaking") return sessionColor || COLORS.speaking;
-      if (agentState === "error") return COLORS.error;
-      if (agentState === "thinking") return sessionColor || COLORS.thinking;
-      if (isMicEnabled) return micColorOverride || COLORS.recording;
-      if (micColorOverride) return micColorOverride; // wake-mode idle = yellow
+      if (phase === "agent_speaking") return sessionColor || COLORS.speaking;
+      if (phase === "error") return COLORS.error;
+      if (phase === "agent_thinking") return sessionColor || COLORS.thinking;
+      if (phase === "user_listening" || phase === "user_talkover")
+        return micColorOverride || COLORS.recording;
+      if (phase === "wake_armed") return micColorOverride || COLORS.wake;
       return COLORS.idle;
     }
 
@@ -100,7 +100,10 @@ export function VoiceBar({ agentStatus, isMicEnabled, analyserRef, sessionColor,
       colorRef.current = lerpColor(colorRef.current, targetColor, 0.08);
       const { r, g, b } = colorRef.current;
 
-      const useRealAudio = isMicEnabled || agentState === "speaking";
+      const useRealAudio =
+        phase === "user_listening" ||
+        phase === "user_talkover" ||
+        phase === "agent_speaking";
       const audioLevels = useRealAudio ? getAudioLevels() : null;
 
       const bars = barsRef.current;
@@ -112,14 +115,15 @@ export function VoiceBar({ agentStatus, isMicEnabled, analyserRef, sessionColor,
           const boosted = Math.min(1, level * BOOST_LEVEL);
           const curved = Math.pow(boosted, 0.6);
           target = Math.max(BAR_MIN_HEIGHT, curved * height * 0.85);
-        } else if (agentState === "thinking") {
+        } else if (phase === "agent_thinking") {
           const wave = Math.sin(t * 2.5 + i * 0.35) * 0.5 + 0.5;
           const wave2 = Math.sin(t * 1.8 + i * 0.5 + 1.2) * 0.3 + 0.3;
           target = (wave * 0.6 + wave2 * 0.4) * height * 0.3 + BAR_MIN_HEIGHT;
-        } else if (agentState === "error") {
+        } else if (phase === "error") {
           const pulse = Math.sin(t * 1.5) * 0.3 + 0.4;
           target = pulse * height * 0.4 + BAR_MIN_HEIGHT;
-        } else if (agentState === "speaking") {
+        } else if (phase === "agent_speaking") {
+          // Fallback wave when speaking but the remote analyser has no audio yet.
           const wave = Math.sin(t * 4 + i * 0.4) * 0.4 + 0.5;
           const burst = Math.sin(t * 7 + i * 0.8) * 0.3;
           const envelope = Math.sin(t * 1.5) * 0.3 + 0.7;
@@ -143,7 +147,7 @@ export function VoiceBar({ agentStatus, isMicEnabled, analyserRef, sessionColor,
         const y = (height - barHeight) / 2;
 
         const opacity =
-          agentState === "idle" && !isMicEnabled
+          phase === "idle_muted"
             ? 0.3
             : 0.6 + Math.sin(t * 2 + i * 0.5) * 0.2;
 
@@ -158,7 +162,7 @@ export function VoiceBar({ agentStatus, isMicEnabled, analyserRef, sessionColor,
 
     animRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(animRef.current);
-  }, [agentState, isMicEnabled, analyserRef, sessionColor, micColorOverride]);
+  }, [phase, analyserRef, sessionColor, micColorOverride]);
 
   return (
     <canvas

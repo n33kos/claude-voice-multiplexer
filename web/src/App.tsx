@@ -21,6 +21,7 @@ import { PairScreen } from "./components/PairScreen/PairScreen";
 import { TerminalOverlay } from "./components/TerminalOverlay/TerminalOverlay";
 import { ContextBar } from "./components/ContextBar/ContextBar";
 import { useContextUsage } from "./hooks/useContextUsage";
+import { VoiceMachineProvider } from "./contexts/VoiceMachine";
 import { useKeepAwake } from "./hooks/useKeepAwake";
 import styles from "./App.module.scss";
 
@@ -111,6 +112,10 @@ export default function App() {
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  // Increments each time the connected session gets a new user transcript,
+  // i.e. the user's utterance committed.  Feeds the voice state machine so a
+  // talk-over override clears the moment the spoken input is captured.
+  const userCommitSeq = relay.transcript.filter((e) => e.speaker === "user").length;
   // Stable callback so memoized children (e.g. Transcript's EntryRow) can
   // skip re-renders when nothing else changes.  Inline arrow fns get a new
   // identity every render and defeat React.memo.
@@ -277,7 +282,11 @@ export default function App() {
   }
 
   return (
-    <>
+    <VoiceMachineProvider
+      agentState={relay.agentStatus.state}
+      posture={micMode}
+      userCommitSeq={userCommitSeq}
+    >
       {settings.showParticles && (
         <ParticleNetwork
           sessionId={relay.connectedSessionId}
@@ -385,9 +394,11 @@ export default function App() {
                 onConnected={() => livekit.setConnected(true)}
                 onDisconnected={() => livekit.setConnected(false)}
                 onInterrupt={() => {
-                  // Barge-in: cancel any in-progress TTS so the user
-                  // can speak.  Does not interrupt Claude itself —
-                  // that now comes from send-keys during tool use.
+                  // Talk-over: stop Claude's TTS AND put the relay back into
+                  // listening so it captures the user's speech (during Claude's
+                  // turn the relay otherwise ignores the mic).  interruptAgent
+                  // cancels the TTS, drains queued chunks, and hands the turn
+                  // to the user without killing Claude's background process.
                   relay.interruptAgent();
                   if (relay.connectedSessionId) {
                     relay.cancelTts(relay.connectedSessionId);
@@ -448,6 +459,6 @@ export default function App() {
           onRespawnAllSessions={relay.restartAllSessions}
         />
       </div>
-    </>
+    </VoiceMachineProvider>
   );
 }

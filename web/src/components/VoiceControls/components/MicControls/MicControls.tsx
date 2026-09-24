@@ -1,9 +1,8 @@
-import { useEffect, useRef, useMemo, useCallback } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import type { MicMode } from "../../../../types/micMode";
 import classNames from "classnames";
 import {
   useRoomContext,
-  useLocalParticipant,
   useTracks,
 } from "@livekit/components-react";
 import { Track } from "livekit-client";
@@ -12,6 +11,7 @@ import { sessionHue } from "../../../../utils/sessionHue";
 import { VoiceBar } from "../../../VoiceBar/VoiceBar";
 import { useTrackAnalyser } from "../../hooks/useTrackAnalyser";
 import { useWakeWord } from "../../../../wake-word/useWakeWord";
+import { useVoiceMachine } from "../../../../contexts/VoiceMachine";
 import type { MicControlsProps } from "../../VoiceControls.types";
 import styles from "./MicControls.module.scss";
 
@@ -35,7 +35,7 @@ export function MicControls({
   particleAnalyserRef,
 }: MicControlsProps) {
   const room = useRoomContext();
-  const { isMicrophoneEnabled } = useLocalParticipant();
+  const machine = useVoiceMachine();
   const hue = hueOverride != null ? hueOverride : (sessionId ? sessionHue(sessionId) : null);
 
   // micMode is owned by App so useChime and VoiceBar share the same
@@ -81,14 +81,30 @@ export function MicControls({
   const prevSilenceSeq = useRef(disableAutoListenSeq);
   const INACTIVITY_MS = 5000;
 
-  // Suspend wake-word matching only while Claude is speaking (its TTS would
-  // otherwise feed the mic).  During thinking the mic stays usable.
-  const suspendWake = agentStatus.state === "speaking";
+  // Wake gating comes from the state machine: it matches only on the user's
+  // turn (wake_armed), never during Claude's turn, so Claude can't self-trigger.
+  // Plus a re-arm cooldown: after returning to armed, hold matching off briefly
+  // so trailing speech, the TTS tail, or the ready chime can't instantly
+  // re-trigger.  A genuine new "hey claude" after the window still fires.
+  const WAKE_REARM_COOLDOWN_MS = 1500;
+  const [wakeCooldown, setWakeCooldown] = useState(false);
+  const prevPhaseRef = useRef(machine.phase);
+  useEffect(() => {
+    const prev = prevPhaseRef.current;
+    prevPhaseRef.current = machine.phase;
+    if (machine.phase === "wake_armed" && prev !== "wake_armed") {
+      setWakeCooldown(true);
+      const id = window.setTimeout(() => setWakeCooldown(false), WAKE_REARM_COOLDOWN_MS);
+      return () => window.clearTimeout(id);
+    }
+  }, [machine.phase]);
+  const suspendWake = machine.suspendWake || wakeCooldown;
 
   const onWakeMatch = useCallback(() => {
     if (wakeWordChime) playChime();
-    setMicMode("active");
-  }, [wakeWordChime]);
+    // Keep the posture on "wake"; open the mic transiently for one utterance.
+    machine.triggerWake();
+  }, [wakeWordChime, machine.triggerWake]);
 
   const wake = useWakeWord({
     enabled: wakeWordEnabled,
@@ -108,8 +124,13 @@ export function MicControls({
   useEffect(() => {
     if (disableAutoListenSeq === prevSilenceSeq.current) return;
     prevSilenceSeq.current = disableAutoListenSeq;
-    if (micMode !== "active") return;
-    setMicMode(lastInactiveMode.current);
+    if (machine.phase !== "user_listening" && machine.phase !== "user_talkover") return;
+    if (micMode === "wake") {
+      // Wake listen ended by silence — return to armed, don't change posture.
+      machine.stopUserAudio();
+    } else {
+      setMicMode(lastInactiveMode.current);
+    }
     void room.localParticipant.setMicrophoneEnabled(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disableAutoListenSeq]);
@@ -190,8 +211,7 @@ export function MicControls({
   // Covers the hardware-mute / dead-quiet case where the server-side
   // silence signal never fires because VAD never sees any speech.
   useEffect(() => {
-    if (micMode !== "active") return;
-    if (agentStatus.state !== "idle" && agentStatus.state !== "thinking") return;
+    if (machine.phase !== "user_listening" && machine.phase !== "user_talkover") return;
     const SILENCE_RMS_THRESHOLD = 0.01;
     const tickMs = 200;
     let silentMs = 0;
@@ -212,18 +232,20 @@ export function MicControls({
       silentMs += tickMs;
       if (silentMs >= INACTIVITY_MS) {
         window.clearInterval(id);
-        setMicMode(lastInactiveMode.current);
+        if (micMode === "wake") {
+          machine.stopUserAudio();
+        } else {
+          setMicMode(lastInactiveMode.current);
+        }
         void room.localParticipant.setMicrophoneEnabled(false);
       }
     }, tickMs);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [micMode, agentStatus.state, localAnalyser]);
+  }, [machine.phase, localAnalyser]);
 
-  const isMicActive =
-    !!isMicrophoneEnabled && (agentState === "idle" || agentState === "thinking");
   const activeAnalyser =
-    agentState === "speaking" ? remoteAnalyser : localAnalyser;
+    machine.phase === "agent_speaking" ? remoteAnalyser : localAnalyser;
 
   useEffect(() => {
     if (!particleAnalyserRef) return;
@@ -234,22 +256,13 @@ export function MicControls({
     return () => clearInterval(id);
   }, [activeAnalyser, particleAnalyserRef]);
 
-  const prevAgentState = useRef(agentState);
+  // Single source of truth: the LiveKit mic follows the state machine's
+  // micShouldBeLive.  It is true on the user's turn in auto posture and during
+  // a manual talk-over, and false during Claude's turn, when muted, and while
+  // wake-armed (wake matching runs on its own stream).
   useEffect(() => {
-    const stateChanged = prevAgentState.current !== agentState;
-    prevAgentState.current = agentState;
-
-    if (agentState === "idle" || agentState === "thinking") {
-      // Keep the mic in whatever posture the user chose — across turns and
-      // through tool calls (thinking).  Only speaking closes it, to stop the
-      // mic capturing Claude's own TTS.  This lets the user talk during tool
-      // calls; the utterance queues for Claude's next turn instead of being
-      // cut off.  Silence detection is the only other thing that closes it.
-      room.localParticipant.setMicrophoneEnabled(micMode === "active");
-    } else if (stateChanged && agentState === "speaking") {
-      room.localParticipant.setMicrophoneEnabled(false);
-    }
-  }, [agentState, micMode, room.localParticipant]);
+    room.localParticipant.setMicrophoneEnabled(machine.micShouldBeLive);
+  }, [machine.micShouldBeLive, room.localParticipant]);
 
   const muteRemoteAudio = () => {
     const t = remoteTrackRef?.publication?.track as
@@ -268,11 +281,13 @@ export function MicControls({
 
   const toggleMic = async () => {
     initAudio();
-    // Escape hatch during speaking/thinking: always force active.
+    // Talk-over during Claude's turn: force the mic on, stop the TTS, but let
+    // Claude keep running.  beginTalkOver sets the override so incoming tool
+    // updates can't stomp the mic back off; onInterrupt cancels the TTS only.
     if (agentState === "speaking" || agentState === "thinking") {
       muteRemoteAudio();
       onInterrupt();
-      setMicMode("active");
+      machine.beginTalkOver();
       await room.localParticipant.setMicrophoneEnabled(true);
       return;
     }
@@ -329,20 +344,19 @@ export function MicControls({
     }
   })();
 
-  // Only while Claude is speaking is the mic force-disabled, so visually
-  // treat the button as muted then regardless of the underlying micMode.
-  // During thinking the mic keeps recording, so it reflects the real micMode.
-  const micEffectivelyOff = agentState === "speaking";
+  // Button styling follows the machine phase, exactly like the visualizer, so
+  // the two never disagree: recording reads active, wake-armed reads wake, and
+  // everything else reads off — regardless of the underlying posture.
+  const recording =
+    machine.phase === "user_listening" || machine.phase === "user_talkover";
   const micButtonClass =
-    micEffectivelyOff ? styles.MicButtonInactive
-    : micMode === "wake" ? styles.MicButtonWake
-    : micMode === "active" ? styles.MicButtonActive
+    recording ? styles.MicButtonActive
+    : machine.phase === "wake_armed" ? styles.MicButtonWake
     : styles.MicButtonInactive;
 
   const micIconClass =
-    micEffectivelyOff ? styles.MicIconInactive
-    : micMode === "wake" ? styles.MicIconWake
-    : micMode === "active" ? styles.MicIconActive
+    recording ? styles.MicIconActive
+    : machine.phase === "wake_armed" ? styles.MicIconWake
     : styles.MicIconInactive;
 
   return (
@@ -362,8 +376,7 @@ export function MicControls({
       )}
 
       <VoiceBar
-        agentStatus={agentStatus}
-        isMicEnabled={isMicActive}
+        phase={machine.phase}
         analyserRef={activeAnalyser}
         sessionColor={sessionRgb}
       />
