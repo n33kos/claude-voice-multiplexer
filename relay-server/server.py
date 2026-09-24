@@ -1271,6 +1271,67 @@ def _tts_is_duplicate(session_id: str, text: str) -> bool:
     return False
 
 
+# ---- MessageDisplay streaming: per-chunk TTS + per-chunk transcript ----
+#
+# The MessageDisplay hook forwards each assistant text chunk to /stream as it
+# is displayed.  Chunks arrive in index order, keyed by message_id, with
+# `final` true on the last chunk of a block.  For each chunk we:
+#   - post it as its own "claude" transcript bubble (interleaves with tool
+#     calls in the web UI, like native Claude's partial-then-tools flow), and
+#   - queue the whole chunk to the TTS FIFO as one utterance, so speech starts
+#     on the first chunk and each chunk plays continuously.  Chunks land on
+#     natural (paragraph) breaks, so queuing per chunk avoids the inter-item
+#     pauses that per-sentence queuing introduced without losing the fast start.
+
+_open_streams: dict[str, set[str]] = {}  # session_id -> message_ids with deltas but no final yet
+_deferred_turn_complete: dict[str, asyncio.Task] = {}  # session_id -> pending idle-transition task
+_DEFERRED_TURN_COMPLETE_TIMEOUT = 8.0  # seconds; safety net if `final` never lands
+
+
+async def _finish_turn(session_id: str):
+    """Run the end-of-turn idle transition and broadcast turn-complete.
+
+    handle_claude_listening defers the idle state while the TTS queue is
+    non-empty, so the mic re-enables only after queued sentences finish.
+    """
+    if _agent:
+        await _agent.handle_claude_listening(session_id)
+    msg = json.dumps({
+        "type": "turn-complete",
+        "session_id": session_id,
+        "ts": time.time(),
+    })
+    for client_ws in list(_clients.values()):
+        try:
+            await client_ws.send_text(msg)
+        except Exception:
+            pass
+
+
+async def _maybe_finish_deferred_turn(session_id: str):
+    """Run a deferred turn-complete once every open stream for the session has closed."""
+    task = _deferred_turn_complete.get(session_id)
+    if task is None:
+        return
+    if _open_streams.get(session_id):
+        return  # streams still open — wait for their final chunks
+    _deferred_turn_complete.pop(session_id, None)
+    if not task.done():
+        task.cancel()
+    await _finish_turn(session_id)
+
+
+async def _deferred_turn_timeout(session_id: str):
+    """Safety net: force the turn-complete if a stream's `final` chunk never arrives."""
+    try:
+        await asyncio.sleep(_DEFERRED_TURN_COMPLETE_TIMEOUT)
+    except asyncio.CancelledError:
+        return
+    _deferred_turn_complete.pop(session_id, None)
+    _open_streams.pop(session_id, None)
+    await _finish_turn(session_id)
+
+
 @app.post("/api/sessions/{session_id}/tts")
 async def tts_session(session_id: str, request: Request):
     """Play TTS audio for a session.
@@ -1305,36 +1366,66 @@ async def tts_session(session_id: str, request: Request):
     return JSONResponse({"ok": True})
 
 
+@app.post("/api/sessions/{session_id}/stream")
+async def stream_session(session_id: str, request: Request):
+    """Receive a streamed assistant text chunk from the MessageDisplay hook.
+
+    Posts the chunk as its own transcript bubble and queues complete sentences
+    for TTS as they form.  See the streaming helpers above for the model.
+    """
+    _require_auth(request)
+    body = await request.json()
+    message_id = (body.get("message_id") or "").strip()
+    delta = body.get("delta") or ""
+    final = bool(body.get("final"))
+
+    session = await registry.get(session_id)
+    if not session:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+    if not message_id:
+        return JSONResponse({"error": "message_id is required"}, status_code=400)
+
+    # UI: one transcript bubble per chunk, interleaving with tool-call entries.
+    # TTS: queue the whole chunk as one utterance so it plays continuously.
+    _open_streams.setdefault(session_id, set()).add(message_id)
+    if delta.strip():
+        await _notify_client_transcript(session_id, "claude", delta)
+        if _agent:
+            await _agent.handle_claude_response(session_id, delta)
+
+    if final:
+        _open_streams.get(session_id, set()).discard(message_id)
+        await _maybe_finish_deferred_turn(session_id)
+
+    return JSONResponse({"ok": True})
+
+
 @app.post("/api/sessions/{session_id}/turn-complete")
 async def turn_complete_session(session_id: str, request: Request):
     """Signal that Claude has finished an assistant turn.
 
-    Routes through the agent's handle_claude_listening path so the
-    TTS-end transition lands on 'idle' (mic re-enables) instead of
-    'thinking' (mic stays disabled waiting for more Claude work).
+    Routes through the agent's handle_claude_listening path so the TTS-end
+    transition lands on 'idle' (mic re-enables) instead of 'thinking'.  If a
+    MessageDisplay stream is still open, the idle transition is deferred until
+    the stream's final chunk lands, so the last sentence is queued first.
     """
     _require_auth(request)
     session = await registry.get(session_id)
     if not session:
         return JSONResponse({"error": "Session not found"}, status_code=404)
 
-    # Tell the agent Claude's turn is done — it will transition to idle
-    # when any currently-playing TTS finishes.  Await rather than spawn
-    # so the broadcast below cannot race ahead of the state transition.
-    if _agent:
-        await _agent.handle_claude_listening(session_id)
+    # Defer while a message is still streaming in; _maybe_finish_deferred_turn
+    # runs it once the final chunk closes the stream.
+    if _open_streams.get(session_id):
+        prev = _deferred_turn_complete.get(session_id)
+        if prev and not prev.done():
+            prev.cancel()
+        _deferred_turn_complete[session_id] = asyncio.create_task(
+            _deferred_turn_timeout(session_id)
+        )
+        return JSONResponse({"ok": True, "deferred": True})
 
-    # Also broadcast a turn-complete event for the web client.
-    msg = json.dumps({
-        "type": "turn-complete",
-        "session_id": session_id,
-        "ts": time.time(),
-    })
-    for client_ws in list(_clients.values()):
-        try:
-            await client_ws.send_text(msg)
-        except Exception:
-            pass
+    await _finish_turn(session_id)
     return JSONResponse({"ok": True})
 
 

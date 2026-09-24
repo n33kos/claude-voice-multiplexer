@@ -2,22 +2,23 @@
 #
 # vmux-stop-hook.sh — Claude Code Stop hook for Voice Multiplexer
 #
-# Fires at the end of each assistant turn.  Reads the last assistant message
-# from the transcript JSONL, ships its text content to the relay for TTS
-# synthesis, then broadcasts a turn-complete signal so the web client
-# re-enables the microphone.
+# Fires at the end of each assistant turn.  Speaking is now handled by the
+# MessageDisplay hook (per-block streaming into the relay), so this hook no
+# longer reads the transcript or ships TTS.  Its only jobs are:
+#   1. Re-register the session (idempotent self-heal if the relay restarted).
+#   2. Signal turn-complete so the web client re-enables the microphone.
+#
+# The relay defers the turn-complete idle transition while a message stream is
+# still open, so the final streamed sentence finishes before the mic re-enables.
 #
 # Input (stdin JSON from Claude Code):
 #   {
 #     "session_id": "<claude-session-uuid>",
-#     "transcript_path": "/path/to/transcript.jsonl",
 #     "cwd": "/path/to/working/dir",
 #     "hook_event_name": "Stop",
-#     "permission_mode": "default",
 #   }
 #
-# The relay session_id is sha256(cwd)[:12] — same derivation used in
-# relay-server/mcp_tools.py and daemon/session_manager.py.
+# The relay session_id is sha256(project_dir)[:12].
 
 set -uo pipefail
 
@@ -27,25 +28,19 @@ RELAY_HOST="${RELAY_HOST:-127.0.0.1}"
 RELAY_PORT="${RELAY_PORT:-3100}"
 RELAY_URL="http://${RELAY_HOST}:${RELAY_PORT}"
 
-# Bail silently if the relay environment is not present.
 if [ ! -f "$SECRET_FILE" ]; then
     exit 0
 fi
 DAEMON_SECRET=$(tr -d '[:space:]' < "$SECRET_FILE")
 
-# Read hook payload
 input=$(cat)
-transcript_path=$(echo "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
 claude_session_id=$(echo "$input" | jq -r '.session_id // empty' 2>/dev/null)
 cwd=$(echo "$input" | jq -r '.cwd // empty' 2>/dev/null)
-if [ -z "$transcript_path" ] || [ -z "$cwd" ] || [ ! -f "$transcript_path" ]; then
+if [ -z "$cwd" ]; then
     exit 0
 fi
 
-# The relay registers sessions under the MCP project dir, which may not
-# match Claude Code's cwd (e.g., when Claude is operating in a subfolder
-# like /path/to/project/web).  Prefer workspace.project_dir from the
-# statusline JSON we maintain; fall back to cwd if that file is missing.
+# Prefer workspace.project_dir from the statusline JSON; fall back to cwd.
 statusline_file="$VMUX_DIR/sessions/${claude_session_id}.json"
 session_cwd="$cwd"
 if [ -f "$statusline_file" ]; then
@@ -57,36 +52,8 @@ fi
 
 relay_session_id=$(printf '%s' "$session_cwd" | shasum -a 256 | awk '{print substr($1, 1, 12)}')
 
-# Extract the latest assistant text from the last ~5 seconds.
-#
-# Claude Code flushes the current turn's final text to the JSONL async,
-# so we poll for up to ~2.5 seconds looking for fresh content.  Tool-only
-# turns with no text leave last_text empty and we skip TTS.
-_extract_fresh_text() {
-    local cutoff=$(($(date +%s) - 5))
-    jq -rs --argjson cutoff "$cutoff" '
-        [.[]
-         | select(.message.role == "assistant")
-         | select((.timestamp // "" | sub("\\.\\d+Z$"; "Z") | fromdate? // 0) >= $cutoff)]
-        | map(.message.content | map(select(.type == "text") | .text) | join("\n"))
-        | map(select(length > 0))
-        | .[-1] // ""
-    ' "$transcript_path" 2>/dev/null
-}
-
-last_text=""
-for i in 1 2 3 4 5 6 7 8; do
-    last_text=$(_extract_fresh_text)
-    if [ -n "$last_text" ]; then
-        break
-    fi
-    sleep 0.3
-done
-
-# Resilience: re-register before each turn.  /register is idempotent
-# (replaces any existing entry with the same ID) and this self-heals if
-# the relay was restarted since our SessionStart hook fired.  Cheap
-# enough (single HTTP round-trip on loopback) to run on every turn.
+# Re-register before signalling.  /register is idempotent and self-heals if
+# the relay was restarted since our SessionStart hook fired.
 dir_name=$(basename "$session_cwd")
 register_payload=$(jq -n --arg cwd "$session_cwd" --arg name "$dir_name" '{cwd: $cwd, name: $name}')
 curl -sS -X POST \
@@ -96,23 +63,8 @@ curl -sS -X POST \
     "$RELAY_URL/api/sessions/$relay_session_id/register" \
     -d "$register_payload" >/dev/null 2>&1
 
-# Order matters: ship TTS FIRST and block until the relay has queued it,
-# so /turn-complete arrives after the response_queue is populated.  If
-# /turn-complete arrives first, handle_claude_listening races and marks
-# the session idle before TTS starts, so the TTS-end transition lands
-# on "thinking" instead of "idle" and the mic stays disabled.
-if [ -n "$last_text" ]; then
-    payload=$(jq -n --arg text "$last_text" '{text: $text, interruptible: true}')
-    curl -sS -X POST \
-        -H "X-Daemon-Secret: $DAEMON_SECRET" \
-        -H "Content-Type: application/json" \
-        --max-time 5 \
-        "$RELAY_URL/api/sessions/$relay_session_id/tts" \
-        -d "$payload" >/dev/null 2>&1
-fi
-
-# Always signal turn-complete so the mic re-enables after TTS — even for
-# tool-only turns (silent is acceptable per plan Q4).
+# Signal turn-complete so the mic re-enables.  The relay holds this until any
+# open message stream finishes and the TTS queue drains.
 curl -sS -X POST \
     -H "X-Daemon-Secret: $DAEMON_SECRET" \
     -H "Content-Type: application/json" \
