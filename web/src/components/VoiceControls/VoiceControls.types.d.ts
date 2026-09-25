@@ -1,6 +1,7 @@
 import type React from "react";
 import type { AgentStatus } from "../../hooks/useRelay";
 import type { MicMode } from "../../types/micMode";
+import type { WakePhrase } from "../../wake-word/useWakeWord";
 
 export interface VoiceControlsProps {
   token: string;
@@ -13,7 +14,9 @@ export interface VoiceControlsProps {
   showStatusPill: boolean;
   wakeWordEnabled: boolean;
   wakeWordChime: boolean;
-  wakeWordReloadKey: number;
+  wakeWordPhrase: WakePhrase;
+  wakeWordThreshold: number;
+  wakeWordDebug: boolean;
   micMode: MicMode;
   setMicMode: (m: MicMode) => void;
   disableAutoListenSeq: number;
@@ -35,7 +38,9 @@ export interface MicControlsProps {
   showStatusPill: boolean;
   wakeWordEnabled: boolean;
   wakeWordChime: boolean;
-  wakeWordReloadKey: number;
+  wakeWordPhrase: WakePhrase;
+  wakeWordThreshold: number;
+  wakeWordDebug: boolean;
   micMode: MicMode;
   setMicMode: (m: MicMode) => void;
   disableAutoListenSeq: number;

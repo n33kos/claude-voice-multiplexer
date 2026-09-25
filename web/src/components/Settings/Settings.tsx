@@ -4,12 +4,14 @@ import type { ThemeMode, FieldPosition, BarVisibility } from "../../hooks/useSet
 import type { SettingsProps } from "./Settings.types";
 import { useVoiceSettings } from "../../hooks/useVoiceSettings";
 import type { VoiceOption } from "../../hooks/useVoiceSettings";
-import { EnrollmentModal } from "../../wake-word/EnrollmentModal";
-import type { EnrollmentPayload } from "../../wake-word/EnrollmentModal";
-import { buildEnrollmentTwoStage } from "../../wake-word/enroll";
-import { saveTemplates, clearTemplates, loadTemplates, updateUserThreshold } from "../../wake-word/db";
-import type { WakeWordRecord } from "../../wake-word/db";
+import { DEFAULT_WAKE_THRESHOLDS } from "../../hooks/useSettings";
+import type { WakePhrase } from "../../wake-word/useWakeWord";
 import styles from "./Settings.module.scss";
+
+const WAKE_PHRASE_OPTIONS: { value: WakePhrase; label: string }[] = [
+  { value: "hey_claude", label: "Hey Claude" },
+  { value: "computer", label: "Computer" },
+];
 
 interface ServiceHealth {
   whisper: { status: string };
@@ -110,12 +112,9 @@ export function Settings({
   connectedClients,
   onGenerateCode,
   onRevokeDevice,
-  onWakeWordEnrolled,
   onRespawnAllSessions,
 }: SettingsProps) {
   const [pairCode, setPairCode] = useState<string | null>(null);
-  const [enrollOpen, setEnrollOpen] = useState(false);
-  const [wakeRecord, setWakeRecord] = useState<WakeWordRecord | null>(null);
   const [respawnAllBusy, setRespawnAllBusy] = useState(false);
   const [respawnAllResult, setRespawnAllResult] = useState<string | null>(null);
 
@@ -143,36 +142,9 @@ export function Settings({
     }
   }, [onRespawnAllSessions]);
 
-  useEffect(() => {
-    if (!open) return;
-    loadTemplates().then(setWakeRecord).catch(() => setWakeRecord(null));
-  }, [open]);
-
-  const handleEnrollmentComplete = useCallback(
-    async (payload: EnrollmentPayload) => {
-      const { templates, threshold, numCoeffs } = buildEnrollmentTwoStage(payload);
-      if (templates.length === 0) throw new Error("No usable clips");
-      await saveTemplates({
-        phrase: "hey claude",
-        templates,
-        threshold,
-        userThreshold: null,
-        enrolledAt: Date.now(),
-        numCoeffs,
-      });
-      const rec = await loadTemplates();
-      setWakeRecord(rec);
-      onWakeWordEnrolled?.();
-    },
-    [onWakeWordEnrolled],
-  );
-
-  const handleWakeWordReset = useCallback(async () => {
-    await clearTemplates();
-    setWakeRecord(null);
-    if (settings.wakeWordEnabled) onUpdate({ wakeWordEnabled: false });
-    onWakeWordEnrolled?.();
-  }, [onUpdate, onWakeWordEnrolled, settings.wakeWordEnabled]);
+  const wakePhrase = settings.wakeWordPhrase;
+  const wakeThreshold =
+    settings.wakeWordThresholds[wakePhrase] ?? DEFAULT_WAKE_THRESHOLDS[wakePhrase];
   const [codeLoading, setCodeLoading] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const { health, loading: healthLoading, refresh: refreshHealth } = useServiceHealth(open);
@@ -608,22 +580,63 @@ export function Settings({
 
           <label className={styles.SettingRow}>
             <div className={styles.SettingLabel}>
-              <span className={styles.SettingTitle}>Listen for "hey claude"</span>
+              <span className={styles.SettingTitle}>Wake word listening</span>
               <span className={styles.SettingDescription}>
-                Fully on-device. After Claude's turn, mic enters wake mode (yellow)
-                — say "hey claude" to take your next turn. Mic stays open while listening.
+                Fully on-device. After Claude's turn, the mic enters wake mode
+                (yellow) — say the wake word to take your next turn.
               </span>
             </div>
             <button
               role="switch"
               aria-checked={settings.wakeWordEnabled}
-              disabled={!wakeRecord}
               onClick={() => onUpdate({ wakeWordEnabled: !settings.wakeWordEnabled })}
               className={classNames(styles.Toggle, { [styles.ToggleActive]: settings.wakeWordEnabled })}
             >
               <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.wakeWordEnabled })} />
             </button>
           </label>
+
+          <div className={styles.SettingRow}>
+            <div className={styles.SettingLabel}>
+              <span className={styles.SettingTitle}>Wake phrase</span>
+              <span className={styles.SettingDescription}>
+                "Computer" detects most reliably right now. "Hey Claude" is more
+                selective and may need the sensitivity lowered.
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              {WAKE_PHRASE_OPTIONS.map((opt) => {
+                const selected = wakePhrase === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => onUpdate({ wakeWordPhrase: opt.value })}
+                    className={styles.CodeButton}
+                    style={
+                      selected
+                        ? {
+                            backgroundColor: "rgb(139, 92, 246)",
+                            borderColor: "rgb(139, 92, 246)",
+                            color: "#fff",
+                            fontWeight: 600,
+                          }
+                        : {
+                            backgroundColor: "transparent",
+                            borderColor: "rgba(139, 92, 246, 0.4)",
+                            color: "var(--text-secondary, #9ca3af)",
+                            fontWeight: 400,
+                            opacity: 0.8,
+                          }
+                    }
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           <label className={styles.SettingRow}>
             <div className={styles.SettingLabel}>
@@ -642,56 +655,53 @@ export function Settings({
             </button>
           </label>
 
-          {wakeRecord && (
-            <div className={styles.VoiceSettingRow}>
-              <div className={styles.SettingLabel}>
-                <span className={styles.SettingTitle}>Sensitivity</span>
-                <span className={styles.SettingDescription}>
-                  Distance threshold (lower = stricter). Auto-tuned: {wakeRecord.threshold.toFixed(1)} · Current: {(wakeRecord.userThreshold ?? wakeRecord.threshold).toFixed(1)}. Watch the [wake-worker] score logs in DevTools and pick a value just above what your real "hey claude" scores.
-                </span>
-              </div>
-              <div className={styles.SliderContainer}>
-                <span className={styles.SliderLabel}>10</span>
-                <input
-                  type="range"
-                  min={10}
-                  max={50}
-                  step={0.5}
-                  value={wakeRecord.userThreshold ?? wakeRecord.threshold}
-                  onChange={async (e) => {
-                    const v = parseFloat(e.target.value);
-                    await updateUserThreshold(v);
-                    const rec = await loadTemplates();
-                    setWakeRecord(rec);
-                    onWakeWordEnrolled?.();
-                  }}
-                  className={styles.Slider}
-                />
-                <span className={styles.SliderLabel}>50</span>
-              </div>
-            </div>
-          )}
-
-          <div className={styles.SettingRow}>
+          <div className={styles.VoiceSettingRow}>
             <div className={styles.SettingLabel}>
-              <span className={styles.SettingTitle}>Voice training</span>
+              <span className={styles.SettingTitle}>Sensitivity ({wakeThreshold.toFixed(2)})</span>
               <span className={styles.SettingDescription}>
-                {wakeRecord
-                  ? `Trained ${new Date(wakeRecord.enrolledAt).toLocaleDateString()} · ${wakeRecord.templates.length} clips`
-                  : "Train your voice to enable wake-word detection"}
+                Detection threshold for "{WAKE_PHRASE_OPTIONS.find((o) => o.value === wakePhrase)?.label}"
+                (higher = stricter, fewer false triggers). Saved per phrase.
               </span>
             </div>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              {wakeRecord && (
-                <button onClick={handleWakeWordReset} className={styles.RevokeButton}>
-                  Clear
-                </button>
-              )}
-              <button onClick={() => setEnrollOpen(true)} className={styles.CodeButton}>
-                {wakeRecord ? "Retrain" : "Train"}
-              </button>
+            <div className={styles.SliderContainer}>
+              <span className={styles.SliderLabel}>0.05</span>
+              <input
+                type="range"
+                min={0.05}
+                max={0.95}
+                step={0.05}
+                value={wakeThreshold}
+                onChange={(e) =>
+                  onUpdate({
+                    wakeWordThresholds: {
+                      ...settings.wakeWordThresholds,
+                      [wakePhrase]: parseFloat(e.target.value),
+                    },
+                  })
+                }
+                className={styles.Slider}
+              />
+              <span className={styles.SliderLabel}>0.95</span>
             </div>
           </div>
+
+          <label className={styles.SettingRow}>
+            <div className={styles.SettingLabel}>
+              <span className={styles.SettingTitle}>Debug meter</span>
+              <span className={styles.SettingDescription}>
+                Show a live score graph and model status under the voice bar,
+                to tune sensitivity and confirm the model is running.
+              </span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.wakeWordDebug}
+              onClick={() => onUpdate({ wakeWordDebug: !settings.wakeWordDebug })}
+              className={classNames(styles.Toggle, { [styles.ToggleActive]: settings.wakeWordDebug })}
+            >
+              <span className={classNames(styles.ToggleThumb, { [styles.ToggleThumbActive]: settings.wakeWordDebug })} />
+            </button>
+          </label>
 
           <div className={styles.Divider} />
 
@@ -836,11 +846,6 @@ export function Settings({
           )}
         </div>
       </div>
-      <EnrollmentModal
-        open={enrollOpen}
-        onClose={() => setEnrollOpen(false)}
-        onComplete={handleEnrollmentComplete}
-      />
     </div>
   );
 }

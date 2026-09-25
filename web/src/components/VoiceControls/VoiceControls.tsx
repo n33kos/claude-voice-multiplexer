@@ -89,7 +89,9 @@ export function VoiceControls({
   showStatusPill,
   wakeWordEnabled,
   wakeWordChime,
-  wakeWordReloadKey,
+  wakeWordPhrase,
+  wakeWordThreshold,
+  wakeWordDebug,
   micMode,
   setMicMode,
   disableAutoListenSeq,
@@ -107,7 +109,7 @@ export function VoiceControls({
         token={token}
         serverUrl={serverUrl}
         connect={true}
-        audio={autoListen}
+        audio={false}
         video={false}
         onConnected={onConnected}
         onDisconnected={onDisconnected}
@@ -122,7 +124,9 @@ export function VoiceControls({
           showStatusPill={showStatusPill}
           wakeWordEnabled={wakeWordEnabled}
           wakeWordChime={wakeWordChime}
-          wakeWordReloadKey={wakeWordReloadKey}
+          wakeWordPhrase={wakeWordPhrase}
+          wakeWordThreshold={wakeWordThreshold}
+          wakeWordDebug={wakeWordDebug}
           micMode={micMode}
           setMicMode={setMicMode}
           disableAutoListenSeq={disableAutoListenSeq}

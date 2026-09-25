@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import type { WakePhrase } from '../wake-word/useWakeWord'
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 
@@ -35,10 +36,16 @@ export interface Settings {
   showContextBar: boolean
   contextBarFields: ContextBarFields
   effortLevel: EffortLevel
-  /** Wake-word "hey claude" listener feature flag. Default OFF. */
+  /** Wake-word listener feature flag. Default OFF. */
   wakeWordEnabled: boolean
   /** Play a chime when the wake word fires. */
   wakeWordChime: boolean
+  /** Which pre-trained wake phrase to listen for. */
+  wakeWordPhrase: WakePhrase
+  /** Detection threshold (0..1) per phrase; higher = stricter. */
+  wakeWordThresholds: Record<WakePhrase, number>
+  /** Show the live wake-word score graph + model status (debug aid). */
+  wakeWordDebug: boolean
   /**
    * Keep the device awake while listening / armed. When ON we hold a
    * Screen Wake Lock and (on mobile, while visibility is hidden) play
@@ -50,6 +57,11 @@ export interface Settings {
 }
 
 const STORAGE_KEY = 'voice-multiplexer-settings'
+
+export const DEFAULT_WAKE_THRESHOLDS: Record<WakePhrase, number> = {
+  hey_claude: 0.1,
+  computer: 0.5,
+}
 
 export const DEFAULT_CONTEXT_BAR_FIELDS: ContextBarFields = {
   model: 'left',
@@ -81,6 +93,9 @@ const DEFAULTS: Settings = {
   effortLevel: 'medium',
   wakeWordEnabled: false,
   wakeWordChime: true,
+  wakeWordPhrase: 'computer',
+  wakeWordThresholds: DEFAULT_WAKE_THRESHOLDS,
+  wakeWordDebug: false,
   keepAwake: isMobileUA(),
 }
 
@@ -95,6 +110,10 @@ function loadSettings(): Settings {
         contextBarFields: {
           ...DEFAULT_CONTEXT_BAR_FIELDS,
           ...(parsed.contextBarFields ?? {}),
+        },
+        wakeWordThresholds: {
+          ...DEFAULT_WAKE_THRESHOLDS,
+          ...(parsed.wakeWordThresholds ?? {}),
         },
       }
     }
@@ -135,6 +154,10 @@ export function useSettings() {
             contextBarFields: {
               ...DEFAULT_CONTEXT_BAR_FIELDS,
               ...(parsed.contextBarFields ?? {}),
+            },
+            wakeWordThresholds: {
+              ...DEFAULT_WAKE_THRESHOLDS,
+              ...(parsed.wakeWordThresholds ?? {}),
             },
           })
         } catch {

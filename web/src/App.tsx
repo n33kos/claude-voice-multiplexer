@@ -102,8 +102,6 @@ export default function App() {
   const livekit = useLiveKit();
   const contextUsage = useContextUsage(relay.connectedSessionId);
   const { settings, updateSettings } = useSettings();
-  const [wakeWordReloadKey, setWakeWordReloadKey] = useState(0);
-  const bumpWakeWordReload = useCallback(() => setWakeWordReloadKey(k => k + 1), []);
   // Lifted mic mode: source of truth shared with VoiceBar visualizer and
   // useChime so chime gating reflects the actual user-listening state,
   // not just autoListen which can be transiently toggled mid-turn.
@@ -383,7 +381,9 @@ export default function App() {
                 showStatusPill={settings.showStatusPill}
                 wakeWordEnabled={settings.wakeWordEnabled}
                 wakeWordChime={settings.wakeWordChime}
-                wakeWordReloadKey={wakeWordReloadKey}
+                wakeWordPhrase={settings.wakeWordPhrase}
+                wakeWordThreshold={settings.wakeWordThresholds[settings.wakeWordPhrase]}
+                wakeWordDebug={settings.wakeWordDebug}
                 micMode={micMode}
                 setMicMode={setMicMode}
                 disableAutoListenSeq={relay.disableAutoListenSeq}
@@ -455,7 +455,6 @@ export default function App() {
           }
           onGenerateCode={auth.generateCode}
           onRevokeDevice={auth.revokeDevice}
-          onWakeWordEnrolled={bumpWakeWordReload}
           onRespawnAllSessions={relay.restartAllSessions}
         />
       </div>

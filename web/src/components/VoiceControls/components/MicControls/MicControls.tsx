@@ -11,6 +11,8 @@ import { sessionHue } from "../../../../utils/sessionHue";
 import { VoiceBar } from "../../../VoiceBar/VoiceBar";
 import { useTrackAnalyser } from "../../hooks/useTrackAnalyser";
 import { useWakeWord } from "../../../../wake-word/useWakeWord";
+import type { WakeDebugState } from "../../../../wake-word/useWakeWord";
+import { WakeDebug } from "./WakeDebug";
 import { useVoiceMachine } from "../../../../contexts/VoiceMachine";
 import type { MicControlsProps } from "../../VoiceControls.types";
 import styles from "./MicControls.module.scss";
@@ -24,7 +26,9 @@ export function MicControls({
   showStatusPill,
   wakeWordEnabled,
   wakeWordChime,
-  wakeWordReloadKey,
+  wakeWordPhrase,
+  wakeWordThreshold,
+  wakeWordDebug,
   micMode,
   setMicMode,
   disableAutoListenSeq,
@@ -106,18 +110,16 @@ export function MicControls({
     machine.triggerWake();
   }, [wakeWordChime, machine.triggerWake]);
 
+  const wakeScoreRef = useRef<WakeDebugState>({ score: 0, speech: false, ts: 0 });
   const wake = useWakeWord({
     enabled: wakeWordEnabled,
     active: wakeWordEnabled && micMode === "wake",
     suspend: suspendWake,
+    phrase: wakeWordPhrase,
+    threshold: wakeWordThreshold,
     onMatch: onWakeMatch,
+    scoreRef: wakeScoreRef,
   });
-
-  // Re-read templates whenever the parent bumps the key (e.g. after enrollment).
-  // IMPORTANT: depend only on the stable `reload` ref, not on `wake` itself —
-  // `wake` is a fresh object each render and would loop the effect.
-  const wakeReload = wake.reload;
-  useEffect(() => { void wakeReload(); }, [wakeWordReloadKey, wakeReload]);
 
   // Apply the silence-detected signal once per increment. Restore whichever
   // posture the user was in before unmuting (wake or muted).
@@ -146,8 +148,7 @@ export function MicControls({
     if (next === prev) return;
     if (next === null) return;
     if (micMode !== "active") return;
-    const wakeArmed = wakeWordEnabled && wake.hasTemplates;
-    setMicMode(wakeArmed ? "wake" : "muted");
+    setMicMode(wakeWordEnabled ? "wake" : "muted");
     void room.localParticipant.setMicrophoneEnabled(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
@@ -293,7 +294,7 @@ export function MicControls({
     }
     if (agentState !== "idle") return;
 
-    const wakeAvailable = wakeWordEnabled && wake.hasTemplates;
+    const wakeAvailable = wakeWordEnabled;
 
     // Cycle: muted → wake → active → muted (wake step skipped if unavailable).
     let next: MicMode;
@@ -380,6 +381,14 @@ export function MicControls({
         analyserRef={activeAnalyser}
         sessionColor={sessionRgb}
       />
+      {wakeWordEnabled && wakeWordDebug && (
+        <WakeDebug
+          scoreRef={wakeScoreRef}
+          threshold={wakeWordThreshold}
+          status={wake.status}
+          phraseLabel={wakeWordPhrase === "hey_claude" ? "Hey Claude" : "Computer"}
+        />
+      )}
       <div className={styles.ButtonRow}>
         <button
           onClick={onTerminalOpen}
