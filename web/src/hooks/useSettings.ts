@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { WakePhrase } from '../wake-word/useWakeWord'
+import { embed } from '../embed'
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 
@@ -124,6 +125,9 @@ function loadSettings(): Settings {
 }
 
 function saveSettings(settings: Settings) {
+  // Embed mode keeps settings in memory so it can't clobber a normal vmux
+  // tab's settings on the same origin.
+  if (embed.active) return
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
   } catch {

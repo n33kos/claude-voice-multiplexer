@@ -23,6 +23,7 @@ import { ContextBar } from "./components/ContextBar/ContextBar";
 import { useContextUsage } from "./hooks/useContextUsage";
 import { VoiceMachineProvider } from "./contexts/VoiceMachine";
 import { useKeepAwake } from "./hooks/useKeepAwake";
+import { embed } from "./embed";
 import styles from "./App.module.scss";
 
 // Lazy-load VoiceControls (pulls in heavy livekit-client bundle)
@@ -208,8 +209,9 @@ export default function App() {
     );
     const isNew = [...currentIds].some((id) => !prevOnlineIds.current.has(id));
     const isGone = [...prevOnlineIds.current].some((id) => !currentIds.has(id));
-    // Only chime if we had sessions before (skip initial load)
-    if (prevOnlineIds.current.size > 0) {
+    // Only chime if we had sessions before (skip initial load).  Embed mode
+    // is locked to one session, so other sessions coming and going is noise.
+    if (prevOnlineIds.current.size > 0 && !embed.lockedSessionId) {
       if (isNew) playNotificationChime();
       if (isGone) playDisconnectChime();
     }
@@ -302,28 +304,30 @@ export default function App() {
           showTitle={settings.showTitle}
         />
 
-        <SessionList
-          sessions={sortedSessions}
-          connectedSessionId={relay.connectedSessionId}
-          connectedSessionName={relay.connectedSessionName}
-          expanded={sessionsExpanded}
-          unreadSessions={unreadSessions}
-          onToggleExpanded={() => setSessionsExpanded((e) => !e)}
-          onConnect={connectAndClearUnread}
-          onDisconnect={relay.disconnectSession}
-          onClearTranscript={relay.clearTranscript}
-          onRemoveSession={relay.removeSession}
-          onRenameSession={relay.renameSession}
-          onRecolorSession={relay.recolorSession}
-          onSpawnSession={relay.spawnSession}
-          onKillSession={relay.killSession}
-          onRestartSession={relay.restartSession}
-          onHardInterrupt={relay.hardInterruptSession}
-          onClearContext={relay.clearContextSession}
-          onCompact={relay.compactSession}
-        />
+        {!embed.lockedSessionId && (
+          <SessionList
+            sessions={sortedSessions}
+            connectedSessionId={relay.connectedSessionId}
+            connectedSessionName={relay.connectedSessionName}
+            expanded={sessionsExpanded}
+            unreadSessions={unreadSessions}
+            onToggleExpanded={() => setSessionsExpanded((e) => !e)}
+            onConnect={connectAndClearUnread}
+            onDisconnect={relay.disconnectSession}
+            onClearTranscript={relay.clearTranscript}
+            onRemoveSession={relay.removeSession}
+            onRenameSession={relay.renameSession}
+            onRecolorSession={relay.recolorSession}
+            onSpawnSession={relay.spawnSession}
+            onKillSession={relay.killSession}
+            onRestartSession={relay.restartSession}
+            onHardInterrupt={relay.hardInterruptSession}
+            onClearContext={relay.clearContextSession}
+            onCompact={relay.compactSession}
+          />
+        )}
 
-        {relay.connectedSessionId && (
+        {relay.connectedSessionId && !embed.hideTranscript && (
           <Transcript
             entries={relay.transcript}
             tasks={relay.tasks}

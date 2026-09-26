@@ -10,6 +10,7 @@ import {
   type PersistedSession,
 } from "./useTranscriptDB";
 import { authFetch } from "./useAuth";
+import { embed } from "../embed";
 
 export interface ConnectedClient {
   client_id: string;
@@ -295,7 +296,13 @@ export function useRelay(authenticated: boolean = true) {
   const reconnectAttempt = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const lastSessionRef = useRef<string | null>(null);
+  // Seeded with the embed-locked session so the auto-rejoin in onopen also
+  // performs the initial connect in embed mode.
+  const lastSessionRef = useRef<string | null>(embed.lockedSessionId);
+  // Embed mode: join state of the locked session.  Tracked in a ref (not
+  // derived from state) because the server's sessions broadcast can arrive
+  // before React has rendered the session_connected update.
+  const lockedJoin = useRef<"idle" | "pending" | "joined">("idle");
   const lastMessageTime = useRef(Date.now());
   const [state, setState] = useState<RelayState>({
     liveSessions: [],
@@ -414,6 +421,7 @@ export function useRelay(authenticated: boolean = true) {
         });
       // Auto-rejoin previous session after reconnect
       if (lastSessionRef.current) {
+        if (embed.lockedSessionId) lockedJoin.current = "pending";
         ws.send(
           JSON.stringify({
             type: "connect_session",
@@ -432,9 +440,32 @@ export function useRelay(authenticated: boolean = true) {
         case "sessions":
           setState((s) => ({ ...s, liveSessions: data.sessions }));
           persistLiveSessions(data.sessions);
+          // Embed mode: (re)join the locked session once it's online.  The
+          // relay drops client links when a session unregisters without
+          // telling us, so treat its absence as needing a fresh join.
+          if (embed.lockedSessionId) {
+            const online = (data.sessions as Session[]).some(
+              (s) => s.session_id === embed.lockedSessionId,
+            );
+            if (!online && lockedJoin.current === "joined") {
+              lockedJoin.current = "idle";
+            } else if (online && lockedJoin.current === "idle") {
+              lockedJoin.current = "pending";
+              ws.send(
+                JSON.stringify({
+                  type: "connect_session",
+                  session_id: embed.lockedSessionId,
+                }),
+              );
+            }
+          }
           break;
         case "session_connected": {
           const sessionId = data.session_id;
+          if (embed.lockedSessionId) {
+            lockedJoin.current =
+              sessionId === embed.lockedSessionId ? "joined" : "idle";
+          }
           const sessionName = data.session_name || sessionId;
           const currentStatus = data.current_status
             ? {
@@ -480,6 +511,7 @@ export function useRelay(authenticated: boolean = true) {
           break;
         }
         case "session_not_found":
+          lockedJoin.current = "idle";
           setState((s) => ({
             ...s,
             connectedSessionId: null,
@@ -714,6 +746,7 @@ export function useRelay(authenticated: boolean = true) {
           ws.send(JSON.stringify({ type: "pong" }));
           break;
         case "session_disconnected":
+          lockedJoin.current = "idle";
           setState((s) => ({
             ...s,
             connectedSessionId: null,
@@ -723,6 +756,8 @@ export function useRelay(authenticated: boolean = true) {
           break;
         case "request_session_switch": {
           // Voice command "switch to <name>" matched a session server-side.
+          // Embed mode is locked to one session, so ignore it.
+          if (embed.lockedSessionId) break;
           const targetSid = data.target_session_id;
           if (typeof targetSid === "string" && targetSid) {
             wsRef.current?.send(
@@ -741,6 +776,7 @@ export function useRelay(authenticated: boolean = true) {
       // Save connected session for auto-rejoin on reconnect
       const prev = stateRef.current.connectedSessionId;
       if (prev) lastSessionRef.current = prev;
+      lockedJoin.current = "idle";
       setState((s) => ({
         ...s,
         status: "disconnected",

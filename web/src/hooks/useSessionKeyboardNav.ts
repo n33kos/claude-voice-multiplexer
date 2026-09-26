@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { DisplaySession } from "./useRelay";
+import { embed } from "../embed";
 
 export function useSessionKeyboardNav(
   sortedSessions: DisplaySession[],
@@ -17,6 +18,8 @@ export function useSessionKeyboardNav(
   onConnectRef.current = onConnect;
 
   useEffect(() => {
+    // Embed mode is locked to one session — no switching.
+    if (embed.lockedSessionId) return;
     function handleKeyDown(e: KeyboardEvent) {
       if (!(e.ctrlKey && e.key === "Tab")) return;
 
