@@ -1211,18 +1211,46 @@ def _resolve_npm() -> Optional[str]:
     npm = shutil.which("npm")
     if npm:
         return npm
-    for d in _NPM_PATH_CANDIDATES:
+    for d in _npm_path_candidates():
         candidate = Path(d) / "npm"
         if candidate.exists() and os.access(candidate, os.X_OK):
             return str(candidate)
     return None
 
 
+def _version_managed_node_dirs() -> list:
+    """Bin dirs for nvm / fnm installs, newest node version first.  These
+    live under per-version paths, so they can't be static candidates."""
+    def _key(p: Path):
+        try:
+            return tuple(int(x) for x in p.name.lstrip("v").split("."))
+        except ValueError:
+            return (0,)
+    dirs = []
+    for root, sub in [
+        (Path.home() / ".nvm" / "versions" / "node", "bin"),
+        (Path.home() / ".local" / "share" / "fnm" / "node-versions", "installation/bin"),
+        (Path.home() / "Library" / "Application Support" / "fnm" / "node-versions", "installation/bin"),
+    ]:
+        if root.is_dir():
+            for v in sorted(root.iterdir(), key=_key, reverse=True):
+                dirs.append(str(v / sub))
+    return dirs
+
+
+def _npm_path_candidates() -> list:
+    return _NPM_PATH_CANDIDATES + _version_managed_node_dirs()
+
+
 def _build_npm_env() -> dict:
     """Return os.environ extended with common node bin locations on PATH."""
     env = os.environ.copy()
     existing = env.get("PATH", "")
-    extra = ":".join(_NPM_PATH_CANDIDATES)
+    # npm is a `#!/usr/bin/env node` script, so its own dir must come first
+    # or it can pick up a different (or no) node.
+    npm = _resolve_npm()
+    dirs = ([str(Path(npm).parent)] if npm else []) + _npm_path_candidates()
+    extra = ":".join(dirs)
     env["PATH"] = f"{extra}:{existing}" if existing else extra
     return env
 
