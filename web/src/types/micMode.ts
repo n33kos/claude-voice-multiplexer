@@ -1,1 +1,1 @@
-export type MicMode = "muted" | "wake" | "active"
+export type { MicMode } from "@vmux/client";

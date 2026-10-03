@@ -16,3 +16,7 @@ export type { RelayClientEvents, RelayClientOptions } from "./relayClient";
 export { decodeAudioFrame, encodeAudioFrame } from "./audioFrame";
 export type { AudioFrame, AudioFrameHeader } from "./audioFrame";
 export { Emitter } from "./emitter";
+export { SpeechPlayer } from "./speechPlayer";
+export type { SpeechFrame, SpeechPlayerEvents, SpeechPlayerOptions, SpokenWordEvent } from "./speechPlayer";
+export { deriveVoiceState, VoiceTurn } from "./voiceTurn";
+export type { DerivedVoiceState, MicMode, VoicePhase, VoiceTurnState } from "./voiceTurn";
