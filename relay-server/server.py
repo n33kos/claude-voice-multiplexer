@@ -274,26 +274,40 @@ def _require_auth(request: Request) -> dict:
     return device
 
 
+_TOKEN_SUBPROTOCOL_PREFIX = "vmux-token."
+
+
+def _offered_token_protocol(ws: WebSocket) -> Optional[str]:
+    """The `vmux-token.<jwt>` subprotocol the client offered, if any.
+
+    Browsers can't set headers on a WebSocket, so SDK clients carry their
+    token as a subprotocol.  The server must accept with that same protocol
+    echoed back, or the browser drops the connection.
+    """
+    for proto in ws.headers.get("sec-websocket-protocol", "").split(","):
+        proto = proto.strip()
+        if proto.startswith(_TOKEN_SUBPROTOCOL_PREFIX):
+            return proto
+    return None
+
+
 def _get_ws_device(ws: WebSocket) -> Optional[dict]:
     """Extract device from WebSocket upgrade.
 
     Checks (in order):
-    1. vmux_token cookie (browser auto-sends cookies on WS upgrade)
-    2. Sec-WebSocket-Protocol header used as token carrier (non-standard workaround)
+    1. `vmux-token.<jwt>` subprotocol (explicit token: SDK clients).  When one
+       is offered it alone decides; an invalid one is rejected rather than
+       falling back to a cookie for some other identity.
+    2. vmux_token cookie (browser auto-sends cookies on WS upgrade)
     """
     if not AUTH_ENABLED:
         return {"device_id": "anonymous", "device_name": "anonymous"}
+    proto = _offered_token_protocol(ws)
+    if proto:
+        return auth.validate_token(proto[len(_TOKEN_SUBPROTOCOL_PREFIX):])
     token = ws.cookies.get(auth.COOKIE_NAME)
     if token:
         return auth.validate_token(token)
-    # Subprotocol token trick — client sends "vmux-token.<jwt>" as a subprotocol
-    for proto in ws.headers.get("sec-websocket-protocol", "").split(","):
-        proto = proto.strip()
-        if proto.startswith("vmux-token."):
-            token = proto[len("vmux-token."):]
-            payload = auth.validate_token(token)
-            if payload:
-                return payload
     return None
 
 
@@ -2158,7 +2172,7 @@ async def client_ws(ws: WebSocket):
         await ws.close(code=4001, reason="Authentication required")
         return
 
-    await ws.accept()
+    await ws.accept(subprotocol=_offered_token_protocol(ws))
     client_id = f"client-{uuid.uuid4().hex[:6]}"
     device_name = device.get("device_name", "Unknown")
     _clients[client_id] = ws

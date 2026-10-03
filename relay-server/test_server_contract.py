@@ -206,3 +206,28 @@ def test_audio_frames_go_only_to_subscribed_clients(client, token):
         while "text" in msg and json.loads(msg["text"])["type"] != "speech_end":
             msg = plain.receive()
         assert "bytes" not in msg or msg.get("bytes") is None
+
+
+# --- token subprotocol ---------------------------------------------------------
+
+
+def test_subprotocol_token_is_accepted_and_echoed(client, token):
+    proto = f"vmux-token.{token}"
+    with client.websocket_connect("/ws/client", subprotocols=[proto]) as ws:
+        assert ws.accepted_subprotocol == proto
+        assert json.loads(ws.receive_text())["type"] == "sessions"
+
+
+def test_invalid_subprotocol_token_is_rejected_even_with_valid_cookie(client, token):
+    client.cookies.set("vmux_token", token)
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/ws/client", subprotocols=["vmux-token.bogus"]) as ws:
+            ws.receive_text()
+    assert exc.value.code == 4001
+
+
+def test_cookie_clients_get_no_subprotocol(client, token):
+    client.cookies.set("vmux_token", token)
+    with client.websocket_connect("/ws/client") as ws:
+        assert ws.accepted_subprotocol is None
+        ws.receive_text()
