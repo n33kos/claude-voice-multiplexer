@@ -67,6 +67,45 @@ export interface RelayClientEvents extends Record<string, unknown> {
   close: { code: number };
 }
 
+/**
+ * What a device may do (relay-server/auth.py), least to most privileged:
+ *   listen:  observe — sessions, transcript, speech events/audio, voice room without a mic
+ *   speak:   talk to Claude — send text, use the mic, stop Claude speaking, answer questions
+ *   control: operate the machine — permissions, terminal, spawn/kill/restart, settings
+ * Ask for the least a UI needs.
+ */
+export type DeviceScope = "listen" | "speak" | "control";
+
+export interface PairResult {
+  token: string;
+  deviceId: string;
+  deviceName: string;
+  scope: DeviceScope;
+}
+
+/**
+ * Pair a device with a 6-digit code (shown by the vmux web app's Settings or
+ * `/voice-multiplexer:auth-code`) and get its token.  Store the token; it
+ * lasts until revoked (default 90 days).
+ */
+export async function pairDevice(opts: {
+  url: string;
+  code: string;
+  deviceName: string;
+  scope?: DeviceScope;
+  fetch?: (url: string, init?: RequestInit) => Promise<Response>;
+}): Promise<PairResult> {
+  const doFetch = opts.fetch ?? ((u: string, i?: RequestInit) => fetch(u, i));
+  const resp = await doFetch(opts.url.replace(/\/$/, "") + "/api/auth/pair", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code: opts.code, device_name: opts.deviceName, ...(opts.scope ? { scope: opts.scope } : {}) }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || `Pairing failed (${resp.status})`);
+  return { token: data.token, deviceId: data.device_id, deviceName: data.device_name, scope: data.scope ?? "control" };
+}
+
 export class RelayClient extends Emitter<RelayClientEvents> {
   private opts: RelayClientOptions;
   private state: RelayState = initialRelayState();

@@ -12,6 +12,43 @@ import jwt
 from config import AUTH_SECRET, AUTH_TOKEN_TTL_DAYS, AUTH_ENABLED
 
 DEVICES_FILE = Path.home() / ".claude" / "voice-multiplexer" / "devices.json"
+
+# Scopes, least to most privileged.  Each includes the ones before it.
+#   listen:  observe — sessions, transcript, speech events/audio, voice room (no mic)
+#   speak:   talk to Claude — send text, mic in the voice room, stop Claude speaking,
+#            answer AskUserQuestion cards
+#   control: operate the machine — permission answers, terminal, spawn/kill/restart,
+#            model/effort, settings, services, pairing and device management
+# Tokens without a scope (every device paired before scopes existed) are "control".
+SCOPES = ("listen", "speak", "control")
+FULL_SCOPE = "control"
+
+
+def normalize_scope(scope: Optional[str]) -> Optional[str]:
+    """Validate a requested scope.  None/"" means full access.  Raises ValueError."""
+    if scope in (None, ""):
+        return None
+    if scope not in SCOPES:
+        raise ValueError(f"unknown scope {scope!r} (expected one of {', '.join(SCOPES)})")
+    return None if scope == FULL_SCOPE else scope
+
+
+def scope_allows(granted: Optional[str], needed: str) -> bool:
+    """Whether a device with scope `granted` (None = full) may do something needing `needed`."""
+    if granted is None:
+        return True
+    try:
+        return SCOPES.index(granted) >= SCOPES.index(needed)
+    except ValueError:
+        return False  # unknown scope string: deny
+
+
+def _narrower(a: Optional[str], b: Optional[str]) -> Optional[str]:
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a if SCOPES.index(a) <= SCOPES.index(b) else b
 CODE_TTL_S = 60
 COOKIE_NAME = "vmux_token"  # kept for backwards compat (WS handshake uses cookies)
 
@@ -94,14 +131,16 @@ def validate_pair_code(code: str) -> bool:
     return entry["expires_at"] >= time.time()
 
 
-def issue_token(device_id: str, device_name: str) -> str:
-    """Issue a JWT for an authorized device."""
+def issue_token(device_id: str, device_name: str, scope: Optional[str] = None) -> str:
+    """Issue a JWT for an authorized device (scope None = full access)."""
     payload = {
         "device_id": device_id,
         "device_name": device_name,
         "iat": int(time.time()),
         "exp": int(time.time()) + AUTH_TOKEN_TTL_DAYS * 86400,
     }
+    if scope:
+        payload["scope"] = scope
     return jwt.encode(payload, AUTH_SECRET, algorithm="HS256")
 
 
@@ -114,25 +153,35 @@ def validate_token(token: str) -> Optional[dict]:
     except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         return None
 
-    # Check device is still authorized
-    if payload.get("device_id") not in _device_ids():
+    # Check device is still authorized; its stored scope can only narrow the token's.
+    record = next((d for d in _load_devices() if d.get("device_id") == payload.get("device_id")), None)
+    if record is None:
         return None
+    scope = _narrower(payload.get("scope"), record.get("scope"))
+    if scope is not None and scope not in SCOPES:
+        return None
+    payload.pop("scope", None)
+    if scope:
+        payload["scope"] = scope
 
     return payload
 
 
-def register_device(device_id: str, device_name: str):
-    """Add a device to the authorized devices list."""
+def register_device(device_id: str, device_name: str, scope: Optional[str] = None):
+    """Add a device to the authorized devices list (scope None = full access)."""
     devices = _load_devices()
     # Don't duplicate
     if any(d["device_id"] == device_id for d in devices):
         return
-    devices.append({
+    record = {
         "device_id": device_id,
         "device_name": device_name,
         "paired_at": time.time(),
         "last_seen": time.time(),
-    })
+    }
+    if scope:
+        record["scope"] = scope
+    devices.append(record)
     _save_devices(devices)
 
 

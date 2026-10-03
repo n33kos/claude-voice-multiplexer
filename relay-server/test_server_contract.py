@@ -23,7 +23,7 @@ pytest.importorskip("livekit")
 _TMP_HOME = tempfile.mkdtemp(prefix="vmux-test-home-")
 os.environ["HOME"] = _TMP_HOME
 os.environ["AUTH_SECRET"] = "test-auth-secret"
-os.environ["DAEMON_SECRET"] = "test-daemon-secret"
+os.environ["VMUX_DAEMON_SECRET"] = "test-daemon-secret"
 os.environ["VMUX_WEB_DIST"] = os.path.join(_TMP_HOME, "no-web-dist")
 os.environ["VMUX_ALLOWED_ORIGINS"] = "http://localhost:5173"
 sys.path.insert(0, os.path.dirname(__file__))
@@ -231,3 +231,118 @@ def test_cookie_clients_get_no_subprotocol(client, token):
     with client.websocket_connect("/ws/client") as ws:
         assert ws.accepted_subprotocol is None
         ws.receive_text()
+
+
+# --- scopes ------------------------------------------------------------------
+
+
+def _pair(client, scope=None):
+    code = auth.generate_pair_code()
+    body = {"code": code, "device_name": f"sdk-{scope}"}
+    if scope is not None:
+        body["scope"] = scope
+    return client.post("/api/auth/pair", json=body)
+
+
+def _ws_errors_after(ws, msgs):
+    """Send msgs, then a connect_session round-trip; return error messages seen."""
+    for m in msgs:
+        ws.send_text(json.dumps(m))
+    ws.send_text(json.dumps({"type": "connect_session", "session_id": SID}))
+    errors = []
+    for _ in range(30):
+        msg = json.loads(ws.receive_text())
+        if msg["type"] == "error":
+            errors.append(msg["message"])
+        if msg["type"] == "session_connected":
+            return errors
+    raise AssertionError("no session_connected")
+
+
+def test_unscoped_pairing_is_full_access_with_cookie(client):
+    r = _pair(client)
+    assert r.status_code == 200
+    assert r.json()["scope"] == "control"
+    assert "vmux_token" in r.headers.get("set-cookie", "")
+
+
+def test_invalid_scope_is_rejected(client):
+    assert _pair(client, "admin").status_code == 400
+
+
+def test_listen_scope(client):
+    r = _pair(client, "listen")
+    assert r.status_code == 200 and r.json()["scope"] == "listen"
+    assert "set-cookie" not in r.headers  # never replaces the browser's full cookie
+    tok = r.json()["token"]
+    h = {"Authorization": f"Bearer {tok}"}
+
+    assert client.get("/api/sessions", headers=h).status_code == 200
+    assert client.get("/api/session-metadata", headers=h).status_code == 200
+    for method, path in [
+        ("post", f"/api/sessions/{SID}/restart"),
+        ("post", f"/api/sessions/{SID}/interrupt"),
+        ("post", f"/api/sessions/{SID}/cancel-tts"),
+        ("post", "/api/auth/code"),
+        ("get", "/api/auth/devices"),
+        ("get", "/api/settings"),
+    ]:
+        assert getattr(client, method)(path, headers=h).status_code == 403, path
+
+    import jwt as pyjwt
+    lk = client.get("/api/token?room=vmux_x", headers=h).json()["token"]
+    grants = pyjwt.decode(lk, options={"verify_signature": False})["video"]
+    assert grants.get("canPublish") is False and grants.get("canSubscribe") is True
+
+    with client.websocket_connect("/ws/client", subprotocols=[f"vmux-token.{tok}"]) as ws:
+        ws.receive_text()
+        errors = _ws_errors_after(ws, [
+            {"type": "audio_subscribe", "enabled": True},
+            {"type": "interrupt"},
+            {"type": "terminal_input", "keys": "rm -rf /"},
+            {"type": "answer_permission", "session_id": SID, "choice": "allow"},
+            {"type": "something_unknown"},
+        ])
+        assert errors == [
+            "interrupt requires speak scope",
+            "terminal_input requires control scope",
+            "answer_permission requires control scope",
+            "something_unknown requires control scope",
+        ]
+
+
+def test_speak_scope(client):
+    tok = _pair(client, "speak").json()["token"]
+    h = {"Authorization": f"Bearer {tok}"}
+    assert client.post(f"/api/sessions/{SID}/cancel-tts", headers=h).status_code == 200
+    assert client.post(f"/api/sessions/{SID}/restart", headers=h).status_code == 403
+    import jwt as pyjwt
+    lk = client.get("/api/token?room=vmux_x", headers=h).json()["token"]
+    assert pyjwt.decode(lk, options={"verify_signature": False})["video"].get("canPublish") is True
+    with client.websocket_connect("/ws/client", subprotocols=[f"vmux-token.{tok}"]) as ws:
+        ws.receive_text()
+        assert _ws_errors_after(ws, [{"type": "interrupt"}, {"type": "terminal_resize", "cols": 1, "rows": 1}]) == [
+            "terminal_resize requires control scope",
+        ]
+
+
+def test_agent_identity_is_reserved(client, token):
+    r = client.get("/api/token?room=vmux_x&identity=relay-agent-vmux_x", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 400
+
+
+def test_device_record_can_only_narrow_a_token(client):
+    r = _pair(client)  # full token
+    tok, device_id = r.json()["token"], r.json()["device_id"]
+    devices = auth._load_devices()
+    for d in devices:
+        if d["device_id"] == device_id:
+            d["scope"] = "listen"
+    auth._save_devices(devices)
+    h = {"Authorization": f"Bearer {tok}"}
+    assert client.get("/api/sessions", headers=h).status_code == 200
+    assert client.post(f"/api/sessions/{SID}/restart", headers=h).status_code == 403
+
+
+def test_daemon_secret_keeps_full_access(client):
+    assert client.post(f"/api/sessions/{SID}/cancel-tts", headers=DAEMON).status_code == 200

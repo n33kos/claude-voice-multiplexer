@@ -42,6 +42,7 @@ from metadata_store import MetadataStore
 import mcp_tools
 from transcript_buffer import MAX_TRANSCRIPT_BUFFER, buffer_entry
 from origin_check import OriginCheckMiddleware, parse_allowed_origins
+import log_redact
 from config import ALLOWED_ORIGINS
 
 registry = SessionRegistry()
@@ -264,11 +265,15 @@ def _get_device(request: Request) -> Optional[dict]:
     return auth.validate_token(token)
 
 
-def _require_auth(request: Request) -> dict:
-    """FastAPI-style auth check. Raises 401 if not authenticated."""
+def _require_auth(request: Request, scope: str = auth.FULL_SCOPE) -> dict:
+    """FastAPI-style auth check.  401 if not authenticated, 403 if the
+    device's scope doesn't cover `scope` (default: full control, so anything
+    not explicitly marked stays locked to full-access devices)."""
     device = _get_device(request)
     if not device:
         raise HTTPException(status_code=401, detail="Authentication required")
+    if not auth.scope_allows(device.get("scope"), scope):
+        raise HTTPException(status_code=403, detail=f"Requires {scope} scope")
     if device["device_id"] not in ("anonymous", "daemon"):
         auth.update_last_seen(device["device_id"])
     return device
@@ -539,6 +544,9 @@ async def _sync_sessions_from_daemon():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _agent, _http_client
+
+    # uvicorn has configured its loggers by now; mask tokens in logged URLs.
+    log_redact.install()
 
     # Initialize shared HTTP client — reused for ALL outbound requests.
     # Limits: 20 connections per host, 100 total. Keepalive reuses connections
@@ -856,6 +864,11 @@ async def pair_device(request: Request):
     body = await request.json()
     code = body.get("code", "").strip()
     device_name = body.get("device_name", "Unknown Device").strip()
+    try:
+        # Optional: a client can ask for less than full access ("listen"/"speak").
+        scope = auth.normalize_scope(body.get("scope"))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
     if not code:
         return JSONResponse({"error": "Code is required"}, status_code=400)
@@ -864,8 +877,8 @@ async def pair_device(request: Request):
         return JSONResponse({"error": "Invalid or expired code"}, status_code=403)
 
     device_id = uuid.uuid4().hex
-    auth.register_device(device_id, device_name)
-    token = auth.issue_token(device_id, device_name)
+    auth.register_device(device_id, device_name, scope)
+    token = auth.issue_token(device_id, device_name, scope)
 
     # Return token in body so web app can store it for Authorization: Bearer header.
     # Also set cookie for WebSocket handshake auth (browsers auto-send cookies).
@@ -873,8 +886,13 @@ async def pair_device(request: Request):
         "success": True,
         "device_id": device_id,
         "device_name": device_name,
+        "scope": scope or auth.FULL_SCOPE,
         "token": token,
     })
+    if scope:
+        # Limited (SDK) devices authenticate explicitly; never replace the
+        # browser's full-access cookie with a narrower one.
+        return response
     response.set_cookie(
         key=auth.COOKIE_NAME,
         value=token,
@@ -930,7 +948,7 @@ async def delete_device(device_id: str, request: Request):
 @app.get("/api/health")
 async def health_check(request: Request):
     """Check the health of all backend services."""
-    _require_auth(request)
+    _require_auth(request, "listen")
 
     async def check_service(url: str) -> bool:
         try:
@@ -1084,7 +1102,7 @@ async def restart_service(name: str, request: Request):
 @app.get("/api/sessions")
 async def list_sessions(request: Request):
     """List all registered Claude Code sessions."""
-    _require_auth(request)
+    _require_auth(request, "listen")
     sessions = await registry.list_sessions()
     return JSONResponse({"sessions": sessions})
 
@@ -1157,7 +1175,7 @@ async def send_message_to_session(session_id: str, request: Request):
     This enables CLI tools and orchestrators to communicate with sessions
     without going through the web UI.
     """
-    device = _require_auth(request)
+    device = _require_auth(request, "speak")
     body = await request.json()
     text = body.get("text", "").strip()
     if not text:
@@ -1470,7 +1488,7 @@ async def turn_complete_session(session_id: str, request: Request):
 @app.post("/api/sessions/{session_id}/cancel-tts")
 async def cancel_tts_session(session_id: str, request: Request):
     """Cancel any in-progress TTS playback for a session."""
-    _require_auth(request)
+    _require_auth(request, "speak")
     if _agent:
         room = _agent.get_room(session_id)
         if room:
@@ -1997,7 +2015,7 @@ async def list_models(request: Request):
     Sources from the Anthropic API when ANTHROPIC_API_KEY is configured;
     otherwise returns a curated fallback list. Cached for an hour.
     """
-    _require_auth(request)
+    _require_auth(request, "listen")
     models = await _fetch_anthropic_models()
     return JSONResponse({"models": models})
 
@@ -2005,7 +2023,7 @@ async def list_models(request: Request):
 @app.get("/api/sessions/{session_id}/context")
 async def get_context_usage(session_id: str, request: Request):
     """Get context window usage for a Claude session via daemon IPC."""
-    _require_auth(request)
+    _require_auth(request, "listen")
     result = await _daemon_ipc({"cmd": "context-usage", "session_id": session_id})
     if result.get("ok"):
         # Strip the "ok" key from the response — frontend doesn't need it
@@ -2076,7 +2094,7 @@ async def _broadcast_metadata_update(metadata: dict):
 @app.get("/api/session-metadata")
 async def get_all_session_metadata(request: Request):
     """Return all server-side session metadata (display names, color overrides)."""
-    _require_auth(request)
+    _require_auth(request, "listen")
     metadata = await metadata_store.get_all()
     return JSONResponse({"metadata": metadata})
 
@@ -2116,8 +2134,16 @@ async def delete_session_metadata(session_id: str, request: Request):
 
 @app.get("/api/token")
 async def get_token(request: Request, room: str = "multiplexer", identity: str = ""):
-    """Generate a LiveKit JWT for client connection."""
-    _require_auth(request)
+    """Generate a LiveKit JWT for client connection.
+
+    Listen-scope devices get a subscribe-only grant (no mic).  Clients may not
+    take the relay agent's identity: UIs play that participant's audio as
+    Claude's voice, so a spoofed one could speak as Claude.
+    """
+    device = _require_auth(request, "listen")
+    if identity.startswith("relay-agent"):
+        return JSONResponse({"error": "identity is reserved"}, status_code=400)
+    can_publish = auth.scope_allows(device.get("scope"), "speak")
 
     try:
         from livekit.api import AccessToken, VideoGrants
@@ -2133,7 +2159,7 @@ async def get_token(request: Request, room: str = "multiplexer", identity: str =
     jwt_token = (
         AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
         .with_identity(identity)
-        .with_grants(VideoGrants(room_join=True, room=room))
+        .with_grants(VideoGrants(room_join=True, room=room, can_publish=can_publish, can_publish_data=can_publish))
         .to_jwt()
     )
 
@@ -2154,6 +2180,24 @@ async def get_token(request: Request, room: str = "multiplexer", identity: str =
 
 
 # --- WebSocket: Web Clients ---
+
+# Scope each /ws/client message needs (auth.py).  Unknown types need full control.
+_WS_MESSAGE_SCOPES = {
+    "pong": "listen",
+    "connect_session": "listen",
+    "disconnect_session": "listen",
+    "audio_subscribe": "listen",
+    "text_message": "speak",
+    "interrupt": "speak",
+    "answer_question": "speak",
+    "answer_permission": "control",
+    "capture_terminal": "control",
+    "terminal_input": "control",
+    "terminal_resize": "control",
+    "terminal_stream_start": "control",
+    "terminal_stream_stop": "control",
+}
+
 
 @app.websocket("/ws/client")
 async def client_ws(ws: WebSocket):
@@ -2198,6 +2242,14 @@ async def client_ws(ws: WebSocket):
 
             data = json.loads(raw)
             msg_type = data.get("type")
+
+            needed = _WS_MESSAGE_SCOPES.get(msg_type, auth.FULL_SCOPE)
+            if not auth.scope_allows(device.get("scope"), needed):
+                await ws.send_text(json.dumps({
+                    "type": "error",
+                    "message": f"{msg_type} requires {needed} scope",
+                }))
+                continue
 
             if msg_type == "pong":
                 continue  # Keepalive response from client

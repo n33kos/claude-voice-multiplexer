@@ -155,3 +155,25 @@ describe("locking via options", () => {
     expect(ws.sentJson.filter((m) => m.type !== "pong")).toEqual([{ type: "connect_session", session_id: "s1" }]);
   });
 });
+
+describe("pairDevice", () => {
+  it("requests a scoped token", async () => {
+    const { pairDevice } = await import("./relayClient");
+    const fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ token: "tok", device_id: "d1", device_name: "Calcifer", scope: "listen" })),
+    );
+    const r = await pairDevice({ url: "http://localhost:3100/", code: "123456", deviceName: "Calcifer", scope: "listen", fetch });
+    expect(r).toEqual({ token: "tok", deviceId: "d1", deviceName: "Calcifer", scope: "listen" });
+    expect(fetch).toHaveBeenCalledWith("http://localhost:3100/api/auth/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: "123456", device_name: "Calcifer", scope: "listen" }),
+    });
+  });
+
+  it("surfaces the relay's error", async () => {
+    const { pairDevice } = await import("./relayClient");
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ error: "Invalid or expired code" }), { status: 403 }));
+    await expect(pairDevice({ url: "http://x", code: "1", deviceName: "n", fetch })).rejects.toThrow("Invalid or expired code");
+  });
+});

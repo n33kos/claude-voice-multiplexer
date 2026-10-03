@@ -11,8 +11,8 @@
 export * from "./protocol";
 export * from "./relayState";
 export * from "./transcript";
-export { RelayClient } from "./relayClient";
-export type { RelayClientEvents, RelayClientOptions } from "./relayClient";
+export { RelayClient, pairDevice } from "./relayClient";
+export type { DeviceScope, PairResult, RelayClientEvents, RelayClientOptions } from "./relayClient";
 export { decodeAudioFrame, encodeAudioFrame } from "./audioFrame";
 export type { AudioFrame, AudioFrameHeader } from "./audioFrame";
 export { Emitter } from "./emitter";
