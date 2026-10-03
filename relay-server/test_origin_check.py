@@ -98,3 +98,48 @@ class MiddlewareTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExplicitTokenTests(unittest.TestCase):
+    def _run_capture(self, scope):
+        seen = []
+
+        async def inner(scope, receive, send):
+            seen.append(scope)
+
+        async def receive():
+            return {"type": "websocket.connect"}
+
+        sent = []
+
+        async def send(msg):
+            sent.append(msg)
+
+        asyncio.run(OriginCheckMiddleware(inner)(scope, receive, send))
+        return seen, sent
+
+    def test_foreign_origin_with_subprotocol_token_passes_without_cookies(self):
+        scope = {"type": "websocket", "path": "/ws/client", "headers": [
+            (b"host", b"localhost:3100"), (b"origin", b"null"),
+            (b"cookie", b"vmux_token=full"), (b"sec-websocket-protocol", b"vmux-token.abc"),
+        ]}
+        seen, sent = self._run_capture(scope)
+        self.assertEqual(sent, [])
+        names = [k for k, _ in seen[0]["headers"]]
+        self.assertNotIn(b"cookie", names)
+        self.assertIn(b"sec-websocket-protocol", names)
+
+    def test_foreign_origin_with_bearer_passes(self):
+        scope = {"type": "http", "path": "/api/sessions", "headers": [
+            (b"host", b"localhost:3100"), (b"origin", b"glass-app://calcifer"), (b"authorization", b"Bearer abc"),
+        ]}
+        seen, _ = self._run_capture(scope)
+        self.assertEqual(len(seen), 1)
+
+    def test_foreign_origin_with_only_a_cookie_is_rejected(self):
+        scope = {"type": "websocket", "path": "/ws/client", "headers": [
+            (b"host", b"localhost:3100"), (b"origin", b"null"), (b"cookie", b"vmux_token=full"),
+        ]}
+        seen, sent = self._run_capture(scope)
+        self.assertEqual(seen, [])
+        self.assertEqual(sent[-1]["code"], 4003)

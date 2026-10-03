@@ -12,7 +12,12 @@ Rules:
   allowed, so the web app works however it's reached (localhost, LAN IP,
   tunnel).
 - Anything listed in VMUX_ALLOWED_ORIGINS: allowed (embedding apps, SDK UIs).
-- Everything else, including `null`: rejected before the app sees it.
+- Any other origin (including `null`, e.g. sandboxed app frames) only with an
+  explicit token (`Authorization: Bearer …` or a `vmux-token.…` WebSocket
+  subprotocol), and with its cookies stripped.  Cross-site attacks ride on
+  ambient credentials (the cookie); a page can't send a token it doesn't
+  have, so explicit-token requests are safe from any origin.
+- Everything else: rejected before the app sees it.
 """
 
 from typing import Iterable, Optional
@@ -50,6 +55,13 @@ def origin_allowed(
     return any(h and netloc == h.strip().lower() for h in hosts)
 
 
+def has_explicit_token(headers: dict[str, str]) -> bool:
+    """A credential the browser doesn't attach on its own (lowercased header dict)."""
+    if headers.get("authorization", "").lower().startswith("bearer "):
+        return True
+    return any(p.strip().startswith("vmux-token.") for p in headers.get("sec-websocket-protocol", "").split(","))
+
+
 class OriginCheckMiddleware:
     """ASGI middleware applying origin_allowed() to HTTP and WebSocket scopes."""
 
@@ -65,6 +77,9 @@ class OriginCheckMiddleware:
         origin = headers.get("origin")
         if origin_allowed(origin, (headers.get("host"), headers.get("x-forwarded-host")), self._allowed):
             return await self._app(scope, receive, send)
+        if has_explicit_token(headers):
+            stripped = [(k, v) for k, v in scope.get("headers") or [] if k.lower() != b"cookie"]
+            return await self._app({**scope, "headers": stripped}, receive, send)
 
         print(f"[origin] rejected {scope['type']} {scope.get('path')} from origin {origin!r}")
         if scope["type"] == "websocket":

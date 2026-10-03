@@ -137,6 +137,10 @@ export interface SpokenWord {
   word: string;
   start: number;
   end: number;
+  /** Kokoro (misaki) phonemes for the word, e.g. "həlˈO", when the relay's
+   *  phonemizer is running.  Stress marks: ˈ primary, ˌ secondary.
+   *  Diphthongs are single letters: A=eɪ I=aɪ W=aʊ Y=ɔɪ O=oʊ; T is a flap. */
+  phonemes?: string;
 }
 
 // --- server → client ---------------------------------------------------------

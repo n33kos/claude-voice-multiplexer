@@ -105,9 +105,30 @@ def test_ws_accepts_same_and_allowlisted_origins(client, token):
             assert json.loads(ws.receive_text())["type"] == "sessions"
 
 
-def test_rest_rejects_foreign_origin(client, token):
+def test_rest_from_foreign_origin_needs_an_explicit_token(client, token):
+    # A cookie alone (ambient credential) is refused from a foreign origin...
+    client.cookies.set("vmux_token", token)
+    assert client.get("/api/sessions", headers={"Origin": "https://evil.example"}).status_code == 403
+    # ...an explicit Bearer token is fine from anywhere.
+    client.cookies.clear()
     r = client.get("/api/sessions", headers={"Authorization": f"Bearer {token}", "Origin": "https://evil.example"})
-    assert r.status_code == 403
+    assert r.status_code == 200
+
+
+def test_sandboxed_null_origin_websocket_with_token_subprotocol(client, token):
+    proto = f"vmux-token.{token}"
+    with client.websocket_connect("/ws/client", subprotocols=[proto], headers={"Origin": "null"}) as ws:
+        assert ws.accepted_subprotocol == proto
+        assert json.loads(ws.receive_text())["type"] == "sessions"
+
+
+def test_foreign_origin_cannot_borrow_the_cookie_alongside_a_bad_token(client, token):
+    # The cookie is stripped for foreign origins, so a bogus token can't fall back to it.
+    client.cookies.set("vmux_token", token)
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/ws/client", subprotocols=["vmux-token.bogus"], headers={"Origin": "null"}) as ws:
+            ws.receive_text()
+    assert exc.value.code == 4001
 
 
 def test_revoked_device_cannot_connect(client, token):

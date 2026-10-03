@@ -43,6 +43,7 @@ import mcp_tools
 from transcript_buffer import MAX_TRANSCRIPT_BUFFER, buffer_entry
 from origin_check import OriginCheckMiddleware, parse_allowed_origins
 import log_redact
+from phonemes import phonemizer
 from config import ALLOWED_ORIGINS
 
 registry = SessionRegistry()
@@ -592,6 +593,8 @@ async def lifespan(app: FastAPI):
 
     # Warm up Kokoro TTS in the background (non-blocking)
     _spawn_background(_warmup_kokoro())
+    # Phonemes for speech events (optional; loads in the background).
+    await phonemizer.start()
 
     # Resilience: repopulate the session registry from the daemon's known
     # sessions.  Runs once at boot to close the startup gap, then again
@@ -604,6 +607,7 @@ async def lifespan(app: FastAPI):
     yield
     _fd_monitor_task.cancel()
     _mem_cleanup_task.cancel()
+    await phonemizer.stop()
     if _agent:
         await _agent.stop()
     await metadata_store.close()

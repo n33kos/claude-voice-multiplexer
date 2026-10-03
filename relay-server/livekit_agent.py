@@ -54,6 +54,7 @@ async def _daemon_inject_text(session_id: str, text: str) -> bool:
 
 import audio as audio_pipeline
 from speech_stream import BYTES_PER_SAMPLE, SpeechEmitter
+from phonemes import phonemizer
 from replacements import apply_inbound, apply_outbound
 from tts_sanitize import sanitize_for_tts
 from config import (
@@ -935,7 +936,7 @@ class SessionRoom:
                     if self._tts_cancel_event.is_set():
                         cancelled = True
                         break
-                    await speech.chunk(pcm, words)
+                    await speech.chunk(pcm, await phonemizer.annotate(words))
                     # Publish in 100ms slices so a cancel lands quickly even
                     # when Kokoro hands back many seconds of audio at once.
                     for i in range(0, len(pcm), _TTS_SLICE_BYTES):
