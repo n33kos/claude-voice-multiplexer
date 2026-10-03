@@ -26,7 +26,8 @@
 
     /* In-repo SDK (web/sdk), imported as @vmux/client */
     "paths": {
-      "@vmux/client": ["./sdk/src/index.ts"]
+      "@vmux/client": ["./sdk/src/index.ts"],
+      "@vmux/client/voice": ["./sdk/src/voice/index.ts"]
     }
   },
   "include": ["src", "sdk/src"]

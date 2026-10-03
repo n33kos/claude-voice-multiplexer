@@ -10,9 +10,10 @@ export default defineConfig({
   resolve: {
     // The client SDK lives in web/sdk so the web build stays self-contained
     // (the daemon's auto-update builds web/ on its own).
-    alias: {
-      '@vmux/client': fileURLToPath(new URL('./sdk/src/index.ts', import.meta.url)),
-    },
+    alias: [
+      { find: /^@vmux\/client$/, replacement: fileURLToPath(new URL('./sdk/src/index.ts', import.meta.url)) },
+      { find: /^@vmux\/client\/voice$/, replacement: fileURLToPath(new URL('./sdk/src/voice/index.ts', import.meta.url)) },
+    ],
   },
   server: {
     proxy: {
