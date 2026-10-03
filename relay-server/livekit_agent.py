@@ -53,6 +53,7 @@ async def _daemon_inject_text(session_id: str, text: str) -> bool:
                 pass
 
 import audio as audio_pipeline
+from speech_stream import BYTES_PER_SAMPLE, SpeechEmitter
 from replacements import apply_inbound, apply_outbound
 from tts_sanitize import sanitize_for_tts
 from config import (
@@ -68,6 +69,8 @@ from config import (
 
 AGENT_IDENTITY_PREFIX = "relay-agent"
 LIVEKIT_SAMPLE_RATE = TTS_SAMPLE_RATE  # Publish at Kokoro's native rate to avoid resampling artifacts
+# TTS publish slice: 100ms of 16-bit mono PCM (matches the old stream chunk size).
+_TTS_SLICE_BYTES = (LIVEKIT_SAMPLE_RATE // 10) * BYTES_PER_SAMPLE
 NUM_CHANNELS = 1
 
 # VAD internals (not user-configurable)
@@ -249,7 +252,7 @@ IDLE_DEBOUNCE_S = 0.25
 class SessionRoom:
     """Per-session LiveKit room with its own audio pipeline and state machine."""
 
-    def __init__(self, session_id: str, room_name: str, registry, notify_status_fn, notify_transcript_fn, notify_client_event_fn=None, metadata_store=None):
+    def __init__(self, session_id: str, room_name: str, registry, notify_status_fn, notify_transcript_fn, notify_client_event_fn=None, metadata_store=None, notify_client_audio_fn=None):
         self.session_id = session_id
         self.room_name = room_name
         self.registry = registry
@@ -259,6 +262,8 @@ class SessionRoom:
         # this session. Used by voice commands like "switch to ..." to
         # ask the client to do something in-app.
         self.notify_client_event_fn = notify_client_event_fn
+        # Binary TTS audio frames for clients that subscribed (speech_stream.py).
+        self.notify_client_audio_fn = notify_client_audio_fn
         # User-facing renames live in metadata_store (display_name).
         # Registry.name is the folder-derived default. Voice fuzzy match
         # prefers display_name when present.
@@ -296,7 +301,9 @@ class SessionRoom:
         self._audio_stream_tasks: dict[str, asyncio.Task] = {}
 
         # Queue to serialize TTS responses (prevents concurrent playback conflicts)
-        self._response_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=50)
+        # Items are (text, message_id); message_id links the speech_* events
+        # to the streamed transcript entry (None for other TTS sources).
+        self._response_queue: asyncio.Queue[tuple[str, Optional[str]]] = asyncio.Queue(maxsize=50)
         self._response_worker_task: asyncio.Optional[Task] = None
 
         # TTS cancellation (Phase 3): set when user interrupts or /cancel-tts called.
@@ -754,17 +761,18 @@ class SessionRoom:
         except Exception as e:
             print(f"[room:{self.room_name}] Failed to inject transcription: {e}")
 
-    async def handle_claude_response(self, text: str):
+    async def handle_claude_response(self, text: str, message_id: Optional[str] = None):
         """Queue a text response for serialized TTS playback."""
+        item = (text, message_id)
         try:
-            self._response_queue.put_nowait(text)
+            self._response_queue.put_nowait(item)
         except asyncio.QueueFull:
             print(f"[room:{self.room_name}] TTS response queue full, dropping oldest")
             try:
                 self._response_queue.get_nowait()
             except asyncio.QueueEmpty:
                 pass
-            self._response_queue.put_nowait(text)
+            self._response_queue.put_nowait(item)
 
     async def _handle_switch_to(self, raw_target: str):
         """Resolve a 'switch to <name>' voice command.
@@ -871,10 +879,10 @@ class SessionRoom:
         """Process TTS responses one at a time to prevent state conflicts."""
         while self._running:
             try:
-                text = await self._response_queue.get()
+                text, message_id = await self._response_queue.get()
                 # Clear any stale cancel signal from the previous response
                 self._tts_cancel_event.clear()
-                await self._play_tts_response(text)
+                await self._play_tts_response(text, message_id)
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -898,7 +906,7 @@ class SessionRoom:
         if drained:
             print(f"[room:{self.room_name}] cancel_tts drained {drained} queued response(s)")
 
-    async def _play_tts_response(self, text: str):
+    async def _play_tts_response(self, text: str, message_id: Optional[str] = None):
         """Stream-synthesize and play a single TTS response."""
         # tts_sanitize handles markdown/code/path stripping; outbound rules
         # cover anything else (acronym expansion, replacements, etc.). Order
@@ -914,20 +922,36 @@ class SessionRoom:
         self._is_speaking = True
         tts_started_at = time.time()
         await self._notify_status("speaking")
+        speech = SpeechEmitter(self.session_id, self.notify_client_event_fn, self.notify_client_audio_fn)
+        await speech.start(spoken_text, message_id)
+        cancelled = False
         try:
             total_samples = 0
             first_frame_at: Optional[float] = None
             got_audio = False
 
             try:
-                async for pcm_chunk in audio_pipeline.synthesize_pcm_stream(spoken_text):
+                async for pcm, words in audio_pipeline.synthesize_speech_stream(spoken_text):
                     if self._tts_cancel_event.is_set():
-                        print(f"[room:{self.room_name}] TTS cancelled mid-stream")
+                        cancelled = True
                         break
-                    if not got_audio:
-                        first_frame_at = time.time()
-                    got_audio = True
-                    total_samples += await self._publish_audio_chunk(pcm_chunk)
+                    await speech.chunk(pcm, words)
+                    # Publish in 100ms slices so a cancel lands quickly even
+                    # when Kokoro hands back many seconds of audio at once.
+                    for i in range(0, len(pcm), _TTS_SLICE_BYTES):
+                        if self._tts_cancel_event.is_set():
+                            cancelled = True
+                            break
+                        if not got_audio:
+                            first_frame_at = time.time()
+                        got_audio = True
+                        total_samples += await self._publish_audio_chunk(pcm[i:i + _TTS_SLICE_BYTES])
+                    if cancelled:
+                        break
+                if cancelled:
+                    print(f"[room:{self.room_name}] TTS cancelled mid-stream")
+                    # Tell clients now; the playback wait below still runs.
+                    await speech.end(cancelled=True)
             except Exception as e:
                 print(f"[room:{self.room_name}] Kokoro TTS stream error: {e}")
                 if not got_audio:
@@ -965,6 +989,7 @@ class SessionRoom:
                 await asyncio.sleep(remaining)
 
         finally:
+            await speech.end(cancelled=cancelled or self._tts_cancel_event.is_set())
             self._is_speaking = False
             self._speaking_ended_at = time.time()
             self._clear_audio_buffer()
@@ -1076,12 +1101,13 @@ class SessionRoom:
 class RelayAgent:
     """Manages per-session LiveKit rooms."""
 
-    def __init__(self, registry, broadcast_fn, notify_status_fn=None, notify_transcript_fn=None, notify_client_event_fn=None, metadata_store=None):
+    def __init__(self, registry, broadcast_fn, notify_status_fn=None, notify_transcript_fn=None, notify_client_event_fn=None, metadata_store=None, notify_client_audio_fn=None):
         self.registry = registry
         self.broadcast_fn = broadcast_fn
         self.notify_status_fn = notify_status_fn
         self.notify_transcript_fn = notify_transcript_fn
         self.notify_client_event_fn = notify_client_event_fn
+        self.notify_client_audio_fn = notify_client_audio_fn
         self.metadata_store = metadata_store
         self._rooms: dict[str, SessionRoom] = {}  # session_id → SessionRoom
 
@@ -1098,6 +1124,7 @@ class RelayAgent:
             notify_transcript_fn=self.notify_transcript_fn,
             notify_client_event_fn=self.notify_client_event_fn,
             metadata_store=self.metadata_store,
+            notify_client_audio_fn=self.notify_client_audio_fn,
         )
         self._rooms[session_id] = room
         await room.start()
@@ -1114,10 +1141,10 @@ class RelayAgent:
         """Get the room for a session."""
         return self._rooms.get(session_id)
 
-    async def handle_claude_response(self, session_id: str, text: str):
+    async def handle_claude_response(self, session_id: str, text: str, message_id: Optional[str] = None):
         room = self._rooms.get(session_id)
         if room:
-            await room.handle_claude_response(text)
+            await room.handle_claude_response(text, message_id)
 
     async def handle_claude_listening(self, session_id: str):
         room = self._rooms.get(session_id)

@@ -173,3 +173,36 @@ def test_stream_broadcasts_deltas_with_message_id_and_replays_merged(client, tok
 def test_stream_requires_auth(client):
     r = client.post(f"/api/sessions/{SID}/stream", json={"message_id": "m1", "delta": "x"})
     assert r.status_code == 401
+
+
+# --- speech audio ------------------------------------------------------------
+
+
+def test_audio_frames_go_only_to_subscribed_clients(client, token):
+    from speech_stream import decode_audio_frame, encode_audio_frame
+
+    client.cookies.set("vmux_token", token)
+    frame = encode_audio_frame({"utterance_id": "u1", "seq": 0, "offset_samples": 0}, b"\x00\x01" * 4)
+    with client.websocket_connect("/ws/client") as sub, client.websocket_connect("/ws/client") as plain:
+        for ws in (sub, plain):
+            ws.receive_text()
+            ws.send_text(json.dumps({"type": "connect_session", "session_id": SID}))
+            _recv_until(ws, "session_connected")
+        sub.send_text(json.dumps({"type": "audio_subscribe", "enabled": True}))
+        # Round-trip a message so the subscribe is processed before sending audio.
+        sub.send_text(json.dumps({"type": "connect_session", "session_id": SID}))
+        _recv_until(sub, "session_connected")
+
+        sub.portal.call(server._notify_client_audio, SID, frame)
+        sub.portal.call(server._notify_client_event, SID, {"type": "speech_end", "utterance_id": "u1"})
+
+        msg = sub.receive()
+        while msg.get("bytes") is None:  # skip interleaved JSON (session broadcasts)
+            msg = sub.receive()
+        assert decode_audio_frame(msg["bytes"])[0]["utterance_id"] == "u1"
+        assert _recv_until(sub, "speech_end")["utterance_id"] == "u1"
+        # The unsubscribed client sees the JSON event but never the audio.
+        msg = plain.receive()
+        while "text" in msg and json.loads(msg["text"])["type"] != "speech_end":
+            msg = plain.receive()
+        assert "bytes" not in msg or msg.get("bytes") is None

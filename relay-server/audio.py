@@ -135,3 +135,56 @@ async def synthesize_pcm_stream(
     except Exception as e:
         print(f"TTS stream error: {e}")
         return
+
+
+async def synthesize_speech_stream(
+    text: str, voice: Optional[str] = None
+) -> AsyncGenerator[tuple[bytes, list[dict]], None]:
+    """Stream (pcm, words) chunks: PCM (16-bit mono, 24kHz) plus word timings.
+
+    Uses Kokoro's captioned endpoint, which returns NDJSON lines of
+    {audio: base64 PCM, timestamps: [{word, start_time, end_time}]} with times
+    measured from the start of the whole text.  Words come back normalized to
+    {word, start, end}.  If the captioned endpoint fails before producing any
+    audio (e.g. a Kokoro build without it), falls back to the plain stream
+    with empty word lists.
+    """
+    import base64
+    import json
+
+    from speech_stream import normalize_words
+
+    base = KOKORO_URL[:-3] if KOKORO_URL.endswith("/v1") else KOKORO_URL
+    url = f"{base}/dev/captioned_speech"
+    payload = {
+        "model": KOKORO_MODEL,
+        "input": text,
+        "voice": voice or config.get_setting("kokoro_voice"),
+        "response_format": "pcm",
+        "speed": config.get_setting("kokoro_speed"),
+        "stream": True,
+    }
+
+    client = _get_client()
+    produced = False
+    try:
+        async with client.stream("POST", url, json=payload, timeout=Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.strip():
+                    continue
+                data = json.loads(line)
+                pcm = base64.b64decode(data.get("audio") or "")
+                words = normalize_words(data.get("timestamps") or [])
+                if pcm or words:
+                    produced = True
+                    yield pcm, words
+        return
+    except Exception as e:
+        if produced:
+            print(f"TTS captioned stream error mid-utterance: {e}")
+            return
+        print(f"TTS captioned stream unavailable ({e}); falling back to plain stream")
+
+    async for chunk in synthesize_pcm_stream(text, voice):
+        yield chunk, []

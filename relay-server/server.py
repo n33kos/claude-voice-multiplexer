@@ -185,6 +185,8 @@ async def _fetch_kokoro_voices() -> list[dict]:
 
 # Track connected web clients
 _clients: dict[str, WebSocket] = {}
+# Clients that asked for binary TTS audio frames ({type: "audio_subscribe"}).
+_audio_subscribers: set[str] = set()
 
 # LiveKit agent (initialized on startup)
 _agent: Optional[RelayAgent] = None
@@ -340,6 +342,22 @@ async def _notify_client_event(session_id: str, payload: dict):
         if client_ws:
             try:
                 await client_ws.send_text(msg)
+            except Exception:
+                pass
+
+
+async def _notify_client_audio(session_id: str, frame: bytes):
+    """Send a binary TTS audio frame to subscribed clients connected to a session."""
+    session = await registry.get(session_id)
+    if not session or not session.connected_clients:
+        return
+    for client_id in list(session.connected_clients):
+        if client_id not in _audio_subscribers:
+            continue
+        client_ws = _clients.get(client_id)
+        if client_ws:
+            try:
+                await client_ws.send_bytes(frame)
             except Exception:
                 pass
 
@@ -521,7 +539,7 @@ async def lifespan(app: FastAPI):
     import audio as _audio_mod
     _audio_mod.set_http_client(_http_client)
 
-    _agent = RelayAgent(registry, _broadcast_sessions, _notify_client_status, _notify_client_transcript, _notify_client_event, metadata_store=metadata_store)
+    _agent = RelayAgent(registry, _broadcast_sessions, _notify_client_status, _notify_client_transcript, _notify_client_event, metadata_store=metadata_store, notify_client_audio_fn=_notify_client_audio)
     print("[server] Agent manager initialized (rooms created per session)")
 
     # Initialize MCP tools with relay server dependencies
@@ -1393,7 +1411,7 @@ async def stream_session(session_id: str, request: Request):
     if delta.strip():
         await _notify_client_transcript(session_id, "claude", delta, message_id=message_id)
         if _agent:
-            await _agent.handle_claude_response(session_id, delta)
+            await _agent.handle_claude_response(session_id, delta, message_id)
     elif delta and already_open:
         # Whitespace-only delta mid-message (e.g. a paragraph break): keep it
         # in the bubble so the merged text matches, but don't speak it.
@@ -2457,6 +2475,13 @@ async def client_ws(ws: WebSocket):
                         pass
                     terminal_stream_task = None
 
+            elif msg_type == "audio_subscribe":
+                # Opt in/out of binary TTS audio frames (speech_stream.py).
+                if data.get("enabled", True):
+                    _audio_subscribers.add(client_id)
+                else:
+                    _audio_subscribers.discard(client_id)
+
             elif msg_type == "disconnect_session":
                 if connected_session_id:
                     await registry.disconnect_client(connected_session_id, client_id)
@@ -2478,6 +2503,7 @@ async def client_ws(ws: WebSocket):
         if connected_session_id:
             await registry.disconnect_client(connected_session_id, client_id)
         _clients.pop(client_id, None)
+        _audio_subscribers.discard(client_id)
         await _broadcast_sessions()
 
 
