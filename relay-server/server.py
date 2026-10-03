@@ -41,6 +41,8 @@ from livekit_agent import RelayAgent
 from metadata_store import MetadataStore
 import mcp_tools
 from transcript_buffer import MAX_TRANSCRIPT_BUFFER, buffer_entry
+from origin_check import OriginCheckMiddleware, parse_allowed_origins
+from config import ALLOWED_ORIGINS
 
 registry = SessionRegistry()
 metadata_store = MetadataStore()
@@ -2664,7 +2666,9 @@ else:
 # This is the last line of defense: any SSE disconnect RuntimeErrors that
 # escape the sub-app _ASGIErrorGuard (e.g. from starlette middleware cleanup
 # or send-callback chains) are caught here before reaching uvicorn.
-app = _TopLevelASGIGuard(app)
+app = _TopLevelASGIGuard(
+    OriginCheckMiddleware(app, parse_allowed_origins(ALLOWED_ORIGINS))
+)
 
 
 if __name__ == "__main__":

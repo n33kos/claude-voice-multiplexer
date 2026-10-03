@@ -45,6 +45,11 @@ AUTH_SECRET = os.environ.get("AUTH_SECRET", "")
 AUTH_TOKEN_TTL_DAYS = int(os.environ.get("AUTH_TOKEN_TTL_DAYS", "90"))
 AUTH_ENABLED = bool(AUTH_SECRET)
 
+# Extra browser origins allowed to call the relay (comma-separated), e.g. an
+# app embedding vmux or an SDK-based UI on another port.  The relay's own
+# origin is always allowed; see origin_check.py.
+ALLOWED_ORIGINS = os.environ.get("VMUX_ALLOWED_ORIGINS", "")
+
 # --- Daemon integration ---
 # Shared secret between vmuxd and relay server — set by daemon on startup.
 # Daemon calls relay endpoints with X-Daemon-Secret header to bypass user auth.
