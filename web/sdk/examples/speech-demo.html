@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>vmux speech demo</title>
+  <style>
+    :root { --bg: #14110f; --fg: #f3ece4; --dim: #8a7f74; --hot: #ff9b3d; --glow: #ffcf7a; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 50% 70%, #2a1d12, var(--bg) 70%);
+      color: var(--fg); font: 16px/1.5 ui-sans-serif, system-ui, sans-serif; display: grid; place-items: center; }
+    main { width: min(760px, 92vw); display: grid; gap: 28px; justify-items: center; text-align: center; }
+    .face { width: 220px; height: 220px; border-radius: 50%; position: relative;
+      background: radial-gradient(circle at 50% 40%, var(--glow), var(--hot) 55%, #b2401a);
+      box-shadow: 0 0 calc(30px + var(--level, 0) * 90px) rgba(255, 155, 61, .55); transition: box-shadow .05s; }
+    .eye { position: absolute; top: 34%; width: 22px; height: 30px; background: #2b130a; border-radius: 50%; }
+    .eye.l { left: 30%; } .eye.r { right: 30%; }
+    .mouth { position: absolute; left: 50%; top: 62%; width: 70px; transform: translateX(-50%);
+      height: calc(6px + var(--level, 0) * 46px); background: #2b130a; border-radius: 0 0 40px 40px; transition: height .04s; }
+    .caption { min-height: 3.2em; font-size: 26px; line-height: 1.35; }
+    .caption span { color: var(--dim); transition: color .08s; }
+    .caption span.said { color: var(--fg); }
+    .caption span.now { color: var(--hot); text-shadow: 0 0 12px rgba(255, 155, 61, .6); }
+    .word { font-size: 56px; font-weight: 700; color: var(--glow); min-height: 1.2em; letter-spacing: .02em; }
+    .status { color: var(--dim); font-size: 13px; font-family: ui-monospace, monospace; }
+    button { background: #2a1d12; color: var(--fg); border: 1px solid #4a3523; padding: 8px 16px; border-radius: 8px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="face" id="face"><div class="eye l"></div><div class="eye r"></div><div class="mouth"></div></div>
+    <div class="word" id="word"></div>
+    <div class="caption" id="caption">Waiting for Claude to speak…</div>
+    <button id="start">Enable audio</button>
+    <div class="status" id="status">connecting…</div>
+  </main>
+  <script type="module" src="./speech-demo.ts"></script>
+</body>
+</html>
