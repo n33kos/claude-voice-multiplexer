@@ -1,4 +1,4 @@
-import type { TranscriptEntry } from "./useRelay";
+import type { TranscriptEntry } from "./protocol";
 
 /**
  * Transcript merge rules.

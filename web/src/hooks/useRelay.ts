@@ -1,4 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { RelayClient } from "@vmux/client";
+import type {
+  ConnectedClient,
+  PermissionChoice,
+  PREntry,
+  ServerMessage,
+  ServerSessionMetadata,
+  Session,
+  SessionHealth,
+  TaskEntry,
+  TerminalDataCallback,
+  TranscriptEntry,
+} from "@vmux/client";
 import {
   loadTranscripts,
   saveTranscripts,
@@ -11,32 +24,25 @@ import {
 } from "./useTranscriptDB";
 import { authFetch } from "./useAuth";
 import { embed } from "../embed";
-import { appendTranscriptEntry, mergeTranscriptLists } from "./transcriptMerge";
 
-export interface ConnectedClient {
-  client_id: string;
-  device_name: string;
-}
-
-export type SessionHealth =
-  | "alive"
-  | "standby"
-  | "zombie"
-  | "dead"
-  | "spawn_failed";
-
-export interface Session {
-  session_id: string;
-  name: string;
-  cwd: string;
-  dir_name: string;
-  room_name: string;
-  connected_clients: ConnectedClient[];
-  created_at: number;
-  last_heartbeat: number;
-  health?: SessionHealth;
-  daemon_managed?: boolean;
-}
+// Protocol types live in the client SDK; re-exported for existing imports.
+export type {
+  AgentState,
+  AgentStatus,
+  AskOption,
+  AskQuestion,
+  ConnectedClient,
+  PermissionChoice,
+  PermissionRequest,
+  PREntry,
+  Session,
+  SessionHealth,
+  TaskEntry,
+  TaskStatus,
+  TerminalDataCallback,
+  TerminalSnapshot,
+  TranscriptEntry,
+} from "@vmux/client";
 
 export interface DisplaySession {
   session_id: string; // primary key — always present (hash of path)
@@ -53,126 +59,6 @@ export interface DisplaySession {
   health?: SessionHealth; // daemon-reported health (nil = not daemon-managed)
   daemon_managed?: boolean; // true if managed by vmuxd
 }
-
-export interface AskOption {
-  label: string;
-  description?: string;
-}
-
-export interface AskQuestion {
-  question: string;
-  header?: string;
-  multiSelect?: boolean;
-  options: AskOption[];
-  question_index?: number;
-  question_count?: number;
-}
-
-export interface PermissionRequest {
-  tool_name: string;
-  summary?: string;
-}
-
-export type PermissionChoice = "allow" | "allow_always" | "deny";
-
-export interface TranscriptEntry {
-  speaker:
-    | "user"
-    | "claude"
-    | "system"
-    | "activity"
-    | "code"
-    | "file"
-    | "image"
-    | "question"
-    | "permission";
-  text: string;
-  session_id: string;
-  timestamp: number;
-  filename?: string;
-  language?: string;
-  mimeType?: string;
-  question?: AskQuestion;
-  answered?: { optionIndex: number; label: string };
-  permission?: PermissionRequest;
-  permissionAnswered?: PermissionChoice;
-  agent_id?: string;
-  agent_type?: string;
-  kind?: string;
-  tool_use_id?: string;
-  tool_name?: string;
-  tool_result?: {
-    result_text: string;
-    lines_total: number;
-    truncated: boolean;
-  };
-  // Streamed assistant messages: every delta of one message shares this id
-  // and is appended to the same entry (see transcriptMerge.ts).
-  message_id?: string;
-}
-
-export type TaskStatus = "pending" | "in_progress" | "completed";
-
-export interface TaskEntry {
-  task_id: string;
-  subject: string;
-  description: string;
-  status: TaskStatus;
-  teammate?: string | null;
-  created_at: number;
-  updated_at: number;
-}
-
-export interface PREntry {
-  pr_number: number;
-  url: string;
-  title: string;
-  created_at: number;
-}
-
-export type AgentState = "idle" | "thinking" | "speaking" | "error";
-
-export interface AgentStatus {
-  state: AgentState;
-  activity: string | null;
-}
-
-export interface TerminalSnapshot {
-  sessionId: string;
-  content: string | null;
-  error?: string;
-  timestamp: number;
-}
-
-/** Callback for raw terminal data (ANSI) from streaming. */
-export type TerminalDataCallback = (data: string) => void;
-
-/** Server-side session metadata (display names, color overrides). */
-interface ServerSessionMetadata {
-  session_id: string;
-  display_name: string | null;
-  hue_override: number | null;
-  updated_at: number | null;
-}
-
-interface RelayState {
-  liveSessions: Session[];
-  persistedSessions: PersistedSession[];
-  serverMetadata: ServerSessionMetadata[]; // server-side metadata (takes priority)
-  connectedSessionId: string | null;
-  connectedSessionName: string | null;
-  transcripts: Record<string, TranscriptEntry[]>; // keyed by session_id
-  taskLists: Record<string, TaskEntry[]>; // keyed by session_id
-  prLists: Record<string, PREntry[]>; // keyed by session_id
-  status: "disconnected" | "connecting" | "connected";
-  agentStatus: AgentStatus;
-  disableAutoListenSeq: number; // increments when server signals noise-only input
-  terminalSnapshot: TerminalSnapshot | null;
-  terminalSnapshotLoading: boolean;
-}
-
-const MAX_RECONNECT_DELAY = 10_000;
-const BASE_RECONNECT_DELAY = 1_000;
 
 function makeRoomName(sessionId: string): string {
   return `vmux_${sessionId}`;
@@ -205,7 +91,6 @@ function mergeDisplaySessions(
 ): DisplaySession[] {
   const result = new Map<string, DisplaySession>();
 
-  // Build lookups for server-side metadata (takes priority over local)
   const serverDisplayNames = new Map(
     serverMeta
       .filter((m) => m.display_name)
@@ -217,7 +102,6 @@ function mergeDisplaySessions(
       .map((m) => [m.session_id, m.hue_override!]),
   );
 
-  // Build lookups for persisted overrides (keyed by session_id) — fallback
   const displayNames = new Map(
     persisted
       .filter((p) => p.display_name)
@@ -229,10 +113,8 @@ function mergeDisplaySessions(
       .map((p) => [p.session_id, p.hue_override!]),
   );
 
-  // Track which session_ids are live
   const liveIds = new Set(live.map((s) => s.session_id));
 
-  // Add persisted (offline) sessions — only those not currently live
   for (const p of persisted) {
     if (!liveIds.has(p.session_id)) {
       result.set(p.session_id, {
@@ -256,7 +138,6 @@ function mergeDisplaySessions(
     }
   }
 
-  // Add live sessions (keyed by session_id — unique per directory)
   for (const s of live) {
     result.set(s.session_id, {
       session_id: s.session_id,
@@ -280,7 +161,6 @@ function mergeDisplaySessions(
     });
   }
 
-  // Sort: online first, then by last interaction descending (no interaction goes last)
   return Array.from(result.values()).sort((a, b) => {
     if (a.online !== b.online) return a.online ? -1 : 1;
     const aTime = a.last_interaction ?? 0;
@@ -289,67 +169,49 @@ function mergeDisplaySessions(
   });
 }
 
-// If we haven't received any message from the server in this many ms, assume the
-// connection is a zombie (iOS PWA backgrounded) and force-reconnect on focus.
-// A healthy connection always has traffic within the server's 30s ping interval,
-// so matching that threshold catches any real suspension without false positives.
-const STALE_CONNECTION_MS = 30_000;
-
+/**
+ * The web app's relay connection: a RelayClient (web/sdk) plus what only the
+ * web app does — persisting sessions and transcripts to IndexedDB and merging
+ * offline sessions into the session list.
+ */
 export function useRelay(authenticated: boolean = true) {
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectAttempt = useRef(0);
-  const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // One client for the life of the component.  REST goes through authFetch
+  // (Bearer token from localStorage); the WebSocket uses the auth cookie.
+  const [client] = useState(
+    () =>
+      new RelayClient({
+        fetch: (url, init) => (init ? authFetch(url, init) : authFetch(url)),
+        wsAuth: "cookie",
+        lockSessionId: embed.lockedSessionId,
+      }),
+  );
+  const state = useSyncExternalStore(client.subscribe, client.getState);
+
+  const [persistedSessions, setPersistedSessions] = useState<PersistedSession[]>([]);
+  const persistedRef = useRef(persistedSessions);
+  useEffect(() => {
+    persistedRef.current = persistedSessions;
+  }, [persistedSessions]);
+
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  // Seeded with the embed-locked session so the auto-rejoin in onopen also
-  // performs the initial connect in embed mode.
-  const lastSessionRef = useRef<string | null>(embed.lockedSessionId);
-  // Embed mode: join state of the locked session.  Tracked in a ref (not
-  // derived from state) because the server's sessions broadcast can arrive
-  // before React has rendered the session_connected update.
-  const lockedJoin = useRef<"idle" | "pending" | "joined">("idle");
-  const lastMessageTime = useRef(Date.now());
-  const [state, setState] = useState<RelayState>({
-    liveSessions: [],
-    persistedSessions: [],
-    serverMetadata: [],
-    connectedSessionId: null,
-    connectedSessionName: null,
-    transcripts: {},
-    taskLists: {},
-    prLists: {},
-    status: "disconnected",
-    agentStatus: { state: "idle", activity: null },
-    disableAutoListenSeq: 0,
-    terminalSnapshot: null,
-    terminalSnapshotLoading: false,
-  });
-
-  const stateRef = useRef(state);
-  stateRef.current = state;
-
-  // Callback ref for terminal data streaming — set by TerminalOverlay
   const terminalDataCallbackRef = useRef<TerminalDataCallback | null>(null);
 
   // Load persisted sessions on mount and prune stale data
   useEffect(() => {
     pruneStaleData().then(() =>
-      loadPersistedSessions().then((sessions) => {
-        setState((s) => ({ ...s, persistedSessions: sessions }));
-      }),
+      loadPersistedSessions().then((sessions) => setPersistedSessions(sessions)),
     );
   }, []);
 
   // Persist live sessions to IndexedDB as they arrive
   const persistLiveSessions = useCallback((sessions: Session[]) => {
-    const currentPersisted = stateRef.current.persistedSessions;
     // Preserve existing user overrides (display_name, hue_override) when updating
     const existingOverrides = new Map(
-      currentPersisted.map((p) => [
+      persistedRef.current.map((p) => [
         p.session_id,
         { display_name: p.display_name, hue_override: p.hue_override },
       ]),
     );
-
     for (const s of sessions) {
       const overrides = existingOverrides.get(s.session_id);
       savePersistedSession({
@@ -364,10 +226,8 @@ export function useRelay(authenticated: boolean = true) {
       });
     }
     // Also update local persisted state so merge is correct
-    setState((prev) => {
-      const persistedMap = new Map(
-        prev.persistedSessions.map((p) => [p.session_id, p]),
-      );
+    setPersistedSessions((prev) => {
+      const persistedMap = new Map(prev.map((p) => [p.session_id, p]));
       for (const s of sessions) {
         const existing = persistedMap.get(s.session_id);
         persistedMap.set(s.session_id, {
@@ -381,841 +241,164 @@ export function useRelay(authenticated: boolean = true) {
           daemon_managed: s.daemon_managed,
         });
       }
-      return { ...prev, persistedSessions: Array.from(persistedMap.values()) };
+      return Array.from(persistedMap.values());
     });
   }, []);
 
   // Debounced save to IndexedDB whenever transcripts change
-  const scheduleSave = useCallback((sessionId: string) => {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      const entries = stateRef.current.transcripts[sessionId];
-      if (entries) {
-        // Exclude image entries — base64 data is large and doesn't need persistence
-        saveTranscripts(
-          sessionId,
-          entries.filter((e) => e.speaker !== "image"),
-        );
-      }
-    }, 500);
-  }, []);
+  const scheduleSave = useCallback(
+    (sessionId: string) => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => {
+        const entries = client.getState().transcripts[sessionId];
+        if (entries) {
+          // Exclude image entries — base64 data is large and doesn't need persistence
+          saveTranscripts(
+            sessionId,
+            entries.filter((e) => e.speaker !== "image"),
+          );
+        }
+      }, 500);
+    },
+    [client],
+  );
 
-  const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
-
-    setState((s) => ({ ...s, status: "connecting" }));
-
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/client`);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      reconnectAttempt.current = 0;
-      setState((s) => ({ ...s, status: "connected" }));
-      // Fetch server-side session metadata on connect
-      authFetch("/api/session-metadata")
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.metadata) {
-            setState((s) => ({ ...s, serverMetadata: data.metadata }));
-          }
-        })
-        .catch(() => {
-          // Non-fatal — server metadata is best-effort
-        });
-      // Auto-rejoin previous session after reconnect
-      if (lastSessionRef.current) {
-        if (embed.lockedSessionId) lockedJoin.current = "pending";
-        ws.send(
-          JSON.stringify({
-            type: "connect_session",
-            session_id: lastSessionRef.current,
-          }),
-        );
-      }
-    };
-
-    ws.onmessage = (event) => {
-      if (typeof event.data !== "string") return;
-      lastMessageTime.current = Date.now();
-      const data = JSON.parse(event.data);
-
+  // Web-only side effects of relay messages: persistence and the terminal view.
+  useEffect(() => {
+    const offMessage = client.on("message", (data: ServerMessage) => {
       switch (data.type) {
         case "sessions":
-          setState((s) => ({ ...s, liveSessions: data.sessions }));
           persistLiveSessions(data.sessions);
-          // Embed mode: (re)join the locked session once it's online.  The
-          // relay drops client links when a session unregisters without
-          // telling us, so treat its absence as needing a fresh join.
-          if (embed.lockedSessionId) {
-            const online = (data.sessions as Session[]).some(
-              (s) => s.session_id === embed.lockedSessionId,
-            );
-            if (!online && lockedJoin.current === "joined") {
-              lockedJoin.current = "idle";
-            } else if (online && lockedJoin.current === "idle") {
-              lockedJoin.current = "pending";
-              ws.send(
-                JSON.stringify({
-                  type: "connect_session",
-                  session_id: embed.lockedSessionId,
-                }),
-              );
-            }
-          }
           break;
         case "session_connected": {
-          const sessionId = data.session_id;
-          if (embed.lockedSessionId) {
-            lockedJoin.current =
-              sessionId === embed.lockedSessionId ? "joined" : "idle";
-          }
-          const sessionName = data.session_name || sessionId;
-          const currentStatus = data.current_status
-            ? {
-                state: data.current_status.state as AgentState,
-                activity: data.current_status.activity ?? null,
-              }
-            : { state: "idle" as AgentState, activity: null };
-          setState((s) => ({
-            ...s,
-            connectedSessionId: sessionId,
-            connectedSessionName: sessionName,
-            agentStatus: currentStatus,
-          }));
           // Load persisted transcripts from IndexedDB by session_id
-          loadTranscripts(sessionId).then((dbEntries) => {
-            if (dbEntries.length === 0) return;
-            setState((s) => {
-              const existing = s.transcripts[sessionId] || [];
-              if (existing.length === 0) {
-                return {
-                  ...s,
-                  transcripts: { ...s.transcripts, [sessionId]: dbEntries },
-                };
-              }
-              // Merge: keep all DB entries, add any existing entries not in DB
-              const merged = mergeTranscriptLists(dbEntries, existing);
-              return {
-                ...s,
-                transcripts: { ...s.transcripts, [sessionId]: merged },
-              };
-            });
-          });
-          break;
-        }
-        case "session_not_found":
-          lockedJoin.current = "idle";
-          setState((s) => ({
-            ...s,
-            connectedSessionId: null,
-            connectedSessionName: null,
-          }));
-          break;
-        case "transcript": {
-          // Key transcripts by session_id
           const sessionId = data.session_id;
-          setState((s) => {
-            const entry: TranscriptEntry = {
-              speaker: data.speaker,
-              text: data.text,
-              session_id: sessionId,
-              timestamp: data.ts ? data.ts * 1000 : Date.now(),
-              ...(data.filename ? { filename: data.filename } : {}),
-              ...(data.language ? { language: data.language } : {}),
-              ...(data.mime_type ? { mimeType: data.mime_type } : {}),
-              ...(data.question ? { question: data.question as AskQuestion } : {}),
-              ...(data.permission ? { permission: data.permission as PermissionRequest } : {}),
-              ...(data.agent_id ? { agent_id: data.agent_id } : {}),
-              ...(data.agent_type ? { agent_type: data.agent_type } : {}),
-              ...(data.kind ? { kind: data.kind } : {}),
-              ...(data.message_id ? { message_id: data.message_id } : {}),
-            };
-            return {
-              ...s,
-              transcripts: {
-                ...s.transcripts,
-                [sessionId]: appendTranscriptEntry(
-                  s.transcripts[sessionId] || [],
-                  entry,
-                ),
-              },
-            };
-          });
-          scheduleSave(sessionId);
+          loadTranscripts(sessionId).then((dbEntries) =>
+            client.hydrateTranscript(sessionId, dbEntries),
+          );
           break;
         }
-        case "transcript_sync": {
-          // Merge buffered transcripts from server on reconnect
-          const syncSessionId = data.session_id;
-          const serverEntries: TranscriptEntry[] = (data.entries || [])
-            .filter(
-              (e: { speaker: string }) =>
-                e.speaker === "user" ||
-                e.speaker === "claude" ||
-                e.speaker === "code",
-            )
-            .map(
-              (e: {
-                speaker: string;
-                text: string;
-                session_id: string;
-                ts: number;
-                filename?: string;
-                language?: string;
-                message_id?: string;
-              }) => ({
-                speaker: e.speaker as TranscriptEntry["speaker"],
-                text: e.text,
-                session_id: e.session_id,
-                timestamp: e.ts ? e.ts * 1000 : Date.now(),
-                ...(e.filename ? { filename: e.filename } : {}),
-                ...(e.language ? { language: e.language } : {}),
-                ...(e.message_id ? { message_id: e.message_id } : {}),
-              }),
-            );
-          if (serverEntries.length === 0) break;
-          setState((s) => {
-            const existing = s.transcripts[syncSessionId] || [];
-            // Merge: streamed messages match by message_id, others by
-            // speaker + text within a 2s window
-            const merged = mergeTranscriptLists(existing, serverEntries);
-            return {
-              ...s,
-              transcripts: { ...s.transcripts, [syncSessionId]: merged },
-            };
-          });
-          scheduleSave(syncSessionId);
+        case "transcript":
+        case "transcript_sync":
+        case "tool_result":
+          scheduleSave(data.session_id);
           break;
-        }
-        case "task_list": {
-          const taskSessionId = data.session_id;
-          const tasks = (data.tasks || []) as TaskEntry[];
-          setState((s) => ({
-            ...s,
-            taskLists: { ...s.taskLists, [taskSessionId]: tasks },
-          }));
-          break;
-        }
-        case "pr_list": {
-          const prSessionId = data.session_id;
-          const prs = (data.prs || []) as PREntry[];
-          setState((s) => ({
-            ...s,
-            prLists: { ...s.prLists, [prSessionId]: prs },
-          }));
-          break;
-        }
-        case "turn-complete": {
-          // Informational only — the relay sends an agent_status "idle"
-          // when TTS actually finishes, which is what drives the mic
-          // re-enable.  Flipping state here would re-enable the mic
-          // before TTS starts and cause Claude's own voice to be
-          // captured as user input.
-          break;
-        }
         case "agent_status": {
-          const newActivity = data.activity ?? null;
-          setState((s) => {
-            const prevActivity = s.agentStatus.activity;
-            const updated: RelayState = {
-              ...s,
-              agentStatus: {
-                state: data.state as AgentState,
-                activity: newActivity,
-              },
-            };
-            // Increment seq to signal auto-listen should be disabled
-            if (data.disable_auto_listen) {
-              updated.disableAutoListenSeq = s.disableAutoListenSeq + 1;
-            }
-            // Add activity to transcript if it changed and is non-empty
-            if (
-              newActivity &&
-              newActivity !== prevActivity &&
-              s.connectedSessionId
-            ) {
-              const sessionId = s.connectedSessionId;
-              const entry: TranscriptEntry = {
-                speaker: "activity",
-                text: newActivity,
-                session_id: sessionId,
-                timestamp: Date.now(),
-                ...(data.agent_id ? { agent_id: data.agent_id as string } : {}),
-                ...(data.agent_type ? { agent_type: data.agent_type as string } : {}),
-                ...(data.tool_use_id ? { tool_use_id: data.tool_use_id as string } : {}),
-                ...(data.tool_name ? { tool_name: data.tool_name as string } : {}),
-              };
-              updated.transcripts = {
-                ...s.transcripts,
-                [sessionId]: [...(s.transcripts[sessionId] || []), entry],
-              };
-            }
-            return updated;
-          });
-          // Schedule save if we added a transcript entry
-          const sid = stateRef.current.connectedSessionId;
+          // An activity change adds a transcript entry to the connected session
+          const sid = client.getState().connectedSessionId;
           if (sid && data.activity) scheduleSave(sid);
           break;
         }
-        case "tool_result": {
-          const trSessionId = data.session_id as string;
-          const toolUseId = data.tool_use_id as string;
-          if (!trSessionId || !toolUseId) break;
-          const result = {
-            result_text: (data.result_text as string) || "",
-            lines_total: (data.lines_total as number) || 0,
-            truncated: !!data.truncated,
-          };
-          setState((s) => {
-            const list = s.transcripts[trSessionId];
-            if (!list) return s;
-            let changed = false;
-            const updated = list.map((e) => {
-              if (e.tool_use_id === toolUseId && !e.tool_result) {
-                changed = true;
-                return { ...e, tool_result: result };
-              }
-              return e;
-            });
-            if (!changed) return s;
-            return {
-              ...s,
-              transcripts: { ...s.transcripts, [trSessionId]: updated },
-            };
-          });
-          scheduleSave(trSessionId);
-          break;
-        }
-        case "terminal_snapshot":
-          setState((s) => ({
-            ...s,
-            terminalSnapshotLoading: false,
-            terminalSnapshot: {
-              sessionId: data.session_id,
-              content: data.content ?? null,
-              error: data.error,
-              timestamp: data.timestamp ? data.timestamp * 1000 : Date.now(),
-            },
-          }));
-          break;
-        case "terminal_data":
-          // Forward raw ANSI terminal data to the xterm.js callback
-          if (terminalDataCallbackRef.current && data.data) {
-            terminalDataCallbackRef.current(data.data);
-          }
-          break;
-        case "agent_state":
-          // Backward compat: flat state without activity
-          setState((s) => ({
-            ...s,
-            agentStatus: { state: data.state, activity: null },
-          }));
-          break;
-        case "session_metadata_updated": {
-          const meta = data.metadata as ServerSessionMetadata;
-          if (meta?.session_id) {
-            setState((s) => {
-              const existing = s.serverMetadata.filter(
-                (m) => m.session_id !== meta.session_id,
-              );
-              // If all fields are null, the metadata was deleted — just remove it
-              if (
-                meta.display_name == null &&
-                meta.hue_override == null &&
-                meta.updated_at == null
-              ) {
-                return { ...s, serverMetadata: existing };
-              }
-              return { ...s, serverMetadata: [...existing, meta] };
-            });
-          }
-          break;
-        }
-        case "ping":
-          ws.send(JSON.stringify({ type: "pong" }));
-          break;
-        case "session_disconnected":
-          lockedJoin.current = "idle";
-          setState((s) => ({
-            ...s,
-            connectedSessionId: null,
-            connectedSessionName: null,
-            agentStatus: { state: "idle", activity: null },
-          }));
-          break;
-        case "request_session_switch": {
-          // Voice command "switch to <name>" matched a session server-side.
-          // Embed mode is locked to one session, so ignore it.
-          if (embed.lockedSessionId) break;
-          const targetSid = data.target_session_id;
-          if (typeof targetSid === "string" && targetSid) {
-            wsRef.current?.send(
-              JSON.stringify({ type: "connect_session", session_id: targetSid }),
-            );
-          }
-          break;
-        }
-        case "error":
-          console.error("[relay]", data.message);
-          break;
       }
+    });
+    const offTerminal = client.on("terminalData", (data) => {
+      terminalDataCallbackRef.current?.(data);
+    });
+    return () => {
+      offMessage();
+      offTerminal();
     };
-
-    ws.onclose = (event) => {
-      // Save connected session for auto-rejoin on reconnect
-      const prev = stateRef.current.connectedSessionId;
-      if (prev) lastSessionRef.current = prev;
-      lockedJoin.current = "idle";
-      setState((s) => ({
-        ...s,
-        status: "disconnected",
-        liveSessions: [],
-        connectedSessionId: null,
-        connectedSessionName: null,
-        agentStatus: { state: "idle", activity: null },
-      }));
-      // Don't reconnect on auth failure (4001)
-      if (event.code === 4001) return;
-      // Exponential backoff reconnect
-      const delay = Math.min(
-        BASE_RECONNECT_DELAY * 2 ** reconnectAttempt.current,
-        MAX_RECONNECT_DELAY,
-      );
-      reconnectAttempt.current++;
-      reconnectTimer.current = setTimeout(connect, delay);
-    };
-
-    ws.onerror = () => {
-      ws.close();
-    };
-  }, [scheduleSave, persistLiveSessions]);
+  }, [client, persistLiveSessions, scheduleSave]);
 
   useEffect(() => {
     if (!authenticated) return;
-    connect();
-
-    // When the PWA resumes from background on iOS, the WebSocket can appear OPEN
-    // to JS but be dead (server dropped it during suspend). Force-reconnect if
-    // we haven't received anything since before the stale threshold.
-    const handleVisibilityChange = () => {
-      if (document.hidden) return;
-      const stale = Date.now() - lastMessageTime.current > STALE_CONNECTION_MS;
-      if (stale && wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.close(); // triggers onclose → exponential-backoff reconnect
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
+    client.start();
     return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      clearTimeout(reconnectTimer.current);
       clearTimeout(saveTimer.current);
-      wsRef.current?.close();
+      client.stop();
     };
-  }, [connect, authenticated]);
+  }, [client, authenticated]);
 
-  const connectSession = useCallback((sessionId: string) => {
-    wsRef.current?.send(
-      JSON.stringify({
-        type: "connect_session",
-        session_id: sessionId,
-      }),
-    );
-  }, []);
+  const connectSession = useCallback((sessionId: string) => client.connectSession(sessionId), [client]);
+  const disconnectSession = useCallback(() => client.disconnectSession(), [client]);
+  const interruptAgent = useCallback(() => client.interrupt(), [client]);
+  const sendTextMessage = useCallback((text: string) => client.sendText(text), [client]);
 
-  const disconnectSession = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ type: "disconnect_session" }));
-    setState((s) => ({
-      ...s,
-      connectedSessionId: null,
-      connectedSessionName: null,
-      agentStatus: { state: "idle", activity: null },
-    }));
-  }, []);
+  const clearTranscript = useCallback(
+    (sessionId: string) => {
+      client.clearTranscript(sessionId);
+      deleteTranscripts(sessionId);
+    },
+    [client],
+  );
 
-  const interruptAgent = useCallback(() => {
-    // Force agent status to idle so the user can speak
-    setState((s) => ({ ...s, agentStatus: { state: "idle", activity: null } }));
-    // Tell the relay server to go idle
-    wsRef.current?.send(JSON.stringify({ type: "interrupt" }));
-  }, []);
+  const removeSession = useCallback(
+    (sessionId: string) => {
+      // Remove from persisted sessions + IndexedDB
+      deletePersistedSession(sessionId);
+      deleteTranscripts(sessionId);
+      setPersistedSessions((prev) => prev.filter((p) => p.session_id !== sessionId));
+      client.clearTranscript(sessionId);
+    },
+    [client],
+  );
 
-  const sendTextMessage = useCallback((text: string) => {
-    if (!text.trim()) return;
-    wsRef.current?.send(
-      JSON.stringify({ type: "text_message", text: text.trim() }),
-    );
-  }, []);
-
-  const clearTranscript = useCallback((sessionId: string) => {
-    setState((s) => {
-      const { [sessionId]: _, ...rest } = s.transcripts;
-      const { [sessionId]: _tasks, ...restTasks } = s.taskLists;
-      const { [sessionId]: _prs, ...restPrs } = s.prLists;
-      return { ...s, transcripts: rest, taskLists: restTasks, prLists: restPrs };
-    });
-    deleteTranscripts(sessionId);
-  }, []);
-
-  const removeSession = useCallback((sessionId: string) => {
-    // Remove from persisted sessions + IndexedDB
-    deletePersistedSession(sessionId);
-    deleteTranscripts(sessionId);
-    setState((s) => ({
-      ...s,
-      persistedSessions: s.persistedSessions.filter(
-        (p) => p.session_id !== sessionId,
-      ),
-      transcripts: (() => {
-        const { [sessionId]: _, ...rest } = s.transcripts;
-        return rest;
-      })(),
-      taskLists: (() => {
-        const { [sessionId]: _, ...rest } = s.taskLists;
-        return rest;
-      })(),
-      prLists: (() => {
-        const { [sessionId]: _, ...rest } = s.prLists;
-        return rest;
-      })(),
-    }));
-  }, []);
+  const updatePersisted = useCallback(
+    (sessionId: string, patch: Partial<PersistedSession>) => {
+      // Optimistic local update
+      setPersistedSessions((prev) =>
+        prev.map((p) => (p.session_id === sessionId ? { ...p, ...patch } : p)),
+      );
+      // Persist to IndexedDB as cache/fallback
+      const existing = persistedRef.current.find((p) => p.session_id === sessionId);
+      if (existing) savePersistedSession({ ...existing, ...patch });
+    },
+    [],
+  );
 
   const renameSession = useCallback(
     (sessionId: string, displayName: string) => {
-      // Optimistic local update
-      setState((s) => ({
-        ...s,
-        persistedSessions: s.persistedSessions.map((p) =>
-          p.session_id === sessionId
-            ? { ...p, display_name: displayName || undefined }
-            : p,
-        ),
-      }));
-      // Persist to IndexedDB as cache/fallback
-      const existing = stateRef.current.persistedSessions.find(
-        (p) => p.session_id === sessionId,
-      );
-      if (existing) {
-        savePersistedSession({
-          ...existing,
-          display_name: displayName || undefined,
-        });
-      }
-      // Persist to server (authoritative)
-      authFetch(`/api/session-metadata/${sessionId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ display_name: displayName || null }),
-      }).catch(() => {
-        // Non-fatal — local state is already updated
-      });
+      updatePersisted(sessionId, { display_name: displayName || undefined });
+      // Persist to server (authoritative); non-fatal if it fails
+      void client.setSessionMetadata(sessionId, { display_name: displayName || null });
     },
-    [],
-  );
-
-  const spawnSession = useCallback(
-    async (
-      cwd: string,
-      name?: string,
-    ): Promise<{ ok: boolean; error?: string; session_id?: string }> => {
-      try {
-        const resp = await authFetch("/api/sessions/spawn", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cwd, session_name: name ?? "" }),
-        });
-        const data = await resp.json();
-        if (!resp.ok) {
-          return { ok: false, error: data.error || "Spawn failed" };
-        }
-        return { ok: true, session_id: data.session_id };
-      } catch {
-        return { ok: false, error: "Network error" };
-      }
-    },
-    [],
-  );
-
-  const killSession = useCallback(
-    async (sessionId: string): Promise<boolean> => {
-      try {
-        const resp = await authFetch(`/api/sessions/${sessionId}`, {
-          method: "DELETE",
-        });
-        return resp.ok;
-      } catch {
-        return false;
-      }
-    },
-    [],
-  );
-
-  const restartSession = useCallback(
-    async (sessionId: string): Promise<boolean> => {
-      try {
-        const resp = await authFetch(`/api/sessions/${sessionId}/restart`, {
-          method: "POST",
-        });
-        return resp.ok;
-      } catch {
-        return false;
-      }
-    },
-    [],
-  );
-
-  const restartAllSessions = useCallback(async (): Promise<{
-    ok: boolean;
-    total?: number;
-    succeeded?: number;
-    failed?: number;
-    error?: string;
-  }> => {
-    try {
-      const resp = await authFetch(`/api/sessions/restart-all`, {
-        method: "POST",
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        return { ok: false, error: data.error || "Restart-all failed" };
-      }
-      return { ok: true, ...data };
-    } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-  }, []);
-
-  const hardInterruptSession = useCallback(
-    async (sessionId: string): Promise<boolean> => {
-      try {
-        const resp = await authFetch(`/api/sessions/${sessionId}/interrupt`, {
-          method: "POST",
-        });
-        return resp.ok;
-      } catch {
-        return false;
-      }
-    },
-    [],
-  );
-
-  const cancelTts = useCallback(
-    async (sessionId: string): Promise<boolean> => {
-      try {
-        const resp = await authFetch(`/api/sessions/${sessionId}/cancel-tts`, {
-          method: "POST",
-        });
-        return resp.ok;
-      } catch {
-        return false;
-      }
-    },
-    [],
-  );
-
-  const clearContextSession = useCallback(
-    async (sessionId: string): Promise<boolean> => {
-      try {
-        const resp = await authFetch(
-          `/api/sessions/${sessionId}/clear-context`,
-          { method: "POST" },
-        );
-        return resp.ok;
-      } catch {
-        return false;
-      }
-    },
-    [],
-  );
-
-  const compactSession = useCallback(
-    async (sessionId: string): Promise<boolean> => {
-      try {
-        const resp = await authFetch(
-          `/api/sessions/${sessionId}/compact`,
-          { method: "POST" },
-        );
-        return resp.ok;
-      } catch {
-        return false;
-      }
-    },
-    [],
-  );
-
-  const requestTerminalCapture = useCallback((lines = 50) => {
-    setState((s) => ({ ...s, terminalSnapshotLoading: true }));
-    wsRef.current?.send(JSON.stringify({ type: "capture_terminal", lines }));
-  }, []);
-
-  const sendTerminalKeys = useCallback((keys: string) => {
-    wsRef.current?.send(JSON.stringify({ type: "terminal_input", keys }));
-  }, []);
-
-  const sendTerminalSpecialKey = useCallback((key: string) => {
-    wsRef.current?.send(JSON.stringify({ type: "terminal_input", special_key: key }));
-  }, []);
-
-  const sendTerminalResize = useCallback((cols: number, rows: number) => {
-    wsRef.current?.send(JSON.stringify({ type: "terminal_resize", cols, rows }));
-  }, []);
-
-  const answerQuestion = useCallback(
-    (sessionId: string, optionIndex: number, label: string, entryTimestamp: number, isFinal: boolean) => {
-      // Claude Code shows a final "Submit (1) / Cancel (2)" prompt after the
-      // last answer in a multi-question set — when `isFinal`, the relay
-      // presses Enter so the user doesn't have to jump to the terminal.
-      wsRef.current?.send(
-        JSON.stringify({
-          type: "answer_question",
-          session_id: sessionId,
-          option_index: optionIndex,
-          submit_after: isFinal,
-        }),
-      );
-      // Mark the *specific* question entry the user clicked.  Previously this
-      // searched backwards for "the last unanswered question" which mis-routed
-      // every click when multiple AskUserQuestion cards were on screen.
-      setState((s) => {
-        const entries = s.transcripts[sessionId] || [];
-        let updated = false;
-        const nextEntries = entries.map((e) => {
-          if (
-            !updated &&
-            e.speaker === "question" &&
-            !e.answered &&
-            e.timestamp === entryTimestamp
-          ) {
-            updated = true;
-            return { ...e, answered: { optionIndex, label } };
-          }
-          return e;
-        });
-        if (!updated) return s;
-        return {
-          ...s,
-          transcripts: { ...s.transcripts, [sessionId]: nextEntries },
-        };
-      });
-    },
-    [],
-  );
-
-  const answerPermission = useCallback(
-    (sessionId: string, choice: PermissionChoice) => {
-      wsRef.current?.send(
-        JSON.stringify({ type: "answer_permission", session_id: sessionId, choice }),
-      );
-      setState((s) => {
-        const entries = s.transcripts[sessionId] || [];
-        let updated = false;
-        const nextEntries = [...entries];
-        for (let i = nextEntries.length - 1; i >= 0; i--) {
-          const e = nextEntries[i];
-          if (e.speaker === "permission" && !e.permissionAnswered) {
-            nextEntries[i] = { ...e, permissionAnswered: choice };
-            updated = true;
-            break;
-          }
-        }
-        if (!updated) return s;
-        return {
-          ...s,
-          transcripts: { ...s.transcripts, [sessionId]: nextEntries },
-        };
-      });
-    },
-    [],
-  );
-
-  const dismissTerminalSnapshot = useCallback(() => {
-    setState((s) => ({
-      ...s,
-      terminalSnapshot: null,
-      terminalSnapshotLoading: false,
-    }));
-  }, []);
-
-  const startTerminalStream = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ type: "terminal_stream_start" }));
-  }, []);
-
-  const stopTerminalStream = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ type: "terminal_stream_stop" }));
-  }, []);
-
-  const setTerminalDataCallback = useCallback((cb: TerminalDataCallback | null) => {
-    terminalDataCallbackRef.current = cb;
-  }, []);
-
-  const changeModel = useCallback(
-    async (sessionId: string, model: string): Promise<boolean> => {
-      try {
-        const resp = await authFetch(`/api/sessions/${sessionId}/model`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model }),
-        });
-        return resp.ok;
-      } catch {
-        return false;
-      }
-    },
-    [],
-  );
-
-  const changeEffort = useCallback(
-    async (sessionId: string, level: string): Promise<boolean> => {
-      try {
-        const resp = await authFetch(`/api/sessions/${sessionId}/effort`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ level }),
-        });
-        return resp.ok;
-      } catch {
-        return false;
-      }
-    },
-    [],
+    [client, updatePersisted],
   );
 
   const recolorSession = useCallback(
     (sessionId: string, hue: number | null) => {
-      // Optimistic local update
-      setState((s) => ({
-        ...s,
-        persistedSessions: s.persistedSessions.map((p) =>
-          p.session_id === sessionId
-            ? { ...p, hue_override: hue ?? undefined }
-            : p,
-        ),
-      }));
-      // Persist to IndexedDB as cache/fallback
-      const existing = stateRef.current.persistedSessions.find(
-        (p) => p.session_id === sessionId,
-      );
-      if (existing) {
-        savePersistedSession({ ...existing, hue_override: hue ?? undefined });
-      }
-      // Persist to server (authoritative)
-      authFetch(`/api/session-metadata/${sessionId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hue_override: hue }),
-      }).catch(() => {
-        // Non-fatal — local state is already updated
-      });
+      updatePersisted(sessionId, { hue_override: hue ?? undefined });
+      void client.setSessionMetadata(sessionId, { hue_override: hue });
     },
-    [],
+    [client, updatePersisted],
+  );
+
+  const spawnSession = useCallback((cwd: string, name?: string) => client.spawnSession(cwd, name), [client]);
+  const killSession = useCallback((sessionId: string) => client.killSession(sessionId), [client]);
+  const restartSession = useCallback((sessionId: string) => client.restartSession(sessionId), [client]);
+  const restartAllSessions = useCallback(() => client.restartAllSessions(), [client]);
+  const hardInterruptSession = useCallback((sessionId: string) => client.hardInterrupt(sessionId), [client]);
+  const cancelTts = useCallback((sessionId: string) => client.cancelTts(sessionId), [client]);
+  const clearContextSession = useCallback((sessionId: string) => client.clearContext(sessionId), [client]);
+  const compactSession = useCallback((sessionId: string) => client.compact(sessionId), [client]);
+  const changeModel = useCallback((sessionId: string, model: string) => client.changeModel(sessionId, model), [client]);
+  const changeEffort = useCallback((sessionId: string, level: string) => client.changeEffort(sessionId, level), [client]);
+
+  const requestTerminalCapture = useCallback((lines = 50) => client.captureTerminal(lines), [client]);
+  const dismissTerminalSnapshot = useCallback(() => client.dismissTerminalSnapshot(), [client]);
+  const sendTerminalKeys = useCallback((keys: string) => client.sendTerminalKeys(keys), [client]);
+  const sendTerminalSpecialKey = useCallback((key: string) => client.sendTerminalSpecialKey(key), [client]);
+  const sendTerminalResize = useCallback((cols: number, rows: number) => client.resizeTerminal(cols, rows), [client]);
+  const startTerminalStream = useCallback(() => client.startTerminalStream(), [client]);
+  const stopTerminalStream = useCallback(() => client.stopTerminalStream(), [client]);
+  const setTerminalDataCallback = useCallback((cb: TerminalDataCallback | null) => {
+    terminalDataCallbackRef.current = cb;
+  }, []);
+
+  const answerQuestion = useCallback(
+    (sessionId: string, optionIndex: number, label: string, entryTimestamp: number, isFinal: boolean) =>
+      client.answerQuestion(sessionId, optionIndex, label, entryTimestamp, isFinal),
+    [client],
+  );
+  const answerPermission = useCallback(
+    (sessionId: string, choice: PermissionChoice) => client.answerPermission(sessionId, choice),
+    [client],
   );
 
   // Merge live + persisted for display (server metadata takes priority)
   const displaySessions = mergeDisplaySessions(
     state.liveSessions,
-    state.persistedSessions,
+    persistedSessions,
     state.transcripts,
     state.serverMetadata,
   );
@@ -1248,6 +431,8 @@ export function useRelay(authenticated: boolean = true) {
     disableAutoListenSeq: state.disableAutoListenSeq,
     terminalSnapshot: state.terminalSnapshot,
     terminalSnapshotLoading: state.terminalSnapshotLoading,
+    /** The underlying SDK client, for speech events and other SDK features. */
+    client,
     connectSession,
     disconnectSession,
     interruptAgent,

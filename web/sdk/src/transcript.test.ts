@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { appendTranscriptEntry, mergeTranscriptLists } from "./transcriptMerge";
-import type { TranscriptEntry } from "./useRelay";
+import { appendTranscriptEntry, mergeTranscriptLists } from "./transcript";
+import type { TranscriptEntry } from "./protocol";
 
 function entry(
   text: string,

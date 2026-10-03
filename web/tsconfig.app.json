@@ -22,7 +22,12 @@
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
+    "noUncheckedSideEffectImports": true,
+
+    /* In-repo SDK (web/sdk), imported as @vmux/client */
+    "paths": {
+      "@vmux/client": ["./sdk/src/index.ts"]
+    }
   },
-  "include": ["src"]
+  "include": ["src", "sdk/src"]
 }

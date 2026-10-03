@@ -1,0 +1,17 @@
+{
+  "name": "@vmux/client",
+  "version": "0.1.0",
+  "description": "Client SDK for the Claude Voice Multiplexer relay: sessions, transcript, speech timing, audio and voice.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": ["src", "README.md"],
+  "peerDependencies": {
+    "livekit-client": "^2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "livekit-client": { "optional": true }
+  },
+  "license": "MIT"
+}

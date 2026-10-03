@@ -6,7 +6,7 @@
  */
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { FakeWebSocket } from "../test/fakeWebSocket";
+import { FakeWebSocket } from "../../sdk/src/testing/fakeWebSocket";
 
 vi.mock("./useTranscriptDB", () => ({
   loadTranscripts: vi.fn(async () => []),

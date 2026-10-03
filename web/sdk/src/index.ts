@@ -1,0 +1,18 @@
+/**
+ * @vmux/client — build a UI on the Claude Voice Multiplexer relay.
+ *
+ * - RelayClient: sessions, transcript, agent status, speech events, commands
+ * - SpeechPlayer: play relay TTS audio with exact word timing (Web Audio)
+ * - VoiceClient: the session's LiveKit voice room (mic + Claude's voice)
+ * - deriveVoiceState / VoiceTurn: the shared turn + mic state machine
+ *
+ * See README.md.
+ */
+export * from "./protocol";
+export * from "./relayState";
+export * from "./transcript";
+export { RelayClient } from "./relayClient";
+export type { RelayClientEvents, RelayClientOptions } from "./relayClient";
+export { decodeAudioFrame, encodeAudioFrame } from "./audioFrame";
+export type { AudioFrame, AudioFrameHeader } from "./audioFrame";
+export { Emitter } from "./emitter";
