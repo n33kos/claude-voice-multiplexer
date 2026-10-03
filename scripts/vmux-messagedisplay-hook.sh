@@ -40,9 +40,6 @@ input=$(cat)
 claude_session_id=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
 message_id=$(printf '%s' "$input" | jq -r '.message_id // empty' 2>/dev/null)
-index=$(printf '%s' "$input" | jq -r '.index // 0' 2>/dev/null)
-final=$(printf '%s' "$input" | jq -r '.final // false' 2>/dev/null)
-delta=$(printf '%s' "$input" | jq -r '.delta // empty' 2>/dev/null)
 
 if [ -z "$cwd" ] || [ -z "$message_id" ]; then
     exit 0
@@ -60,12 +57,11 @@ if [ -f "$statusline_file" ]; then
 fi
 relay_session_id=$(printf '%s' "$session_cwd" | shasum -a 256 | awk '{print substr($1, 1, 12)}')
 
-payload=$(jq -n \
-    --arg message_id "$message_id" \
-    --argjson index "${index:-0}" \
-    --argjson final "${final:-false}" \
-    --arg delta "$delta" \
-    '{message_id: $message_id, index: $index, final: $final, delta: $delta}')
+# Build the payload straight from the input JSON: extracting delta into a
+# shell variable would strip its trailing newlines (command substitution),
+# and the relay concatenates deltas into one transcript bubble.
+payload=$(printf '%s' "$input" | jq -c \
+    '{message_id: .message_id, index: (.index // 0), final: (.final // false), delta: (.delta // "")}')
 
 curl -sS -X POST \
     -H "X-Daemon-Secret: $DAEMON_SECRET" \

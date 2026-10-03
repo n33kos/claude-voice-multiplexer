@@ -40,6 +40,7 @@ from registry import SessionRegistry
 from livekit_agent import RelayAgent
 from metadata_store import MetadataStore
 import mcp_tools
+from transcript_buffer import MAX_TRANSCRIPT_BUFFER, buffer_entry
 
 registry = SessionRegistry()
 metadata_store = MetadataStore()
@@ -208,8 +209,6 @@ def _spawn_background(coro) -> asyncio.Task:
 
 # Transcript buffer per session (keyed by session_id)
 # Holds the last N entries so reconnecting clients can catch up.
-MAX_TRANSCRIPT_BUFFER = 50
-MAX_TRANSCRIPT_ENTRY_SIZE = 50_000  # Truncate individual entries larger than 50KB
 _transcript_buffers: dict[str, list[dict]] = {}  # session_id → [entry, ...]
 _transcript_seq: dict[str, int] = {}  # session_id → next sequence number
 
@@ -371,14 +370,12 @@ async def _notify_client_transcript(session_id: str, speaker: str, text: str, **
 
     # Don't buffer image entries — base64 data is large and images
     # don't need to be replayed to reconnecting clients.
+    # Streamed deltas (same message_id) merge into one buffered entry; the
+    # broadcast below still carries just the delta.
     if speaker != "image":
-        # Truncate oversized text to prevent individual entries from bloating memory
-        if len(text) > MAX_TRANSCRIPT_ENTRY_SIZE:
-            entry = {**entry, "text": text[:MAX_TRANSCRIPT_ENTRY_SIZE] + "... [truncated]"}
-        buf = _transcript_buffers.setdefault(session_id, [])
-        buf.append(entry)
-        if len(buf) > MAX_TRANSCRIPT_BUFFER:
-            _transcript_buffers[session_id] = buf[-MAX_TRANSCRIPT_BUFFER:]
+        _transcript_buffers[session_id] = buffer_entry(
+            _transcript_buffers.setdefault(session_id, []), entry
+        )
 
     msg = json.dumps(entry)
     if extra.get("agent_id") or extra.get("kind") or speaker == "activity":
@@ -1370,7 +1367,8 @@ async def tts_session(session_id: str, request: Request):
 async def stream_session(session_id: str, request: Request):
     """Receive a streamed assistant text chunk from the MessageDisplay hook.
 
-    Posts the chunk as its own transcript bubble and queues complete sentences
+    Broadcasts the chunk tagged with its message_id (clients append it to that
+    message's bubble) and queues complete sentences
     for TTS as they form.  See the streaming helpers above for the model.
     """
     _require_auth(request)
@@ -1385,13 +1383,19 @@ async def stream_session(session_id: str, request: Request):
     if not message_id:
         return JSONResponse({"error": "message_id is required"}, status_code=400)
 
-    # UI: one transcript bubble per chunk, interleaving with tool-call entries.
+    # UI: deltas carry message_id so clients grow one bubble per message.
     # TTS: queue the whole chunk as one utterance so it plays continuously.
-    _open_streams.setdefault(session_id, set()).add(message_id)
+    open_streams = _open_streams.setdefault(session_id, set())
+    already_open = message_id in open_streams
+    open_streams.add(message_id)
     if delta.strip():
-        await _notify_client_transcript(session_id, "claude", delta)
+        await _notify_client_transcript(session_id, "claude", delta, message_id=message_id)
         if _agent:
             await _agent.handle_claude_response(session_id, delta)
+    elif delta and already_open:
+        # Whitespace-only delta mid-message (e.g. a paragraph break): keep it
+        # in the bubble so the merged text matches, but don't speak it.
+        await _notify_client_transcript(session_id, "claude", delta, message_id=message_id)
 
     if final:
         _open_streams.get(session_id, set()).discard(message_id)

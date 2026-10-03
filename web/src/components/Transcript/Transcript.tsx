@@ -573,9 +573,11 @@ export function Transcript({ entries, tasks, prs, cwd, sessionId, hueOverride, o
   const hue = hueOverride != null ? hueOverride : (sessionId ? sessionHue(sessionId) : null);
   const sendButtonStyle = hue !== null ? { backgroundColor: `hsla(${hue}, 55%, 40%, 0.9)` } : undefined;
 
+  // Streamed messages grow in place, so also follow the last entry's length.
+  const lastTextLength = entries[entries.length - 1]?.text.length ?? 0;
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "instant" });
-  }, [entries.length]);
+  }, [entries.length, lastTextLength]);
 
   // Multi-question AskUserQuestion arrives as N broadcasts up-front, but the
   // terminal-side picker is strictly sequential.  Hide questions whose prior

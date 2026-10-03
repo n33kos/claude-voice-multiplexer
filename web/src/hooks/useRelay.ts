@@ -11,6 +11,7 @@ import {
 } from "./useTranscriptDB";
 import { authFetch } from "./useAuth";
 import { embed } from "../embed";
+import { appendTranscriptEntry, mergeTranscriptLists } from "./transcriptMerge";
 
 export interface ConnectedClient {
   client_id: string;
@@ -105,6 +106,9 @@ export interface TranscriptEntry {
     lines_total: number;
     truncated: boolean;
   };
+  // Streamed assistant messages: every delta of one message shares this id
+  // and is appended to the same entry (see transcriptMerge.ts).
+  message_id?: string;
 }
 
 export type TaskStatus = "pending" | "in_progress" | "completed";
@@ -491,17 +495,7 @@ export function useRelay(authenticated: boolean = true) {
                 };
               }
               // Merge: keep all DB entries, add any existing entries not in DB
-              const merged = [...dbEntries];
-              for (const entry of existing) {
-                const isDupe = dbEntries.some(
-                  (e) =>
-                    e.speaker === entry.speaker &&
-                    e.text === entry.text &&
-                    Math.abs(e.timestamp - entry.timestamp) < 2000,
-                );
-                if (!isDupe) merged.push(entry);
-              }
-              merged.sort((a, b) => a.timestamp - b.timestamp);
+              const merged = mergeTranscriptLists(dbEntries, existing);
               return {
                 ...s,
                 transcripts: { ...s.transcripts, [sessionId]: merged },
@@ -535,12 +529,16 @@ export function useRelay(authenticated: boolean = true) {
               ...(data.agent_id ? { agent_id: data.agent_id } : {}),
               ...(data.agent_type ? { agent_type: data.agent_type } : {}),
               ...(data.kind ? { kind: data.kind } : {}),
+              ...(data.message_id ? { message_id: data.message_id } : {}),
             };
             return {
               ...s,
               transcripts: {
                 ...s.transcripts,
-                [sessionId]: [...(s.transcripts[sessionId] || []), entry],
+                [sessionId]: appendTranscriptEntry(
+                  s.transcripts[sessionId] || [],
+                  entry,
+                ),
               },
             };
           });
@@ -565,6 +563,7 @@ export function useRelay(authenticated: boolean = true) {
                 ts: number;
                 filename?: string;
                 language?: string;
+                message_id?: string;
               }) => ({
                 speaker: e.speaker as TranscriptEntry["speaker"],
                 text: e.text,
@@ -572,24 +571,15 @@ export function useRelay(authenticated: boolean = true) {
                 timestamp: e.ts ? e.ts * 1000 : Date.now(),
                 ...(e.filename ? { filename: e.filename } : {}),
                 ...(e.language ? { language: e.language } : {}),
+                ...(e.message_id ? { message_id: e.message_id } : {}),
               }),
             );
           if (serverEntries.length === 0) break;
           setState((s) => {
             const existing = s.transcripts[syncSessionId] || [];
-            // Merge: deduplicate by matching text + speaker within a 2s window
-            const merged = [...existing];
-            for (const entry of serverEntries) {
-              const isDuplicate = existing.some(
-                (e) =>
-                  e.speaker === entry.speaker &&
-                  e.text === entry.text &&
-                  Math.abs(e.timestamp - entry.timestamp) < 2000,
-              );
-              if (!isDuplicate) merged.push(entry);
-            }
-            // Sort by timestamp to maintain order
-            merged.sort((a, b) => a.timestamp - b.timestamp);
+            // Merge: streamed messages match by message_id, others by
+            // speaker + text within a 2s window
+            const merged = mergeTranscriptLists(existing, serverEntries);
             return {
               ...s,
               transcripts: { ...s.transcripts, [syncSessionId]: merged },
