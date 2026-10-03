@@ -55,11 +55,40 @@ def origin_allowed(
     return any(h and netloc == h.strip().lower() for h in hosts)
 
 
-def has_explicit_token(headers: dict[str, str]) -> bool:
-    """A credential the browser doesn't attach on its own (lowercased header dict)."""
+def has_explicit_token(headers: dict[str, str], scope: Optional[dict] = None) -> bool:
+    """A credential the browser doesn't attach on its own (lowercased header dict).
+
+    Bearer header, a vmux-token subprotocol, or (for the LiveKit proxy) the
+    room JWT LiveKit clients put in the URL as `access_token`.
+    """
     if headers.get("authorization", "").lower().startswith("bearer "):
         return True
-    return any(p.strip().startswith("vmux-token.") for p in headers.get("sec-websocket-protocol", "").split(","))
+    if any(p.strip().startswith("vmux-token.") for p in headers.get("sec-websocket-protocol", "").split(",")):
+        return True
+    if scope and str(scope.get("path", "")).startswith("/livekit/"):
+        query = scope.get("query_string", b"")
+        query = query.decode("latin-1") if isinstance(query, bytes) else str(query)
+        return any(part.startswith("access_token=") and len(part) > len("access_token=") for part in query.split("&"))
+    return False
+
+
+def _is_token_preflight(scope, headers: dict[str, str]) -> bool:
+    requested = {h.strip().lower() for h in headers.get("access-control-request-headers", "").split(",")}
+    return scope.get("method") == "OPTIONS" and "authorization" in requested
+
+
+def _cors_headers(origin: Optional[str]) -> list[tuple[bytes, bytes]]:
+    # Never Allow-Credentials: cross-origin callers authenticate with a token, not cookies.
+    return [(b"access-control-allow-origin", (origin or "null").encode("latin-1")), (b"vary", b"Origin")]
+
+
+def _with_cors(send, origin: Optional[str]):
+    """Wrap an ASGI send so the response lets `origin` read it."""
+    async def cors_send(message):
+        if message["type"] == "http.response.start":
+            message = {**message, "headers": list(message.get("headers") or []) + _cors_headers(origin)}
+        await send(message)
+    return cors_send
 
 
 class OriginCheckMiddleware:
@@ -77,9 +106,26 @@ class OriginCheckMiddleware:
         origin = headers.get("origin")
         if origin_allowed(origin, (headers.get("host"), headers.get("x-forwarded-host")), self._allowed):
             return await self._app(scope, receive, send)
-        if has_explicit_token(headers):
+        if has_explicit_token(headers, scope):
             stripped = [(k, v) for k, v in scope.get("headers") or [] if k.lower() != b"cookie"]
+            if scope["type"] == "http":
+                send = _with_cors(send, origin)
             return await self._app({**scope, "headers": stripped}, receive, send)
+        if scope["type"] == "http" and _is_token_preflight(scope, headers):
+            # The browser's CORS preflight for a request that will carry a Bearer
+            # token (the preflight itself never does).  Safe to approve: the real
+            # request still needs the token, and no cookies are honored.
+            await send({
+                "type": "http.response.start",
+                "status": 204,
+                "headers": _cors_headers(origin) + [
+                    (b"access-control-allow-methods", b"GET, POST, PUT, DELETE"),
+                    (b"access-control-allow-headers", b"authorization, content-type"),
+                    (b"access-control-max-age", b"600"),
+                ],
+            })
+            await send({"type": "http.response.body", "body": b""})
+            return
 
         print(f"[origin] rejected {scope['type']} {scope.get('path')} from origin {origin!r}")
         if scope["type"] == "websocket":

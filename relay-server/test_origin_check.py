@@ -143,3 +143,79 @@ class ExplicitTokenTests(unittest.TestCase):
         seen, sent = self._run_capture(scope)
         self.assertEqual(seen, [])
         self.assertEqual(sent[-1]["code"], 4003)
+
+
+class CorsTests(unittest.TestCase):
+    def _run(self, scope):
+        sent, seen = [], []
+
+        async def inner(scope, receive, send):
+            seen.append(scope)
+            await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]})
+            await send({"type": "http.response.body", "body": b"{}"})
+
+        async def receive():
+            return {"type": "http.request"}
+
+        async def send(msg):
+            sent.append(msg)
+
+        asyncio.run(OriginCheckMiddleware(inner)(scope, receive, send))
+        return seen, sent
+
+    def test_token_preflight_from_foreign_origin_is_approved_without_credentials(self):
+        seen, sent = self._run({"type": "http", "method": "OPTIONS", "path": "/api/session-metadata", "headers": [
+            (b"host", b"localhost:3100"), (b"origin", b"glass-app://calcifer"),
+            (b"access-control-request-method", b"GET"), (b"access-control-request-headers", b"authorization"),
+        ]})
+        self.assertEqual(seen, [])  # answered here, never reaches the app
+        head = dict(sent[0]["headers"])
+        self.assertEqual(sent[0]["status"], 204)
+        self.assertEqual(head[b"access-control-allow-origin"], b"glass-app://calcifer")
+        self.assertNotIn(b"access-control-allow-credentials", head)
+
+    def test_preflight_without_authorization_is_still_rejected(self):
+        _, sent = self._run({"type": "http", "method": "OPTIONS", "path": "/api/x", "headers": [
+            (b"host", b"localhost:3100"), (b"origin", b"https://evil.example"),
+            (b"access-control-request-headers", b"content-type"),
+        ]})
+        self.assertEqual(sent[0]["status"], 403)
+
+    def test_token_response_is_readable_cross_origin(self):
+        _, sent = self._run({"type": "http", "method": "GET", "path": "/api/sessions", "headers": [
+            (b"host", b"localhost:3100"), (b"origin", b"null"), (b"authorization", b"Bearer t"),
+        ]})
+        self.assertEqual(dict(sent[0]["headers"])[b"access-control-allow-origin"], b"null")
+
+    def test_same_origin_responses_get_no_cors_headers(self):
+        _, sent = self._run({"type": "http", "method": "GET", "path": "/api/sessions", "headers": [
+            (b"host", b"localhost:3100"), (b"origin", b"http://localhost:3100"),
+        ]})
+        self.assertNotIn(b"access-control-allow-origin", dict(sent[0]["headers"]))
+
+
+class LiveKitTokenTests(unittest.TestCase):
+    def test_livekit_proxy_access_token_counts_as_explicit(self):
+        from origin_check import has_explicit_token
+        scope = {"path": "/livekit/rtc/v1", "query_string": b"access_token=eyJabc&join_request=x"}
+        self.assertTrue(has_explicit_token({}, scope))
+        self.assertFalse(has_explicit_token({}, {"path": "/livekit/rtc/v1", "query_string": b"access_token=&x=1"}))
+        # Only on the LiveKit proxy: elsewhere a query token is not an accepted credential.
+        self.assertFalse(has_explicit_token({}, {"path": "/ws/client", "query_string": b"access_token=eyJabc"}))
+
+    def test_foreign_origin_livekit_websocket_passes(self):
+        seen = []
+
+        async def inner(scope, receive, send):
+            seen.append(scope)
+
+        async def receive():
+            return {"type": "websocket.connect"}
+
+        async def send(msg):
+            pass
+
+        scope = {"type": "websocket", "path": "/livekit/rtc/v1", "query_string": b"access_token=eyJabc",
+                 "headers": [(b"host", b"localhost:3100"), (b"origin", b"glass-app://calcifer")]}
+        asyncio.run(OriginCheckMiddleware(inner)(scope, receive, send))
+        self.assertEqual(len(seen), 1)

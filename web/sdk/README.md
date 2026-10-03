@@ -50,15 +50,34 @@ requestAnimationFrame(function tick() {
 
 ## Origins
 
-Browser pages on another origin (another port counts) are rejected by the
-relay unless listed in `VMUX_ALLOWED_ORIGINS` in
+A page on any origin (another port, a sandboxed `null` frame) can use the
+relay **with a token**: the WebSocket carries it as a `vmux-token.<jwt>`
+subprotocol, REST as `Authorization: Bearer` (CORS is answered for these),
+and LiveKit as its room JWT.  Cookies from other origins are ignored, so
+nothing rides on the browser's own login.
+
+Only cookie-based use from another origin (embedding the vmux web app
+itself, say) needs an allowlist entry in
 `~/.claude/voice-multiplexer/voice-multiplexer.env`:
 
 ```
-VMUX_ALLOWED_ORIGINS=http://localhost:5173,glass-app://calcifer
+VMUX_ALLOWED_ORIGINS=http://localhost:5173
 ```
 
 Non-browser clients (no `Origin` header) just need a token.
+
+## Without a bundler
+
+The relay serves the SDK as one classic script:
+
+```html
+<script src="http://localhost:3100/sdk/vmux-client.js"></script>
+<script>
+  const { RelayClient, SpeechPlayer } = window.VmuxClient;
+</script>
+```
+
+(`@vmux/client/voice` isn't in it; bundle that yourself if you need the mic.)
 
 ## Scopes
 
@@ -119,8 +138,11 @@ one Web Audio timeline per utterance:
   word, time into the utterance and loudness, for animation loops.
 - `on("start" | "end")` per utterance; a cancelled utterance stops at once.
 - `muted: true` keeps timing and loudness running silently (listen-only).
-  If another client plays the audio through LiveKit, raise `leadInS` by its
-  delay (≈100–500ms) to line up.
+  If another client plays the audio through LiveKit, set `leadInS` to its
+  delay: measured locally at 65–103ms (median 83) with
+  `examples/sync-probe`, more over a network.
+- Words carry `phonemes` (misaki/IPA, e.g. `həlˈO`) when the relay's
+  phonemizer is running, for mouth shapes per sound.
 - `analyser` is an `AnalyserNode` on the speech, for visualizers.
 
 ## Voice (`@vmux/client/voice`)
