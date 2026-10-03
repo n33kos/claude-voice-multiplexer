@@ -16,6 +16,8 @@ Usage:
   vmux send-keys <session-id> <text>  send literal keystrokes to a session's terminal
   vmux send-key <session-id> <key>    send a special key (Enter, C-c, Tab, etc)
   vmux auth-code                  generate a one-time pairing code for the web app
+  vmux token <name> [--scope listen|speak|control]
+                                  pair a new device and print its token (for SDK UIs)
   vmux update-if-newer            update daemon from plugin cache if newer version available
   vmux install-overlay            install overlay deps, config, startup item, and start
   vmux uninstall-overlay           stop overlay, remove startup item and optionally config
@@ -258,6 +260,36 @@ def cmd_auth_code():
         print("Open the web app and enter this code to authorize a new device.")
     else:
         print("Authentication is not enabled (no AUTH_SECRET configured).")
+
+
+def cmd_token(name: str, scope: str):
+    """Pair a device locally and print its token on stdout (details on stderr)."""
+    import urllib.error
+    import urllib.request
+
+    if scope not in ("listen", "speak", "control"):
+        _die("--scope must be listen, speak or control")
+    r = _send({"cmd": "auth-code"})
+    if not _ok(r):
+        return
+    code = r.get("code")
+    if not code:
+        _die("Authentication is not enabled (no AUTH_SECRET configured): no token needed.")
+    relay = os.environ.get("VMUX_RELAY_URL", f"http://localhost:{os.environ.get('RELAY_PORT', '3100')}")
+    body = json.dumps({"code": code, "device_name": name, "scope": scope}).encode()
+    req = urllib.request.Request(f"{relay}/api/auth/pair", data=body, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        _die(f"Pairing failed: HTTP {e.code} {e.read().decode(errors='replace')}")
+    except OSError as e:
+        _die(f"Relay not reachable at {relay}: {e}")
+    print(f"Paired \"{data['device_name']}\" ({data.get('scope', scope)}), device id {data['device_id']}.",
+          file=sys.stderr)
+    print("Revoke it any time from the web app (Settings > Authorized Devices).", file=sys.stderr)
+    print(data["token"])
 
 
 def cmd_update():
@@ -676,6 +708,18 @@ def main():
         cmd_send_key(sys.argv[2], sys.argv[3])
     elif sub in ("auth-code", "authcode"):
         cmd_auth_code()
+    elif sub == "token":
+        args = sys.argv[2:]
+        scope = "listen"
+        if "--scope" in args:
+            i = args.index("--scope")
+            if i + 1 >= len(args):
+                _die("Usage: vmux token <name> [--scope listen|speak|control]")
+            scope = args[i + 1]
+            args = args[:i] + args[i + 2:]
+        if len(args) != 1:
+            _die("Usage: vmux token <name> [--scope listen|speak|control]")
+        cmd_token(args[0], scope)
     elif sub in ("update", "update-if-newer"):
         cmd_update()
     elif sub == "install-overlay":
