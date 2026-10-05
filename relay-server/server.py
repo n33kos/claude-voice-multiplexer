@@ -2513,10 +2513,12 @@ async def client_ws(ws: WebSocket):
                         prev_content = ""
                         try:
                             while True:
+                                # Lines of history above the visible pane: how far back the
+                                # live terminal can scroll (the client holds only the latest).
                                 result = await _daemon_ipc({
                                     "cmd": "capture-terminal-ansi",
                                     "session_id": sid,
-                                    "lines": 50,
+                                    "lines": 150,
                                 })
                                 content = result.get("content", "")
                                 if content and content != prev_content:
