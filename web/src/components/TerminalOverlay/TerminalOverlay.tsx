@@ -123,14 +123,22 @@ export function TerminalOverlay({
     });
 
     // Register the callback to receive terminal_data from the relay.
-    // Each `data` is a full pane snapshot from `tmux capture-pane -e`.
-    // We send `\x1b[H` (cursor home) to overwrite in-place rather than
-    // `\x1b[2J\x1b[H` (clear-screen + home) — the clear used to flash the
-    // canvas blank for a frame on every 150ms poll, causing visible flicker
-    // and unnecessary repaint work.  Cursor-home alone overwrites the same
-    // cells with the new content; xterm.js's renderer skips unchanged cells.
+    // Each `data` is a full pane snapshot from `tmux capture-pane -e`: the
+    // visible pane plus its recent history, so it is taller than the screen.
+    // Written from cursor-home alone, it scrolled, and every 150ms poll pushed
+    // another copy of those lines into xterm's scrollback — scrolled up even a
+    // line, you watched the copies stream past each other.  So each snapshot
+    // replaces the whole buffer: clear scrollback (3J), home, clear screen
+    // (2J) and the text, all in ONE write.  xterm parses a write in one go, so
+    // no blank frame is drawn (the flicker the old clear caused came from
+    // clearing separately).  The reader's distance from the bottom is kept, so
+    // scrolling back through history holds still while the pane changes.
     const writeCallback = (data: string) => {
-      term.write("\x1b[H" + data);
+      const buf = term.buffer.active;
+      const fromBottom = buf.baseY - buf.viewportY; // 0 when following the bottom
+      term.write("\x1b[3J\x1b[H\x1b[2J" + data.replace(/\n+$/, ""), () => {
+        if (fromBottom > 0) term.scrollToLine(Math.max(0, term.buffer.active.baseY - fromBottom));
+      });
     };
     onSetTerminalDataCallback?.(writeCallback);
 
