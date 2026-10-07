@@ -223,7 +223,7 @@ export function reduceServerMessage(s: RelayState, data: Msg, now: number = Date
       if (!meta?.session_id) return s;
       const others = s.serverMetadata.filter((m) => m.session_id !== meta.session_id);
       // All fields null means the metadata was deleted.
-      if (meta.display_name == null && meta.hue_override == null && meta.updated_at == null) {
+      if (meta.display_name == null && meta.hue_override == null && meta.voice_override == null && meta.updated_at == null) {
         return { ...s, serverMetadata: others };
       }
       return { ...s, serverMetadata: [...others, meta] };

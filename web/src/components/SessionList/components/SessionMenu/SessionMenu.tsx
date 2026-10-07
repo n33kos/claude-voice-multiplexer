@@ -1,6 +1,8 @@
 import { useRef, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { sessionHue } from "../../../../utils/sessionHue";
+import { groupVoices, type VoiceGroup } from "../../../../utils/voiceGroups";
+import { authFetch } from "../../../../hooks/useAuth";
 import type { DisplaySession } from "../../../../hooks/useRelay";
 import styles from "./SessionMenu.module.scss";
 
@@ -10,6 +12,7 @@ interface SessionMenuProps {
   onRemoveSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, displayName: string) => void;
   onRecolorSession: (sessionId: string, hue: number | null) => void;
+  onSetSessionVoice: (sessionId: string, voice: string | null) => void;
   onKillSession: (sessionId: string) => Promise<boolean>;
   onRestartSession: (sessionId: string) => Promise<boolean>;
   onHardInterrupt: (sessionId: string) => Promise<boolean>;
@@ -25,6 +28,7 @@ export function SessionMenu({
   onRemoveSession,
   onRenameSession,
   onRecolorSession,
+  onSetSessionVoice,
   onKillSession,
   onRestartSession,
   onHardInterrupt,
@@ -38,6 +42,9 @@ export function SessionMenu({
   const [recoloring, setRecoloring] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [hueValue, setHueValue] = useState(0);
+  const [choosingVoice, setChoosingVoice] = useState(false);
+  const [voiceGroups, setVoiceGroups] = useState<VoiceGroup[] | null>(null);
+  const [globalVoice, setGlobalVoice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -48,7 +55,26 @@ export function SessionMenu({
     if (!nextOpen) {
       setRenaming(false);
       setRecoloring(false);
+      setChoosingVoice(false);
     }
+  }
+
+  async function loadVoices() {
+    try {
+      const resp = await authFetch("/api/settings");
+      if (!resp.ok) return;
+      const data = await resp.json();
+      setVoiceGroups(groupVoices(data.available_voices || []));
+      setGlobalVoice(data.kokoro_voice ?? null);
+    } catch {
+      // ignore — the picker shows a loading/unavailable state
+    }
+  }
+
+  function applyVoice(voice: string | null) {
+    onSetSessionVoice(session.session_id, voice);
+    setChoosingVoice(false);
+    setOpen(false);
   }
 
   async function runAction(action: () => Promise<boolean>) {
@@ -150,6 +176,39 @@ export function SessionMenu({
                 )}
               </div>
             </div>
+          ) : choosingVoice ? (
+            <div
+              className={styles.VoiceRow}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {voiceGroups ? (
+                <select
+                  className={styles.VoiceSelect}
+                  value={session.voice_override ?? ""}
+                  onChange={(e) => applyVoice(e.target.value || null)}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Escape") setChoosingVoice(false);
+                  }}
+                  autoFocus
+                >
+                  <option value="">
+                    Default{globalVoice ? ` (${globalVoice})` : ""}
+                  </option>
+                  {voiceGroups.map((group) => (
+                    <optgroup key={group.label} label={group.label}>
+                      {group.voices.map((voice) => (
+                        <option key={voice.id} value={voice.id}>
+                          {voice.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              ) : (
+                <span className={styles.VoiceLoading}>Loading voices…</span>
+              )}
+            </div>
           ) : (
             <>
               <DropdownMenu.Item
@@ -174,6 +233,16 @@ export function SessionMenu({
                 }}
               >
                 Change color
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                className={styles.MenuItem}
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setChoosingVoice(true);
+                  void loadVoices();
+                }}
+              >
+                Change voice
               </DropdownMenu.Item>
               <DropdownMenu.Item
                 className={styles.MenuItem}

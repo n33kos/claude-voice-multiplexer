@@ -27,11 +27,13 @@ export interface Session {
   daemon_managed?: boolean;
 }
 
-/** Server-side session metadata (display names, color overrides). */
+/** Server-side session metadata (display names, color and voice overrides). */
 export interface ServerSessionMetadata {
   session_id: string;
   display_name: string | null;
   hue_override: number | null;
+  /** Kokoro voice ID for this session; null uses the global voice. */
+  voice_override?: string | null;
   updated_at: number | null;
 }
 

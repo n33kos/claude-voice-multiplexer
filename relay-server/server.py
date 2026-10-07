@@ -2097,7 +2097,7 @@ async def _broadcast_metadata_update(metadata: dict):
 
 @app.get("/api/session-metadata")
 async def get_all_session_metadata(request: Request):
-    """Return all server-side session metadata (display names, color overrides)."""
+    """Return all server-side session metadata (display names, color/voice overrides)."""
     _require_auth(request, "listen")
     metadata = await metadata_store.get_all()
     return JSONResponse({"metadata": metadata})
@@ -2105,7 +2105,7 @@ async def get_all_session_metadata(request: Request):
 
 @app.put("/api/session-metadata/{session_id}")
 async def upsert_session_metadata(session_id: str, request: Request):
-    """Create or update session metadata (display_name and/or hue_override)."""
+    """Create or update session metadata (display_name, hue_override, voice_override)."""
     _require_auth(request)
     body = await request.json()
 
@@ -2118,8 +2118,15 @@ async def upsert_session_metadata(session_id: str, request: Request):
     if hue_override is not None and not isinstance(hue_override, (int, float)):
         return JSONResponse({"error": "hue_override must be a number"}, status_code=400)
 
+    extra = {}
+    if "voice_override" in body:
+        voice = body["voice_override"]
+        if voice is not None and not isinstance(voice, str):
+            return JSONResponse({"error": "voice_override must be a string"}, status_code=400)
+        extra["voice_override"] = voice or None  # null or "" clears it
+
     hue_int = int(hue_override) if hue_override is not None else None
-    updated = await metadata_store.set(session_id, display_name=display_name, hue_override=hue_int)
+    updated = await metadata_store.set(session_id, display_name=display_name, hue_override=hue_int, **extra)
     await _broadcast_metadata_update(updated)
     return JSONResponse({"ok": True, "metadata": updated})
 
@@ -2132,7 +2139,7 @@ async def delete_session_metadata(session_id: str, request: Request):
     if not deleted:
         return JSONResponse({"error": "Metadata not found"}, status_code=404)
     # Broadcast removal to clients
-    await _broadcast_metadata_update({"session_id": session_id, "display_name": None, "hue_override": None, "updated_at": None})
+    await _broadcast_metadata_update({"session_id": session_id, "display_name": None, "hue_override": None, "voice_override": None, "updated_at": None})
     return JSONResponse({"ok": True})
 
 

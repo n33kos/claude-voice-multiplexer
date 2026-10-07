@@ -112,6 +112,7 @@ export function SessionList({
   onRemoveSession,
   onRenameSession,
   onRecolorSession,
+  onSetSessionVoice,
   onSpawnSession,
   onKillSession,
   onRestartSession,
@@ -357,6 +358,7 @@ export function SessionList({
                         onRemoveSession={onRemoveSession}
                         onRenameSession={onRenameSession}
                         onRecolorSession={onRecolorSession}
+                        onSetSessionVoice={onSetSessionVoice}
                         onKillSession={onKillSession}
                         onRestartSession={onRestartSession}
                         onHardInterrupt={onHardInterrupt}

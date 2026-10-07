@@ -318,6 +318,7 @@ export default function App() {
             onRemoveSession={relay.removeSession}
             onRenameSession={relay.renameSession}
             onRecolorSession={relay.recolorSession}
+            onSetSessionVoice={relay.setSessionVoice}
             onSpawnSession={relay.spawnSession}
             onKillSession={relay.killSession}
             onRestartSession={relay.restartSession}

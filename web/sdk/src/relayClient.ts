@@ -506,8 +506,11 @@ export class RelayClient extends Emitter<RelayClientEvents> {
     }
   }
 
-  /** Set a session's display name / color on the relay (null clears a field). */
-  setSessionMetadata(sessionId: string, patch: { display_name?: string | null; hue_override?: number | null }): Promise<boolean> {
+  /** Set a session's display name / color / TTS voice on the relay (null clears a field). */
+  setSessionMetadata(
+    sessionId: string,
+    patch: { display_name?: string | null; hue_override?: number | null; voice_override?: string | null },
+  ): Promise<boolean> {
     return this.ok(`/api/session-metadata/${sessionId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },

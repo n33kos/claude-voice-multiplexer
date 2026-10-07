@@ -56,6 +56,7 @@ export interface DisplaySession {
   last_interaction: number | null; // ms timestamp of last user/claude transcript entry
   connected_clients: ConnectedClient[];
   hue_override?: number; // user-set color hue (0-360)
+  voice_override?: string; // per-session Kokoro voice (server-side only)
   health?: SessionHealth; // daemon-reported health (nil = not daemon-managed)
   daemon_managed?: boolean; // true if managed by vmuxd
 }
@@ -113,6 +114,12 @@ function mergeDisplaySessions(
       .map((p) => [p.session_id, p.hue_override!]),
   );
 
+  const serverVoiceOverrides = new Map(
+    serverMeta
+      .filter((m) => m.voice_override)
+      .map((m) => [m.session_id, m.voice_override!]),
+  );
+
   const liveIds = new Set(live.map((s) => s.session_id));
 
   for (const p of persisted) {
@@ -133,6 +140,7 @@ function mergeDisplaySessions(
         connected_clients: [],
         hue_override:
           serverHueOverrides.get(p.session_id) ?? p.hue_override,
+        voice_override: serverVoiceOverrides.get(p.session_id),
         daemon_managed: p.daemon_managed,
       });
     }
@@ -156,6 +164,7 @@ function mergeDisplaySessions(
       hue_override:
         serverHueOverrides.get(s.session_id) ??
         hueOverrides.get(s.session_id),
+      voice_override: serverVoiceOverrides.get(s.session_id),
       health: s.health,
       daemon_managed: s.daemon_managed,
     });
@@ -363,6 +372,13 @@ export function useRelay(authenticated: boolean = true) {
     [client, updatePersisted],
   );
 
+  const setSessionVoice = useCallback(
+    (sessionId: string, voice: string | null) => {
+      void client.setSessionMetadata(sessionId, { voice_override: voice });
+    },
+    [client],
+  );
+
   const spawnSession = useCallback((cwd: string, name?: string) => client.spawnSession(cwd, name), [client]);
   const killSession = useCallback((sessionId: string) => client.killSession(sessionId), [client]);
   const restartSession = useCallback((sessionId: string) => client.restartSession(sessionId), [client]);
@@ -441,6 +457,7 @@ export function useRelay(authenticated: boolean = true) {
     removeSession,
     renameSession,
     recolorSession,
+    setSessionVoice,
     spawnSession,
     killSession,
     restartSession,

@@ -13,6 +13,7 @@ export interface SessionListProps {
   onRemoveSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, displayName: string) => void;
   onRecolorSession: (sessionId: string, hue: number | null) => void;
+  onSetSessionVoice: (sessionId: string, voice: string | null) => void;
   onSpawnSession: (
     cwd: string,
     name?: string,

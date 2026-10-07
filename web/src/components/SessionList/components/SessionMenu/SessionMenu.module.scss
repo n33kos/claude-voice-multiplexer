@@ -186,3 +186,29 @@
   from { opacity: 1; }
   to { opacity: 0; }
 }
+
+.VoiceRow {
+  padding: 0.375rem;
+}
+
+.VoiceSelect {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.75rem;
+  border-radius: 0.375rem;
+  border: 1px solid var(--color-border-secondary);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  outline: none;
+
+  &:focus {
+    border-color: var(--color-toggle-active);
+  }
+}
+
+.VoiceLoading {
+  display: block;
+  padding: 0.25rem 0.375rem;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+}

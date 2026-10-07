@@ -923,6 +923,14 @@ class SessionRoom:
         self._is_speaking = True
         tts_started_at = time.time()
         await self._notify_status("speaking")
+        # Per-session voice override (keyed by the folder-hash session ID);
+        # a single-row SQLite read, so it adds no noticeable latency.
+        voice = None
+        if self.metadata_store is not None:
+            try:
+                voice = await self.metadata_store.get_voice(self.session_id)
+            except Exception as e:
+                print(f"[room:{self.room_name}] voice override lookup failed: {e}")
         speech = SpeechEmitter(self.session_id, self.notify_client_event_fn, self.notify_client_audio_fn)
         await speech.start(spoken_text, message_id)
         cancelled = False
@@ -932,7 +940,7 @@ class SessionRoom:
             got_audio = False
 
             try:
-                async for pcm, words in audio_pipeline.synthesize_speech_stream(spoken_text):
+                async for pcm, words in audio_pipeline.synthesize_speech_stream(spoken_text, voice=voice):
                     if self._tts_cancel_event.is_set():
                         cancelled = True
                         break
